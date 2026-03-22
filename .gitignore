@@ -1,7 +1,7 @@
 ImageFusion/
 
-data/
-
+data/*
 !data/data-tcia-download/
 
 NBIA_data_retriever_CLI_darwin_arm64
+.DS_Store
