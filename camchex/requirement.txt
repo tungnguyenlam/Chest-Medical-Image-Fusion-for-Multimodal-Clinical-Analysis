@@ -1,0 +1,12 @@
+torch
+lightning
+pandas
+numpy
+torchmetrics
+transformers
+opencv-python
+albumentations
+jpeg4py
+timm
+einops
+positional-encodings

@@ -1,0 +1,161 @@
+seed_everything: 42
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 16-mixed 
+  logger:
+    - class_path: lightning.pytorch.loggers.CSVLogger
+      init_args:
+        save_dir: logs
+        name: camchex
+        version: null 
+  callbacks:
+    - class_path: callbacks.ema_callback.EMACallback
+      init_args:
+        decay: 0.9999
+        use_buffers: false
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: save/camchex
+        filename: "last"
+        save_last: true
+        save_top_k: 0
+        monitor: null
+        every_n_epochs: 1
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: save/camchex
+        filename: '{epoch:02d}-{val_loss:.4f}-{val_ap:.5f}'
+        save_top_k: 1
+        monitor: val_ap
+        mode: max
+    - class_path: callbacks.prediction_callback.PredictionWriter
+      init_args:
+          write_interval: epoch
+          output_path: save/predictions.csv         
+          pred_df_path: data/test.csv 
+          prediction_level: study # image | study
+  fast_dev_run: false
+  overfit_batches: 0.0
+  val_check_interval: 0.25
+  num_sanity_val_steps: 4
+  accumulate_grad_batches: 16
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  deterministic: null
+  benchmark: true
+  max_epochs: 1000
+model:
+  lr: 3e-5
+  classes: 
+  - Atelectasis
+  - Calcification of the Aorta
+  - Cardiomegaly
+  - Consolidation
+  - Edema
+  - Emphysema
+  - Enlarged Cardiomediastinum
+  - Fibrosis
+  - Fracture
+  - Hernia
+  - Infiltration
+  - Lung Lesion
+  - Lung Opacity
+  - Mass
+  - No Finding
+  - Nodule
+  - Pleural Effusion
+  - Pleural Other
+  - Pleural Thickening
+  - Pneumomediastinum
+  - Pneumonia
+  - Pneumoperitoneum
+  - Pneumothorax
+  - Subcutaneous Emphysema
+  - Support Devices
+  - Tortuous Aorta
+  loss_init_args:
+    class_instance_nums:
+      - 67597
+      - 4361
+      - 76900
+      - 16038
+      - 38574
+      - 4255
+      - 30119
+      - 1158
+      - 11883
+      - 4049
+      - 10218
+      - 2533
+      - 79931
+      - 5529
+      - 41869
+      - 7663
+      - 69240
+      - 675
+      - 3369
+      - 788
+      - 48093
+      - 543
+      - 14983
+      - 2453
+      - 89140
+      - 3499
+    total_instance_num: 264849
+  timm_init_args:
+    num_classes: 26
+    model_name: convnext_small.fb_in22k_ft_in1k
+    pretrained: true
+    drop_path_rate: 0.0 #stocastic depth
+data:
+  dataloader_init_args:
+    batch_size: 16
+    num_workers: 8             
+    pin_memory: true
+    persistent_workers: true
+  datamodule_cfg: 
+    tokenizer: null  # biobert: dmis-lab/biobert-v1.1
+    predict_pseudo_label: null # chexpert | nih | vinbig | null
+    use_pseudo_label: false # noisy student training select yes to train on all pseudo labeled data
+    data_dir: data
+    train_df_path: data/train.csv
+    devel_df_path: data/development.csv
+    pred_df_path: data/test.csv
+    vinbig_train_df_path: data/vinbig/vinbig_pseudo_labeled.csv
+    nih_train_df_path: data/nih/nih_pseudo_labeled.csv
+    chexpert_train_df_path: data/chexpert/chexpert_pseudo_labeled.csv
+    save_dir: save
+    val_split: 0.1
+    size: 1024
+    classes: 
+      - Atelectasis
+      - Calcification of the Aorta
+      - Cardiomegaly
+      - Consolidation
+      - Edema
+      - Emphysema
+      - Enlarged Cardiomediastinum
+      - Fibrosis
+      - Fracture
+      - Hernia
+      - Infiltration
+      - Lung Lesion
+      - Lung Opacity
+      - Mass
+      - No Finding
+      - Nodule
+      - Pleural Effusion
+      - Pleural Other
+      - Pleural Thickening
+      - Pneumomediastinum
+      - Pneumonia
+      - Pneumoperitoneum
+      - Pneumothorax
+      - Subcutaneous Emphysema
+      - Support Devices
+      - Tortuous Aorta
+
+ckpt_path: last #CaMCheX.ckpt

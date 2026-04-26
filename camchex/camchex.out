@@ -1,0 +1,124 @@
+SLURM job ID: 1535479
+Node list: nid010035     
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 565.57.01              Driver Version: 565.57.01      CUDA Version: 12.7     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GH200 120GB             On  |   00000019:01:00.0 Off |                    0 |
+| N/A   35C    P0             98W /  900W |       5MiB /  97871MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+CUDA available: True Device count: 1
+GPU 0: NVIDIA GH200 120GB
+[rank: 0] Seed set to 42
+Using 16bit Automatic Mixed Precision (AMP)
+Restoring states from the checkpoint path at /home/b5au/pjsloan.b5au/CaMCheX/CaMCheX.ckpt
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+Loaded model weights from the checkpoint at /home/b5au/pjsloan.b5au/CaMCheX/CaMCheX.ckpt
+SLURM auto-requeueing enabled. Setting signal handlers.
+Predicting: |          | 0/? [00:00<?, ?it/s]
+Predicting: |          | 0/? [00:00<?, ?it/s]
+Predicting DataLoader 0:   0%|          | 0/2844 [00:00<?, ?it/s]
+Predicting DataLoader 0:   0%|          | 1/2844 [00:11<9:02:39,  0.09it/s]
+Predicting DataLoader 0:   0%|          | 2/2844 [00:18<7:07:48,  0.11it/s]
+Predicting DataLoader 0:   0%|          | 3/2844 [00:18<4:51:25,  0.16it/s]
+Predicting DataLoader 0:   0%|          | 4/2844 [00:29<5:47:32,  0.14it/s]
+Predicting DataLoader 0:   0%|          | 5/2844 [00:33<5:17:39,  0.15it/s]
+Predicting DataLoader 0:   0%|          | 6/2844 [00:40<5:15:31,  0.15it/s]
+Predicting DataLoader 0:   0%|          | 7/2844 [00:52<5:54:36,  0.13it/s]
+Predicting DataLoader 0:   0%|          | 8/2844 [01:05<6:27:43,  0.12it/s]
+Predicting DataLoader 0:   0%|          | 9/2844 [01:06<5:46:38,  0.14it/s]
+Predicting DataLoader 0:   0%|          | 10/2844 [01:12<5:43:45,  0.14it/s]
+Predicting DataLoader 0:   0%|          | 11/2844 [01:13<5:14:02,  0.15it/s]
+Predicting DataLoader 0:   0%|          | 12/2844 [01:13<4:49:28,  0.16it/s]
+Predicting DataLoader 0:   0%|          | 13/2844 [01:14<4:28:41,  0.18it/s]
+Predicting DataLoader 0:   0%|          | 14/2844 [01:14<4:10:46,  0.19it/s]
+Predicting DataLoader 0:   1%|          | 15/2844 [01:14<3:55:15,  0.20it/s]
+
+Predicting DataLoader 0: 100%|█████████▉| 2841/2844 [22:02<00:01,  2.15it/s]
+Predicting DataLoader 0: 100%|█████████▉| 2842/2844 [22:02<00:00,  2.15it/s]
+Predicting DataLoader 0: 100%|█████████▉| 2843/2844 [22:03<00:00,  2.15it/s]
+Predicting DataLoader 0: 100%|██████████| 2844/2844 [22:04<00:00,  2.15it/s]
+=== Image-level metrics ===
+Atelectasis               AP: 0.6569, AUROC: 0.8489
+Calcification of the Aorta AP: 0.2173, AUROC: 0.9299
+Cardiomegaly              AP: 0.7000, AUROC: 0.8426
+Consolidation             AP: 0.4986, AUROC: 0.8877
+Edema                     AP: 0.8277, AUROC: 0.9507
+Emphysema                 AP: 0.2676, AUROC: 0.9275
+Enlarged Cardiomediastinum AP: 0.3010, AUROC: 0.7006
+Fibrosis                  AP: 0.4429, AUROC: 0.9575
+Fracture                  AP: 0.6806, AUROC: 0.9410
+Hernia                    AP: 0.7293, AUROC: 0.9592
+Infiltration              AP: 0.8976, AUROC: 0.9768
+Lung Lesion               AP: 0.7221, AUROC: 0.9714
+Lung Opacity              AP: 0.6513, AUROC: 0.8152
+Mass                      AP: 0.6414, AUROC: 0.9365
+No Finding                AP: 0.7408, AUROC: 0.9398
+Nodule                    AP: 0.3884, AUROC: 0.8737
+Pleural Effusion          AP: 0.8848, AUROC: 0.9509
+Pleural Other             AP: 0.0533, AUROC: 0.9141
+Pleural Thickening        AP: 0.1510, AUROC: 0.8906
+Pneumomediastinum         AP: 0.6575, AUROC: 0.9755
+Pneumonia                 AP: 0.8813, AUROC: 0.9451
+Pneumoperitoneum          AP: 0.4682, AUROC: 0.9646
+Pneumothorax              AP: 0.8827, AUROC: 0.9714
+Subcutaneous Emphysema    AP: 0.6524, AUROC: 0.9924
+Support Devices           AP: 0.9447, AUROC: 0.9674
+Tortuous Aorta            AP: 0.1653, AUROC: 0.8760
+
+--- Summary (Image-level) ---
+Total mAP:   0.5810
+Total AUROC: 0.9195
+Head mAP:    0.7859
+Medium mAP:  0.5504
+Tail mAP:    0.4141
+Saved predictions to save/predictions.csv
+
+=== Study-level metrics ===
+Atelectasis               AP: 0.6671, AUROC: 0.8381
+Calcification of the Aorta AP: 0.2117, AUROC: 0.9327
+Cardiomegaly              AP: 0.6939, AUROC: 0.8307
+Consolidation             AP: 0.4808, AUROC: 0.8729
+Edema                     AP: 0.8269, AUROC: 0.9434
+Emphysema                 AP: 0.2583, AUROC: 0.9291
+Enlarged Cardiomediastinum AP: 0.3063, AUROC: 0.7072
+Fibrosis                  AP: 0.4407, AUROC: 0.9590
+Fracture                  AP: 0.6875, AUROC: 0.9424
+Hernia                    AP: 0.7339, AUROC: 0.9608
+Infiltration              AP: 0.8718, AUROC: 0.9696
+Lung Lesion               AP: 0.7424, AUROC: 0.9716
+Lung Opacity              AP: 0.6518, AUROC: 0.8044
+Mass                      AP: 0.6355, AUROC: 0.9356
+No Finding                AP: 0.7196, AUROC: 0.9388
+Nodule                    AP: 0.3867, AUROC: 0.8804
+Pleural Effusion          AP: 0.8811, AUROC: 0.9414
+Pleural Other             AP: 0.0479, AUROC: 0.9184
+Pleural Thickening        AP: 0.1379, AUROC: 0.8896
+Pneumomediastinum         AP: 0.6144, AUROC: 0.9700
+Pneumonia                 AP: 0.8658, AUROC: 0.9380
+Pneumoperitoneum          AP: 0.4471, AUROC: 0.9522
+Pneumothorax              AP: 0.8855, AUROC: 0.9711
+Subcutaneous Emphysema    AP: 0.6663, AUROC: 0.9921
+Support Devices           AP: 0.9555, AUROC: 0.9678
+Tortuous Aorta            AP: 0.1591, AUROC: 0.8829
+
+--- Summary (Study-level) ---
+Total mAP:   0.5760
+Total AUROC: 0.9169
+Head mAP:    0.7827
+Medium mAP:  0.5458
+Tail mAP:    0.4070
+
+Predicting DataLoader 0: 100%|██████████| 2844/2844 [23:24<00:00,  2.02it/s]
