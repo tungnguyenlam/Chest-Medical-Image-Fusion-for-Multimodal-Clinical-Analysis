@@ -1,0 +1,1 @@
+rsync -az --no-links --progress /home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/ ict14:/storage/student10/tungnl/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/

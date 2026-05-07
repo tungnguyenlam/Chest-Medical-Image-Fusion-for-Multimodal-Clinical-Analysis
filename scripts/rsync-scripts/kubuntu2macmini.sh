@@ -1,0 +1,1 @@
+rsync -az --no-links --progress /home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/ macmini:/Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/
