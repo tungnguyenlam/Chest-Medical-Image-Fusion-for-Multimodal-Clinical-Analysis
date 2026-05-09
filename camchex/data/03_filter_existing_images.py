@@ -7,11 +7,11 @@ if not os.path.isdir('data') or not os.path.isdir('camchex'):
 
 # Run from project root: python camchex/data/03_filter_existing_images.py
 # Reads 02_*.csv from data/data-camchex/, filters to rows where the image exists
-# under camchex/images/ (the directory training uses), writes 03_*.csv to camchex/data/
+# under camchex/images/ (the directory training uses), writes 03_*.csv to data/data-camchex/
 
 DATA_CAMCHEX_ROOT = 'data/data-camchex'
 IMAGE_BASE = 'camchex'
-OUT_DIR = 'camchex/data'
+OUT_DIR = DATA_CAMCHEX_ROOT
 
 splits = [
     ('02_train.csv',       '03_train.csv'),
@@ -28,7 +28,7 @@ for in_name, out_name in splits:
         continue
 
     print(f"Filtering {in_name}...")
-    df = pd.read_csv(in_path)
+    df = pd.read_csv(in_path, low_memory=False)
 
     existing = df['path'].apply(lambda p: os.path.exists(os.path.join(IMAGE_BASE, p)))
     filtered_df = df[existing]

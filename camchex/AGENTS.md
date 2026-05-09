@@ -19,7 +19,7 @@ python camchex/data/01_make_dataset.py
 # Step 2 — re-split from 01_merged.csv (skip if step 1 already produced 02_*.csv)
 python camchex/data/02_split_dataset.py
 
-# Step 3 — filter rows to only images that exist on disk; writes to camchex/data/03_*.csv
+# Step 3 — filter rows to only images that exist on disk; writes to data/data-camchex/03_*.csv
 python camchex/data/03_filter_existing_images.py
 ```
 
@@ -27,7 +27,7 @@ Intermediate files live in `data/data-camchex/` with step-number prefixes:
 - `01_merged.csv` — full merged dataset (all sources joined)
 - `01_progress.csv` — mid-run checkpoint saved after report parsing
 - `02_train/development/test.csv` — splits by CXR-LT 2023 IDs
-- `camchex/data/03_train/development/test.csv` — image-filtered, ready for training
+- `03_train/development/test.csv` — image-filtered, ready for training
 
 ## Training
 
@@ -73,7 +73,7 @@ Symlink setup scripts are in `scripts/create-symlink/`. Rsync scripts are in `sc
 ## Config structure
 
 `camchex/config.yaml` has three top-level sections: `trainer`, `model`, `data`. Notable fields:
-- `data.datamodule_cfg.train/devel/pred_df_path` — point to `data/03_*.csv` (relative to `camchex/`)
+- `data.datamodule_cfg.train/devel/pred_df_path` — point to `../data/data-camchex/03_*.csv` (relative to `camchex/` cwd at training time)
 - `model.loss_init_args.class_instance_nums` — must match the 26 classes in order if changed
 - `trainer.val_check_interval: 0.25` — validates 4× per epoch
 - `trainer.accumulate_grad_batches: 16` — effective batch = batch_size × 16

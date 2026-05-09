@@ -46,7 +46,7 @@ All three scripts must be run from the **project root**. Each enforces this with
 ```bash
 python camchex/data/01_make_dataset.py      # merge all sources → data/data-camchex/01_merged.csv
 python camchex/data/02_split_dataset.py     # split by CXR-LT IDs → data/data-camchex/02_*.csv
-python camchex/data/03_filter_existing_images.py  # drop missing images → camchex/data/03_*.csv
+python camchex/data/03_filter_existing_images.py  # drop missing images → data/data-camchex/03_*.csv
 ```
 
 Step 1 is slow (parses ~200k text reports). If it completes but crashes before the end, `data/data-camchex/01_progress.csv` is the checkpoint saved after report parsing — the most expensive part.

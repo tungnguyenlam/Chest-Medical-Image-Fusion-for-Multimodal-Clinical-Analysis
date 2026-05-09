@@ -35,7 +35,7 @@ trainer:
       init_args:
           write_interval: epoch
           output_path: save/predictions.csv         
-          pred_df_path: data/03_test.csv
+          pred_df_path: ../data/data-camchex/03_test.csv
           prediction_level: study # image | study
   fast_dev_run: false
   overfit_batches: 0.0
@@ -121,9 +121,9 @@ data:
     predict_pseudo_label: null # chexpert | nih | vinbig | null
     use_pseudo_label: false # noisy student training select yes to train on all pseudo labeled data
     data_dir: data
-    train_df_path: data/03_train.csv
-    devel_df_path: data/03_development.csv
-    pred_df_path: data/03_test.csv
+    train_df_path: ../data/data-camchex/03_train.csv
+    devel_df_path: ../data/data-camchex/03_development.csv
+    pred_df_path: ../data/data-camchex/03_test.csv
     vinbig_train_df_path: data/vinbig/vinbig_pseudo_labeled.csv
     nih_train_df_path: data/nih/nih_pseudo_labeled.csv
     chexpert_train_df_path: data/chexpert/chexpert_pseudo_labeled.csv
