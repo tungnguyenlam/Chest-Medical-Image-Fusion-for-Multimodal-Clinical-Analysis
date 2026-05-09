@@ -1,0 +1,1 @@
+ln -s /home/tungnguyen/Programming/split-4/files/ /home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/MIMIC-CXR-JPG/files
