@@ -12,4 +12,9 @@
 # Run from the directory where the script was submitted
 cd "$SLURM_SUBMIT_DIR"
 
-python -u main.py fit --config config.yaml
+CONFIG_OVERRIDE=""
+if [ -f "config.local.yaml" ]; then
+    CONFIG_OVERRIDE="--config config.local.yaml"
+fi
+
+python -u main.py fit --config config.yaml $CONFIG_OVERRIDE

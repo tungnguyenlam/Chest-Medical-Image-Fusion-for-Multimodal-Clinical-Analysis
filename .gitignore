@@ -1,4 +1,5 @@
 ImageFusion/
+camchex/config.local.yaml
 
 data/*
 !data/data-tcia-download/

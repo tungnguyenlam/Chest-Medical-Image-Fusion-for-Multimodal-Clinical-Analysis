@@ -1,1 +1,1 @@
-rsync -az --no-links --progress ict14:/storage/student10/tungnl/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/ /home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/ 
+rsync -az --no-links --progress --exclude 'camchex/config.local.yaml' ict14:/storage/student10/tungnl/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/ /home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/

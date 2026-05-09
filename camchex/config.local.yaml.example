@@ -1,0 +1,15 @@
+# Machine-specific config overrides.
+# Copy this file to config.local.yaml and edit for your machine.
+# config.local.yaml is gitignored and excluded from rsync — it never leaves this machine.
+# Values here override config.yaml. Only include keys you need to change.
+
+# Copy this file: cp config.local.yaml.example config.local.yaml
+
+trainer:
+  devices: 1          # number of GPUs (auto = use all available)
+  # num_nodes: 1      # for multi-node (e.g. SLURM cluster)
+
+data:
+  dataloader_init_args:
+    batch_size: 16    # reduce if GPU OOM
+    num_workers: 8    # match number of CPU cores available
