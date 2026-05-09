@@ -3,6 +3,7 @@ import re
 import sys
 import numpy as np
 import pandas as pd
+from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
 if not os.path.isdir('data') or not os.path.isdir('camchex'):
@@ -26,6 +27,9 @@ labels_train_fp    = f'{_CXRLT_2023}/train.csv'
 labels_validate_fp = f'{_CXRLT_2023}/development.csv'
 labels_test_fp     = f'{_CXRLT_2023}/test.csv'
 
+# --- Config ---
+CPU_FRACTION = 0.5  # Use 50% of CPU cores by default to avoid server termination
+
 # Output: step 1 merged dataset (read by 02_split_dataset.py)
 output_fp = f'{DATA_CAMCHEX_ROOT}/01_merged.csv'
 
@@ -46,6 +50,49 @@ def _clean_report(report):
     cleaned_sentences = [sent_cleaner(sent) for sent in report_cleaner(report).split('. ') if sent]
     cleaned_report = ' . '.join(cleaned_sentences).strip() + ' .'
     return re.sub(r'\s+', ' ', cleaned_report).strip()
+
+
+# Module-level globals for multiprocessing workers (set before Pool creation)
+custom_section_names = {}
+custom_indices = {}
+
+
+def _parse_single_report(args):
+    """Parse a single report file. Used by multiprocessing.Pool workers."""
+    idx, subject_id, study_id = args
+    subject_id_str = str(subject_id)
+    study_id_str = f"s{study_id}"
+    report_path = os.path.join(
+        reports_base_path, f"p{subject_id_str[:2]}",
+        f"p{subject_id_str}", f"{study_id_str}.txt"
+    )
+
+    if not os.path.exists(report_path):
+        return None
+
+    with open(report_path, 'r') as f:
+        text = f.read()
+
+    if study_id_str in custom_indices:
+        ci = custom_indices[study_id_str]
+        text = text[ci[0]:ci[1]]
+
+    sections, section_names, _ = sp.section_text(text)
+    section_dict = dict(zip(section_names, sections))
+
+    result = {'_idx': idx}
+
+    if study_id_str in custom_section_names:
+        custom_sec = custom_section_names[study_id_str]
+        if custom_sec in section_dict:
+            result[custom_sec] = _clean_report(section_dict[custom_sec])
+        return result
+
+    for section in ['impression', 'findings', 'last_paragraph', 'comparison', 'indication', 'history']:
+        if section in section_dict:
+            result[section] = _clean_report(section_dict[section])
+
+    return result
 
 
 # --- Load image metadata and ED data ---
@@ -107,40 +154,34 @@ df_test['split']  = 'test'
 labels_df = pd.concat([df_train, df_val, df_test]).drop_duplicates(subset="study_id")
 cxr_df = cxr_df.merge(labels_df, on="study_id", how="left")
 
-# --- Parse text reports ---
+# --- Parse text reports (parallel) ---
 print("Parsing reports (missing reports are skipped)...")
 custom_section_names, custom_indices = sp.custom_mimic_cxr_rules()
 
 for col in ['impression', 'findings', 'last_paragraph', 'comparison', 'indication', 'history']:
     mimic_df[col] = None
 
-for i, row in tqdm(mimic_df.iterrows(), total=len(mimic_df), desc="Processing reports"):
-    subject_id_str = str(row['subject_id'])
-    study_id_str   = f"s{row['study_id']}"
-    report_path    = os.path.join(reports_base_path, f"p{subject_id_str[:2]}", f"p{subject_id_str}", f"{study_id_str}.txt")
+# Build lightweight argument list: (df_index, subject_id, study_id)
+report_args = list(zip(mimic_df.index, mimic_df['subject_id'], mimic_df['study_id']))
 
-    if not os.path.exists(report_path):
+n_workers = max(1, int(cpu_count() * CPU_FRACTION))
+print(f"Using {n_workers} parallel workers for report parsing...")
+
+mp_ctx = __import__('multiprocessing').get_context('fork')
+with mp_ctx.Pool(n_workers) as pool:
+    results = list(tqdm(
+        pool.imap_unordered(_parse_single_report, report_args, chunksize=256),
+        total=len(report_args),
+        desc="Processing reports"
+    ))
+
+# Apply parsed results back to DataFrame
+for result in results:
+    if result is None:
         continue
-
-    with open(report_path, 'r') as f:
-        text = f.read()
-
-    if study_id_str in custom_indices:
-        idx = custom_indices[study_id_str]
-        text = text[idx[0]:idx[1]]
-
-    sections, section_names, _ = sp.section_text(text)
-    section_dict = dict(zip(section_names, sections))
-
-    if study_id_str in custom_section_names:
-        custom_section = custom_section_names[study_id_str]
-        if custom_section in section_dict:
-            mimic_df.at[i, custom_section] = _clean_report(section_dict[custom_section])
-        continue
-
-    for section in ['impression', 'findings', 'last_paragraph', 'comparison', 'indication', 'history']:
-        if section in section_dict:
-            mimic_df.at[i, section] = _clean_report(section_dict[section])
+    idx = result.pop('_idx')
+    for col, val in result.items():
+        mimic_df.at[idx, col] = val
 
 print("Saving progress checkpoint...")
 mimic_df.to_csv(f'{DATA_CAMCHEX_ROOT}/01_progress.csv', index=False)

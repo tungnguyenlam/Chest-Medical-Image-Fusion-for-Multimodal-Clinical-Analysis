@@ -1,0 +1,2 @@
+ln -s /storage/shared/MIMIC-CXR-JPG/files/ /storage/student10/tungnl/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/MIMIC-CXR-JPG/files
+ln -s /storage/shared/MIMIC-CXR-Report/download-mimic-cxr-txt/files/ /storage/student10/tungnl/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/MIMIC-CXR/files
