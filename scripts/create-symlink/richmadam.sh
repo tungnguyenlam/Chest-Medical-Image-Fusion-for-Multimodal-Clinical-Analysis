@@ -1,0 +1,2 @@
+ln -s ~/Programming/split-4/files/ ~/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/MIMIC-CXR-JPG/files
+ln -s ~/Programming/download-mimic-cxr-txt/files/  ~/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/MIMIC-CXR/files
