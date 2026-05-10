@@ -68,3 +68,21 @@ The full image set (~500 GB) is unlikely to be completely downloaded. `03_filter
 ## Gitignore notes
 
 `data/*` is ignored except `data/data-tcia-download/`. CSV files (`*.csv`, `*.csv.gz`) are also ignored globally — the generated intermediates in `data/data-camchex/` are not committed.
+
+## Worklog
+
+After finishing a non-trivial request, **append** a dated entry to the end of [WORKLOG.md](WORKLOG.md) at the repo root. Entries are chronological (oldest first, newest at bottom).
+
+**Always append via a bash heredoc — never use the Edit/Write tools on WORKLOG.md.** This rule exists because past agents have silently rewritten or "tidied" earlier entries while editing; appending via shell guarantees prior entries are byte-for-byte untouched.
+
+```bash
+cat >> WORKLOG.md <<'EOF'
+
+## YYYY-MM-DD — one-line summary
+
+- what changed (link files as `path:line`)
+- any non-obvious finding, gotcha, or decision worth surfacing to the next agent
+EOF
+```
+
+Use the literal `'EOF'` (quoted) so backticks and `$` in the body aren't expanded. Skip the worklog for tiny edits (typo fixes, formatting). Keep entries terse: future agents skim this to catch up on multi-machine/multi-session state that isn't visible in the diff.
