@@ -103,3 +103,105 @@ Two candidate fixes:
 - User should rerun step 03 on every machine where 03 CSVs exist, then retry training.
 - If anyone wants the old `images/...` convention back (e.g. to support training that mixes mimic + kaggle from the same CSV), we'd need a different shape — e.g. a per-row `source_tag` plus a base-dir lookup at dataset time. Not needed today.
 - Could add a tiny sanity check to the start of `datamodule.py` that opens the first file in each split and fails fast with a clearer message, instead of the current "FileNotFoundError in worker" stack.
+
+## 2026-05-10 — CPU-thread config knob, dataset NaN fix, and tuning notes for a 16 GB / 16 GB box
+
+**Goal.** Add a config-driven CPU-thread cap to `camchex/main.py`, recommend dataloader settings for a thin (16 GB RAM / 16 GB VRAM) machine, and unblock a series of crashes that turned out to be a mix of one real bug and several memory-pressure symptoms.
+
+**Changes.**
+- `camchex/main.py:21-58` — added `MyLightningCLI.add_arguments_to_parser` exposing `--cpu_threads` (top-level config field, `null` default) and `before_instantiate_classes` that calls `torch.set_num_threads()` and sets `OMP_NUM_THREADS` / `MKL_NUM_THREADS` to the resolved value (default = `os.cpu_count() // 2`). Pulled the LightningCLI subcommand-aware config lookup so it works for `fit`, `validate`, etc.
+- `camchex/config.yaml:2-3` — added `cpu_threads: null` with a comment pointing users to override per-machine in `config.local.yaml`.
+- `camchex/dataset/dataset.py:80-81` — fixed an `AttributeError: 'float' object has no attribute 'upper'`. `pd.Series.get("ViewPosition", "")` returns the cell value when the column exists, even if that value is `NaN` (a float). The `""` default only fires when the column is missing. Replaced with an `isinstance(vp, str)` guard so NaN falls through to `""` and the `vp in {"AP","PA",...}` mapping defaults to view-position 0.
+
+**Reasoning.**
+- For the CPU knob, considered (a) reading the value via env var only, (b) parsing `config.yaml` manually with PyYAML before LightningCLI, (c) the `add_arguments_to_parser` hook. Picked (c) because it's the idiomatic LightningCLI extension point and keeps the field in the same config files everyone already edits — `config.yaml` for the default, `config.local.yaml` for per-machine overrides (which rsync excludes, exactly what we want here). Setting `OMP_NUM_THREADS` / `MKL_NUM_THREADS` alongside `torch.set_num_threads()` because BLAS and operator threadpools each have their own caps; setting only one leaves cores still saturated by the others.
+- For the NaN fix: the broader pattern in [dataset.py:93](camchex/dataset/dataset.py#L93) already handles this case correctly (`pd.isna(...)` then default string), so the new code follows the same shape. Could have used `pd.isna(vp)` instead of `isinstance(vp, str)` but the latter also covers ints / accidental non-strings, which felt safer than enumerating null-ish types.
+
+**Assumptions.**
+- The `cpu_threads` field lives at the top of the YAML alongside `seed_everything` rather than nested under `trainer:` because LightningCLI's trainer config is opinionated about its keys. Top-level custom args registered via `add_arguments_to_parser` are the documented escape hatch.
+- LightningCLI's `self.config` is subcommand-nested when subcommands are used (`fit`, `validate`, `predict`, `test`) and flat otherwise. The new `before_instantiate_classes` handles both, but it's only been exercised on `fit` so far.
+
+**Gotchas / non-obvious findings.**
+- **Dataloader RAM is the actual ceiling, not GPU VRAM.** With `size: 1024`, each `__getitem__` returns a `(4, 3, 1024, 1024) float32` tensor — 48 MB per sample. At `num_workers=N, prefetch_factor=2, batch=B`, you have `N × 2 × B × 48 MB` of decoded image tensor in flight, *plus* a duplicate of every batch in pinned RAM if `pin_memory=true`. On a 16 GB box with EMA enabled (≈900 MB shadow weights) and BioBERT loaded, even `bs=4 nw=2` at 1024² flirts with the OOM line.
+- **`persistent_workers=true` requires `num_workers>0`** — Lightning/torch raises `ValueError` at `train_dataloader()` time. They have to be flipped together when going to `num_workers: 0`. Easy to miss because the error fires deep in optimizer setup, not at config load.
+- **Throughput-degrading-over-time (`0.23 → 0.07 it/s`) is the swap-thrash signature.** If swap exists, the kernel pages out parts of the working set as new allocations come in; if swap is empty (likely on a fresh WSL-style box), the next big allocation triggers the OOM killer instead. Either way the failure mode looks like "training started, ran a few steps, then died" — not a crash from the start. Worth telling future agents: a slowdown trajectory is itself diagnostic.
+- **NVMe doesn't rescue this dataloader.** Per-sample work is dominated by JPEG decode (libjpeg-turbo via `jpeg4py`, ~20–60 ms/image at 1024²), albumentations on a 1024² array, and the `.astype(np.float32)` inflation at [dataset.py:90](camchex/dataset/dataset.py#L90) — all CPU-bound. Disk reads are a few ms. Two cheap wins worth knowing about for later: (a) the resized-1024 lookup at [dataset.py:65-66](camchex/dataset/dataset.py#L65-L66) is wired up but only helps if `*_resized_1024.jpg` files actually exist on disk — pre-generating them is a one-shot batch job that pays back forever; (b) keeping images as `uint8` until the GPU and normalizing on-device cuts dataloader→main IPC by 4×, but it requires touching the model forward.
+- **`accelerator: auto` silently falls back to CPU** if CUDA isn't visible. First crash on the user's local box looked like an OOM but was actually CPU training of a 229 M-param model at 1024² — `nvidia-smi` working ≠ `torch.cuda.is_available()`. When the user moved to a real GPU server, the same config worked (modulo the bug above and RAM tuning).
+- **The sanity check ran 4 batches before the NaN crash hit** — a useful reminder that NaN-in-the-data bugs are often hidden behind shuffle ordering and only surface once you've covered enough rows. Sanity-check size > 0 caught it without burning a full epoch, which is the whole point of `num_sanity_val_steps`.
+
+**Recommended `config.local.yaml` for a 16 GB RAM / 16 GB VRAM box (live values, not theoretical):**
+```yaml
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 2
+    pin_memory: false
+    persistent_workers: true
+  datamodule_cfg:
+    size: 512                    # 4x reduction in per-sample tensor vs 1024
+trainer:
+  accumulate_grad_batches: 64    # keeps effective batch ≈ 256
+```
+At `size: 1024` this hardware class can't realistically train CaMCheX without crashing; at 512 it's tight but viable for pipeline verification. Real training belongs on a bigger GPU box.
+
+**Follow-ups.**
+- Pre-generate `*_resized_1024.jpg` (or even `*_resized_512.jpg`) once on the data box and rsync — biggest unrealized perf win in the dataloader. Could be a small script under `camchex/data/04_resize_images.py`.
+- Consider moving the float32 cast in [dataset.py:90](camchex/dataset/dataset.py#L90) to the model forward, and pad with `uint8` zeros instead. 4× IPC reduction with no behavior change.
+- The `low_memory=True` default in `pd.read_csv` at [datamodule.py:16-18](camchex/dataset/datamodule.py#L16-L18) is producing the mixed-types `DtypeWarning` and probably bloating the in-memory df with `object`-dtype strings. Specifying `dtype=` for the offending columns would silence the warning and shrink the df; minor but cumulative when each forked worker COWs it.
+- Add `scripts/rsync-scripts/kubuntu2desktop-uuc7v3k.sh` (and matching reverse) for the new server. Copy an existing script and keep `--exclude 'camchex/config.local.yaml'`.
+- Verify `before_instantiate_classes` works for the `validate` / `predict` subcommands too, not just `fit` — the subcommand-aware config lookup should handle it but hasn't been exercised.
+
+## 2026-05-10 — Drop default training resolution from 1024 to 512; "228 modules in eval" diagnosis
+
+**Goal.** Two related things in one entry: (1) follow up on the "Found 228 modules in eval mode" warning to figure out whether it's a real bug or cosmetic, (2) change the default `size` in `camchex/config.yaml` from 1024 → 512 because 1024 is overkill for this hardware class and only marginally helpful for paper-grade results.
+
+**Changes.**
+- `camchex/config.yaml:132` — `size: 1024` → `size: 512`. This is the default; per-machine `config.local.yaml` can still override either way.
+
+**Reasoning — why 512 is the right default.**
+Surveying the CXR literature (CheXpert / MIMIC-CXR / CXR-LT) and what's actually load-bearing for *this* paper:
+
+- 224 → 384 typically buys +3-6 mAP avg.
+- 384 → 512 buys +1-3.
+- 512 → 1024 buys +0-2, occasionally a bit more on tiny-finding tail classes (small nodules, calcifications, support devices). It's the "leaderboard last mile," not the methodological win.
+
+The CaMCheX paper's contribution is the multimodal fusion (BioBERT clinical text + vitals + multi-view image), not resolution. A 512-trained reproduction will look qualitatively identical in the ablation table; it just lands a couple AP points lower in the absolute headline number. For thesis/extension work — where reviewers care about deltas across ablations, not absolute leaderboard rank — 512 lets you run ~4× more experiments in the same compute budget.
+
+Considered alternatives:
+- **Keep 1024 as default, override in `config.local.yaml`** — rejected because every new machine will then OOM-kill on first run before the user knows to override, and the paper-faithful 1024 setting genuinely doesn't fit on common hardware (16 GB VRAM struggles, 16 GB RAM dataloader OOMs). The default should be the setting that *works* on the team's actual machines.
+- **Drop further to 384** — rejected because 384 starts losing real signal on the small-finding tail classes, and the speed gain over 512 is modest. 512 is the knee of the curve.
+
+**Reasoning — what the "228 modules in eval" warning actually is.**
+Walked through every place an `.eval()` or freeze could happen:
+- [wrapper.py](camchex/model/wrapper.py): no `.eval()` calls, no `.train(False)`.
+- [models.py](camchex/model/models.py): no `.eval()`. Notable: a commented-out `#with torch.no_grad():` at [models.py:97](camchex/model/models.py#L97) directly above the BioBERT calls — strong hint someone earlier debated whether to fine-tune the text encoder and decided to leave it trainable.
+- [ml_decoder.py:118](camchex/model/ml_decoder.py#L118): `query_embed.requires_grad_(False)` — freezes ML-Decoder's non-learnable query embedding. This is a *parameter*-level freeze; doesn't change `.training` mode, so it's not what's making 228 modules report eval.
+- [callbacks/ema_callback.py](camchex/callbacks/ema_callback.py): tensor-only EMA (Dict[str, Tensor] shadows). It does NOT deep-copy modules, so it can't be inflating the eval count either. (Earlier worklog/discussion guessed it might be — that guess was wrong; verified by reading the file.)
+
+The numerical fingerprint matches BERT-base almost exactly: 12 encoder layers × ~16 leaf modules + embeddings + pooler ≈ 220-ish. Combined with the fact that `AutoModel.from_pretrained(...)` historically returns models in eval mode (HF's library is inference-first), the warning is almost certainly the BioBERT submodules at [models.py:31](camchex/model/models.py#L31). Lightning calls `pl_module.train()` at fit start, which *should* recursively flip them to training=True, but in practice some HF/transformers versions leave specific BERT submodules sticky. The warning is Lightning surfacing that residue.
+
+Decided not to fix yet — it's not blocking training, and the right fix depends on which submodules are actually stuck (text encoder vs. timm). Left a diagnostic recipe in conversation:
+
+```python
+# In MyLightningCLI.before_fit (one-shot)
+m = self.model; m.train()
+in_eval = [n for n, mod in m.named_modules() if not mod.training]
+print(f"{len(in_eval)} in eval after .train(); first 10:", in_eval[:10])
+```
+
+Once the path-prefix is confirmed (`backbone.text_encoder.*` vs `backbone.frontal_model.*`), the fix is one line in `CaMCheXModel.__init__`: either `self.text_encoder.train()` (Option A: fine-tune BioBERT, paper-faithful) or `self.text_encoder.eval(); self.text_encoder.requires_grad_(False)` plus uncommenting the `with torch.no_grad():` (Option B: freeze, save VRAM/time).
+
+**Assumptions.**
+- Default `size: 512` is the right call for the team's current hardware mix (kubuntu, ict14, macmini, richmadam, DESKTOP-UUC7V3K). If someone moves to a real GPU box and wants paper-faithful 1024, that override goes in `config.local.yaml` — which is rsync-excluded, so it stays machine-local exactly like it should.
+- The model architecture handles arbitrary spatial sizes: the spatial feature map at 512 is 8×8 per view (vs 16×16 at 1024), and the downstream `Conv2d(stride=2)` + transformer-encoder + ML-decoder don't hardcode any spatial dim. Verified by reading [models.py:80-126](camchex/model/models.py#L80-L126) — every spatial use is computed from `feats.shape`, not from a hardcoded constant. The text-fusion broadcast at [models.py:110](camchex/model/models.py#L110) uses the runtime `h2, w2` so it adapts automatically.
+
+**Gotchas / non-obvious findings.**
+- **Resolution change has a 16× attention-FLOPs ripple effect.** At 512, the transformer-encoder sees `8·8·4 + 2 = 258` tokens per study; at 1024 it's `16·16·4 + 2 = 1026`. Attention is O(N²), so the transformer's attention compute is 16× cheaper at 512. The data-side speedup (decode + transform) is "only" ~4×; this attention saving is the bigger win for total step time and is invisible in the dataloader benchmarks.
+- **EMA shadow size shrinks too**, indirectly. The shadow is per-parameter, not per-activation, so it doesn't shrink with resolution — but VRAM headroom for activations grows, which means EMA's RAM footprint stops being the marginal pressure point.
+- **The `query_embed.requires_grad_(False)` in MLDecoder is a deliberate ML-Decoder design choice** (the original ML-Decoder paper uses non-learnable group queries). Flagging here so a future agent doesn't "fix" it as a freeze bug.
+- **HF's `from_pretrained` inference-first defaults are a recurring footgun.** Pattern to remember: any time we wrap a HuggingFace model inside an nn.Module that we intend to train end-to-end, double-check the submodule's `.training` flag at the start of fit. The Lightning warning is a free canary — don't dismiss it.
+
+**Follow-ups.**
+- Run the diagnostic snippet above on the next training start to confirm it's the BioBERT submodules. If yes, add `self.text_encoder.train()` after the `AutoModel.from_pretrained(...)` line in [models.py:31](camchex/model/models.py#L31). One-line fix once confirmed.
+- The pre-resize follow-up from the previous entry (`*_resized_1024.jpg`) should now generate `*_resized_512.jpg` instead — or both, keyed by the configured `size`. Worth a small `camchex/data/04_resize_images.py` script that reads `size` from config and pre-decodes to disk. The hot path at [dataset.py:65-66](camchex/dataset/dataset.py#L65-L66) already prefers a resized variant; just need to teach it the size suffix is configurable.
+- Re-time a few hundred steps at 512 on the GPU box and record steps/sec in this worklog so we have a baseline. Current observed throughput at 1024 was 0.07-0.23 it/s and dominated by RAM thrashing; at 512 with `num_workers=2` it should land in the 0.5-1.5 it/s range, but worth measuring.
