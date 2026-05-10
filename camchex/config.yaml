@@ -8,9 +8,9 @@ trainer:
   logger:
     - class_path: lightning.pytorch.loggers.CSVLogger
       init_args:
-        save_dir: logs
-        name: camchex
-        version: null 
+        save_dir: ../output/camchex
+        name: logs
+        version: null
   callbacks:
     - class_path: callbacks.ema_callback.EMACallback
       init_args:
@@ -18,7 +18,7 @@ trainer:
         use_buffers: false
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
-        dirpath: save/camchex
+        dirpath: ../output/camchex/checkpoints
         filename: "last"
         save_last: true
         save_top_k: 0
@@ -26,7 +26,7 @@ trainer:
         every_n_epochs: 1
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
-        dirpath: save/camchex
+        dirpath: ../output/camchex/checkpoints
         filename: '{epoch:02d}-{val_loss:.4f}-{val_ap:.5f}'
         save_top_k: 1
         monitor: val_ap
@@ -34,7 +34,7 @@ trainer:
     - class_path: callbacks.prediction_callback.PredictionWriter
       init_args:
           write_interval: epoch
-          output_path: save/predictions.csv         
+          output_path: ../output/camchex/predictions.csv
           pred_df_path: ../data/data-camchex/03_test.csv
           prediction_level: study # image | study
   fast_dev_run: false
@@ -127,7 +127,7 @@ data:
     vinbig_train_df_path: data/vinbig/vinbig_pseudo_labeled.csv
     nih_train_df_path: data/nih/nih_pseudo_labeled.csv
     chexpert_train_df_path: data/chexpert/chexpert_pseudo_labeled.csv
-    save_dir: save
+    save_dir: ../output/camchex
     val_split: 0.1
     size: 1024
     classes: 

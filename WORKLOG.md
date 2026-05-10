@@ -19,3 +19,9 @@ Chronological log of agent-completed tasks (oldest first, newest at bottom). Eac
 - updated camchex/data/03_filter_existing_images.py:17 to support multiple image sources (mimic/kaggle) instead of relying on a single symlinked `camchex/images` directory.
 - removed legacy symlinks from camchex/images and updated scripts/create-symlink/ict14.sh:8.
 - added documentation to AGENTS.md:68 regarding the WORKLOG.md maintenance protocol.
+
+## 2026-05-10 — route camchex outputs to project-root output/camchex
+
+- `camchex/config.yaml`: CSVLogger `save_dir` → `../output/camchex` (name `logs`); both `ModelCheckpoint.dirpath` → `../output/camchex/checkpoints`; `PredictionWriter.output_path` → `../output/camchex/predictions.csv`; `data.datamodule_cfg.save_dir` → `../output/camchex`.
+- `camchex/train.sh`: `#SBATCH --output` → `../output/camchex/slurm/%x-%j.out`; added `mkdir -p` for slurm/checkpoints/logs subdirs after `cd $SLURM_SUBMIT_DIR`.
+- Paths use `../` because training cwd is `camchex/`. Final layout: `output/camchex/{logs,checkpoints,slurm,predictions.csv}`.

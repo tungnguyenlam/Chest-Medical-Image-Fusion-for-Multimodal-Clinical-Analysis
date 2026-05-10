@@ -6,11 +6,13 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G                
 #SBATCH --time=24:00:00
-#SBATCH --output=logs/%x-%j.out 
+#SBATCH --output=../output/camchex/slurm/%x-%j.out
 
 
 # Run from the directory where the script was submitted
 cd "$SLURM_SUBMIT_DIR"
+
+mkdir -p ../output/camchex/slurm ../output/camchex/checkpoints ../output/camchex/logs
 
 CONFIG_OVERRIDE=""
 if [ -f "config.local.yaml" ]; then

@@ -75,14 +75,42 @@ After finishing a non-trivial request, **append** a dated entry to the end of [W
 
 **Always append via a bash heredoc — never use the Edit/Write tools on WORKLOG.md.** This rule exists because past agents have silently rewritten or "tidied" earlier entries while editing; appending via shell guarantees prior entries are byte-for-byte untouched.
 
+### What an entry must contain
+
+The worklog is the primary handoff to the next agent (and to the user across sessions). The diff already shows *what* changed — your job in the worklog is to capture everything that **isn't recoverable from `git diff` or `git log`**: the reasoning, the alternatives you rejected, the constraints you discovered, and the assumptions baked into the choice. Err on the side of writing more, not less. A worklog entry that's just a bullet list of file paths is failing its purpose.
+
+Every non-trivial entry should explicitly cover:
+
+1. **Goal** — what the user actually asked for, restated in your own words (so a future agent can tell whether they're picking up the same task or a related one).
+2. **What changed** — concrete edits, with `path:line` references. Group related edits; don't just dump a list.
+3. **Why this approach** — the reasoning behind the chosen design. What were the candidate options? Why did you pick this one over the others? What trade-off did you accept?
+4. **Assumptions and constraints** — anything you took as given that a future agent might want to challenge (e.g. "assumed cwd is `camchex/` because `train.sh` cd's there", "kept `../` paths because rsync scripts copy `camchex/` as a unit").
+5. **Gotchas / non-obvious findings** — surprises, footguns, things that almost broke, things you noticed but didn't fix. This is the highest-value section for future agents.
+6. **Follow-ups** — anything you didn't do that probably should be done next, or that the user might want to verify.
+
+### Format
+
 ```bash
 cat >> WORKLOG.md <<'EOF'
 
 ## YYYY-MM-DD — one-line summary
 
-- what changed (link files as `path:line`)
-- any non-obvious finding, gotcha, or decision worth surfacing to the next agent
+**Goal.** Restate the request in 1–2 sentences.
+
+**Changes.**
+- `path/to/file.py:42` — what you changed and the role it plays.
+- `other/file.yaml` — …
+
+**Reasoning.** Explain *why* this shape of solution. Mention the alternatives you considered and why you didn't pick them. If a choice is reversible-but-annoying-to-change later, say so. If it's load-bearing for something downstream, say so.
+
+**Assumptions.** Bullet anything you took as given that isn't obvious from the code.
+
+**Gotchas.** Anything subtle the next agent should know — e.g. SLURM `--output` is resolved before the script's `cd`, so the path is relative to submit dir; an earlier checkpoint format expected a flat dir; rsync excludes `config.local.yaml`; etc.
+
+**Follow-ups.** What's left, what to verify, what you'd do with more time.
 EOF
 ```
 
-Use the literal `'EOF'` (quoted) so backticks and `$` in the body aren't expanded. Skip the worklog for tiny edits (typo fixes, formatting). Keep entries terse: future agents skim this to catch up on multi-machine/multi-session state that isn't visible in the diff.
+Use the literal `'EOF'` (quoted) so backticks and `$` in the body aren't expanded. Not every section is mandatory for every entry — if there genuinely are no assumptions or no follow-ups, omit that header rather than writing "none". But **Reasoning** and **Gotchas** should almost always appear; if you find yourself wanting to skip them, you're probably under-explaining.
+
+Skip the worklog entirely for trivial edits (typo fixes, formatting-only changes, single-line config tweaks the user dictated verbatim). For everything else, prefer too much context over too little — future agents skim this to catch up on multi-machine/multi-session state that isn't visible in the diff, and a thin entry forces them to re-derive your reasoning from scratch.
