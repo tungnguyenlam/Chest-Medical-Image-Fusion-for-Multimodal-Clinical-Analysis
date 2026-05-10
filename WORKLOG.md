@@ -70,3 +70,36 @@ The argv-rewriting step is necessary because `--config camchex/config.yaml` (the
 - Smoke-test on the user's server (`hngoc@DESKTOP-UUC7V3K`) — they have `config.local.yaml` and the data files; this kubuntu machine doesn't.
 - Consider documenting the new project-root invocation in `camchex/CLAUDE.md` ("Training" section) alongside the existing `cd camchex && bash train.sh` flow, so the next agent doesn't think the camchex-cwd assumption is the only supported path.
 - If we ever want true cwd-independence (so e.g. `--trainer.default_root_dir` can be passed project-root-relative), the right move is to resolve all paths inside `datamodule.py` / callbacks against an explicit `project_root` derived from `__file__`, and drop the chdir. Bigger change; not needed now.
+
+## 2026-05-10 — Fix path mismatch in step-03 filter (FileNotFoundError during validation)
+
+**Goal.** Diagnose and fix `FileNotFoundError: Neither resized nor original image found: images/p15/p15411028/s50000800/...` raised by a `CaMCheXDataset` worker during validation sanity check on the user's WSL machine.
+
+**Changes.**
+- `camchex/data/03_filter_existing_images.py` — added a third element per source tuple, `base_dir_from_camchex_cwd` (e.g. `../data/MIMIC-CXR-JPG/files`), and rewrite the `path` column of every kept row to `<base_dir_from_camchex_cwd>/<rel>`. The filter still uses `base_dir` (project-root-relative) for the existence check because the script is invoked from project root.
+
+**Reasoning.** The bug was a path-domain mismatch:
+- Filter checked existence at `data/MIMIC-CXR-JPG/files/<rel>` (project-root-relative, since `03_*.py` runs from project root).
+- Dataset opened `images/<rel>` from cwd `camchex/` (because `main.py` chdirs into `camchex/`). Resolves to `camchex/images/<rel>`, which only works if `camchex/images/` has per-folder symlinks into the source.
+- Result: a row could pass the filter (file exists at the MIMIC base) yet still throw at load time (no matching symlink under `camchex/images/`). The user's machine has no `camchex/images/p15/...` so p15 rows that survived the filter blew up.
+
+Two candidate fixes:
+1. Add a `camchex/images → ../data/MIMIC-CXR-JPG/files` symlink on every machine. Reversible, but pushes a setup step onto each new machine and silently breaks if forgotten — same failure mode we just hit.
+2. Have the filter rewrite `path` to point at the actual source dir using a camchex-relative prefix. Self-consistent: the same code that verified existence is the code that decides the saved path. Picked this — one source of truth, no per-machine setup.
+
+**Assumptions.**
+- Training cwd remains `camchex/` (enforced by the `os.chdir(_SCRIPT_DIR)` in `camchex/main.py`). If that ever changes, the `../` prefix in the saved paths becomes wrong.
+- `camchex/` is rsynced as a unit and stays a sibling of `data/`, so `../data/...` resolves correctly on every machine.
+- Per-folder Kaggle symlinks under `camchex/images/p1x/` are no longer load-bearing for `03_*.csv`-driven training (still fine for any code that opens `images/...` directly, e.g. ad-hoc scripts).
+- The `_resized_1024.jpg` sibling-file fast path in `dataset.py` still works because we only change the directory prefix, not the filename.
+
+**Gotchas.**
+- The user must rerun `python camchex/data/03_filter_existing_images.py` to regenerate `03_*.csv` with the new path format. Existing 03 CSVs still contain `images/...` paths and will keep failing until regenerated.
+- `02_*.csv` is unchanged, still uses `images/...`. Anything that reads `02_*.csv` directly (rare) still relies on the old convention.
+- Existing `03_kaggle_*.csv` on disk on `kubuntu` is small (610 bytes ≈ header only) because the Kaggle base dir was empty at filter time — confirmed harmless, just means kaggle source isn't in use here.
+- `filtered_df` now needs `.copy()` before assigning to `path` to avoid a `SettingWithCopyWarning`.
+
+**Follow-ups.**
+- User should rerun step 03 on every machine where 03 CSVs exist, then retry training.
+- If anyone wants the old `images/...` convention back (e.g. to support training that mixes mimic + kaggle from the same CSV), we'd need a different shape — e.g. a per-row `source_tag` plus a base-dir lookup at dataset time. Not needed today.
+- Could add a tiny sanity check to the start of `datamodule.py` that opens the first file in each split and fails fast with a clearer message, instead of the current "FileNotFoundError in worker" stack.

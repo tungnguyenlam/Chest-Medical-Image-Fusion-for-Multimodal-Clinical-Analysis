@@ -10,15 +10,21 @@ if not os.path.isdir('data') or not os.path.isdir('camchex'):
 # (and the matching base dir) to use.
 #
 # CSV `path` column looks like: images/p11/p11941242/s50000014/<dicom>.jpg
-# We strip the leading "images/" and join against each source's base directory.
+# We strip the leading "images/" and join against each source's base directory both
+# to test existence AND to rewrite the saved `path` column. Training cwd is camchex/,
+# so rewritten paths use a `../` prefix to escape into the project root before
+# joining with the source base dir. This makes the dataset's open() succeed without
+# any per-machine `camchex/images/` symlink.
 
 DATA_CAMCHEX_ROOT = 'data/data-camchex'
 OUT_DIR = DATA_CAMCHEX_ROOT
 
-# (suffix, base_dir_for_images) — base_dir is what `images/...` resolves against
+# (suffix, base_dir_for_images, base_dir_from_camchex_cwd)
+#   base_dir_for_images       — used at filter time (this script runs from project root)
+#   base_dir_from_camchex_cwd — written into the CSV (training script runs from camchex/)
 SOURCES = [
-    ('mimic',  'data/MIMIC-CXR-JPG/files'),
-    ('kaggle', 'data/data-kaggle/official_data_iccv_final/files'),
+    ('mimic',  'data/MIMIC-CXR-JPG/files',                       '../data/MIMIC-CXR-JPG/files'),
+    ('kaggle', 'data/data-kaggle/official_data_iccv_final/files', '../data/data-kaggle/official_data_iccv_final/files'),
 ]
 
 SPLITS = ['train', 'development', 'test']
@@ -32,7 +38,7 @@ def strip_images_prefix(p: str) -> str:
     return p[len('images/'):] if p.startswith('images/') else p
 
 
-for source_tag, base_dir in SOURCES:
+for source_tag, base_dir, base_dir_from_camchex in SOURCES:
     if not os.path.isdir(base_dir):
         print(f"[{source_tag}] Base dir missing: {base_dir} — skipping this source.")
         continue
@@ -51,7 +57,10 @@ for source_tag, base_dir in SOURCES:
 
         rels = df['path'].map(strip_images_prefix)
         existing = rels.map(lambda r: os.path.exists(os.path.join(base_dir, r)))
-        filtered_df = df[existing]
+        filtered_df = df[existing].copy()
+        filtered_df['path'] = rels[existing].map(
+            lambda r: os.path.join(base_dir_from_camchex, r)
+        )
 
         kept, total = len(filtered_df), len(df)
         print(f"    kept {kept} / {total} ({total - kept} missing dropped)")
