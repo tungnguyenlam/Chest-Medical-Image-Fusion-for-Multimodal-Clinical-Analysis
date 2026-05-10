@@ -1,10 +1,33 @@
 import os
+import warnings
 import cv2
 import pandas as pd
 import numpy as np
 import jpeg4py as jpeg
 from torch import from_numpy
 from torch.utils.data import Dataset
+
+
+def _safe_decode_jpeg(path):
+    """Decode a JPEG, falling back to cv2 if jpeg4py fails (e.g. truncated file).
+
+    Returns an HWC uint8 RGB ndarray, or None if every attempt fails.
+    """
+    candidates = [path]
+    if "_resized_1024.jpg" in path:
+        candidates.append(path.replace("_resized_1024.jpg", ".jpg"))
+    for p in candidates:
+        if not os.path.exists(p):
+            continue
+        try:
+            return jpeg.JPEG(p).decode()
+        except Exception as e:
+            warnings.warn(f"jpeg4py failed on {p}: {e}; falling back to cv2")
+        img = cv2.imread(p, cv2.IMREAD_COLOR)
+        if img is not None:
+            return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        warnings.warn(f"cv2 also failed to decode {p}")
+    return None
 
 
 class SingleViewDataset(Dataset):
@@ -25,8 +48,11 @@ class SingleViewDataset(Dataset):
         path = self.df.iloc[index]["path"]
         path_resized = path.replace(".jpg", "_resized_1024.jpg")
         path = path_resized if os.path.exists(path_resized) else path
-        
-        img = jpeg.JPEG(path).decode()
+
+        img = _safe_decode_jpeg(path)
+        if img is None:
+            warnings.warn(f"Skipping unreadable image at index {index} ({path}); using neighbor sample")
+            return self.__getitem__((index + 1) % len(self))
 
         if self.transform:
             transformed = self.transform(image=img)
@@ -65,10 +91,10 @@ class CaMCheXDataset(Dataset):
             path_resized = path.replace(".jpg", "_resized_1024.jpg")
             path = path_resized if os.path.exists(path_resized) else path
 
-            if os.path.exists(path):
-                img = jpeg.JPEG(path).decode()
-            else:
-                raise FileNotFoundError(f"Neither resized nor original image found: {path}")
+            img = _safe_decode_jpeg(path)
+            if img is None:
+                warnings.warn(f"Skipping unreadable image {path} in study {study_id}")
+                continue
 
             if self.transform:
                 transformed = self.transform(image=img)
@@ -86,9 +112,14 @@ class CaMCheXDataset(Dataset):
             else:
                 view_positions.append(0)
 
+        if len(imgs) == 0:
+            warnings.warn(f"All images unreadable for study {study_id}; using neighbor study")
+            return self.__getitem__((index + 1) % len(self.study_ids))
+
+        n = len(imgs)
         img = np.stack(imgs, axis=0)
-        img = np.concatenate([img, np.zeros((4-len(df), 3, self.cfg['size'], self.cfg['size']))], axis=0).astype(np.float32)
-        view_positions = np.array(view_positions + [0]*(4-len(df)), dtype=np.int64)
+        img = np.concatenate([img, np.zeros((4-n, 3, self.cfg['size'], self.cfg['size']))], axis=0).astype(np.float32)
+        view_positions = np.array(view_positions + [0]*(4-n), dtype=np.int64)
 
         clinical_text = df.iloc[0].get("clinical_indication", "")
         if pd.isna(clinical_text) or clinical_text.strip() == "":

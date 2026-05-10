@@ -238,3 +238,31 @@ Once the path-prefix is confirmed (`backbone.text_encoder.*` vs `backbone.fronta
 - Verify on `DESKTOP-UUC7V3K` that `choom -n -500` actually works without `sudo` (some distros set `vm.oom_score_adj_min = 0` for non-root, which would make this fail silently). If it does fail there, document the workaround in the README rather than discovering it again next time.
 - Consider adding a minimal `make` or shell-alias section so commands like `make validate CKPT=...` are available — would also be a natural place to put the `choom` prefix as a default.
 - The OOM section currently lives only in `camchex/README.md`. The repo-level `CLAUDE.md` already covers multi-machine workflow; if other subprojects ever appear under this repo, the OOM advice should probably be promoted to the root-level guidance.
+
+## 2026-05-10 — robust JPEG decoding in dataset
+
+**Goal.** Training crashed mid-epoch on `jpeg4py._py.JPEGRuntimeError: tjDecompress2() failed ... Premature end of JPEG file` (one corrupt/truncated image in a 90k-sample worker). User wants training to survive bad images instead of dying.
+
+**Changes.**
+- `camchex/dataset/dataset.py:11-30` — added `_safe_decode_jpeg(path)` helper. Tries jpeg4py first; on any exception falls back to `cv2.imread` (BGR→RGB). If the path is the resized variant and that fails, also retries the original `.jpg` path. Returns `None` if every attempt fails.
+- `camchex/dataset/dataset.py` SingleViewDataset.__getitem__ — if decode returns `None`, recurse on `(index+1) % len(self)` with a warning, instead of raising.
+- `camchex/dataset/dataset.py` CaMCheXDataset.__getitem__ — per-view: if decode returns `None`, skip that view (do not append a zero img/position; keep them in sync). After the loop: if no views succeeded for the study, recurse on next `study_id`. Padding to 4 now uses the actual successful count `n` rather than `len(df)`, so the tensor shape and `view_positions` length stay consistent at 4.
+
+**Reasoning.** Three options considered:
+1. Pre-scan and drop corrupt images in `03_filter_existing_images.py` — most thorough, but slow (must decode every JPEG once) and brittle if files get re-downloaded later.
+2. Raise and let Lightning retry — Lightning's DataLoader doesn't retry; the worker dies and the run aborts (what we just saw).
+3. Catch and recover at `__getitem__` (chosen) — minimal blast radius, handles transient as well as permanent corruption, and keeps the dataset usable even when a few files in `~/Programming/split-4/files/` are partially-downloaded. Trade-off: corrupt images silently skip, biasing batches very slightly toward the next index. With 90k+ samples and a handful of bad files, this is negligible vs. crashing every few hours of training.
+
+cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decoder and rejects some images that cv2 (libjpeg) accepts; many "premature end" cases are still partially decodable by cv2.
+
+**Assumptions.** (1) `cfg['size']` is the post-transform spatial size used in the zero-pad branch — kept identical to existing code. (2) `len(self)` for `CaMCheXDataset` = `len(self.study_ids)`, so the recursion target is correct. (3) Skipping a view rather than substituting a zero image is preferable because the model already pads to 4 slots with zeros downstream — adding a zero in place of a real view is equivalent but counts toward the active-view budget; better to let other valid views fill the slot.
+
+**Gotchas.**
+- Original `CaMCheXDataset` padded with `4-len(df)` zeros assuming all `len(df)` decodes succeed. After this change you **must** pad with `4-n` where `n = len(imgs)` — otherwise shape mismatches collide with the model's view-mask logic. This is in the diff but easy to regress on.
+- Recursion is unbounded if a contiguous range of samples is corrupt. In practice that won't happen (corruption is sporadic), but worth noting if a whole subdirectory ever goes missing.
+- The `cv2` import was already present but unused — now it's load-bearing. Don't remove it.
+- `jpeg4py` exceptions are catchable as `Exception`; the specific class is `jpeg4py._py.JPEGRuntimeError` but importing the private module isn't worth it.
+
+**Follow-ups.**
+- If corrupt-file warnings flood logs, gather the offending paths (warnings include the path) and either re-download them from `~/Programming/split-4/` source or add them to a skip-list in `03_filter_existing_images.py`.
+- Consider logging counts (good/bad decodes) once per epoch via a Lightning callback if this turns out to be more than a handful.
