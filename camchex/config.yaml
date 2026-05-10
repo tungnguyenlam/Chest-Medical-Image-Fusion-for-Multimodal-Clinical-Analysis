@@ -1,4 +1,6 @@
 seed_everything: 42
+# CPU threads for torch/OMP/MKL. null = use half of os.cpu_count(). Override per machine in config.local.yaml.
+cpu_threads: null
 trainer:
   accelerator: auto
   strategy: auto

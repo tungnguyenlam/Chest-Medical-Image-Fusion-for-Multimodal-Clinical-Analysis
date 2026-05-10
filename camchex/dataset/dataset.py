@@ -77,7 +77,8 @@ class CaMCheXDataset(Dataset):
 
             imgs.append(img)
 
-            vp = df.iloc[i].get("ViewPosition", "").upper()
+            vp = df.iloc[i].get("ViewPosition", "")
+            vp = "" if not isinstance(vp, str) else vp.upper()
             if vp in ["AP", "PA", "FRONTAL"]:
                 view_positions.append(1)
             elif vp in ["LATERAL", "LL"]:

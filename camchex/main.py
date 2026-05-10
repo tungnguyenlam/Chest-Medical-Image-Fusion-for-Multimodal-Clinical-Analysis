@@ -24,10 +24,33 @@ from lightning.pytorch.loggers import CSVLogger
 from model.wrapper import CaMCheX
 from dataset.datamodule import CaMCheXDataModule
 
+
+def _apply_cpu_threads(n: int) -> None:
+    n = max(1, int(n))
+    torch.set_num_threads(n)
+    os.environ["OMP_NUM_THREADS"] = str(n)
+    os.environ["MKL_NUM_THREADS"] = str(n)
+
+
 class MyLightningCLI(LightningCLI):
-    def before_fit(self):
-        # Optionally override things here
-        pass
+    def add_arguments_to_parser(self, parser):
+        parser.add_argument(
+            "--cpu_threads",
+            type=int,
+            default=None,
+            help="CPU threads for torch/OMP/MKL. null = half of os.cpu_count().",
+        )
+
+    def before_instantiate_classes(self):
+        cfg = self.config
+        # LightningCLI nests under the subcommand name (fit/validate/...) when subcommands are used.
+        sub = getattr(self, "subcommand", None)
+        node = cfg[sub] if sub is not None and sub in cfg else cfg
+        n = node.get("cpu_threads") if hasattr(node, "get") else getattr(node, "cpu_threads", None)
+        if n is None:
+            n = max(1, (os.cpu_count() or 2) // 2)
+        _apply_cpu_threads(n)
+
 
 def cli_main():
     torch.set_float32_matmul_precision('high')
