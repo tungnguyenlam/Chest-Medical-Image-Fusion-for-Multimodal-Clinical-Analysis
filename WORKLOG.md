@@ -266,3 +266,25 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Follow-ups.**
 - If corrupt-file warnings flood logs, gather the offending paths (warnings include the path) and either re-download them from `~/Programming/split-4/` source or add them to a skip-list in `03_filter_existing_images.py`.
 - Consider logging counts (good/bad decodes) once per epoch via a Lightning callback if this turns out to be more than a handful.
+
+## 2026-05-12 — Refactor CXR-LT exploration notebook into reusable analysis workflow
+
+**Goal.** Expand `src/00-examine-data/cxr-lt-2023.ipynb` from a sequence of one-off `.head()` and `.info()` calls into a notebook that actually helps understand the CXR-LT 2023 splits. The user specifically wanted reusable functions so repeated analysis code lives in one place instead of being copied per CSV.
+
+**Changes.**
+- `src/00-examine-data/cxr-lt-2023.ipynb:24` — rewrote the setup cell to use `Path`, keep the cwd guard, and centralize dataset-root discovery for the CXR-LT 2023 directory.
+- `src/00-examine-data/cxr-lt-2023.ipynb:54` — replaced per-file ad hoc loading with a single `CSV_FILES` mapping, one `load_dataset()` helper, shared `analysis_splits` / `submission_splits` dictionaries, and automatic `label_cols` detection from the training schema.
+- `src/00-examine-data/cxr-lt-2023.ipynb:117` — added reusable helpers for dataset preview, split overview tables, label-prevalence summaries, positive-label density, view-position summaries, overlap/leakage checks, `No Finding` conflict checks, and sample-submission sanity checks.
+- `src/00-examine-data/cxr-lt-2023.ipynb:298` — reorganized the bottom half of the notebook into analysis sections that answer concrete questions in order: quick split overview, long-tail label imbalance, metadata/view distribution, cross-split overlap, and submission-file checks.
+- `src/00-examine-data/cxr-lt-2023.ipynb:402` — added a final “What to inspect next” section so the notebook doubles as a checklist for deeper dataset understanding rather than stopping at descriptive stats.
+
+**Reasoning.** The original notebook was useful only as a schema peek, but it made it hard to compare splits or extend the analysis without copying cells again. I chose to keep everything inside the notebook rather than moving helpers into a separate `.py` module because the request was explicitly about adding code blocks for exploration, and keeping the functions inline preserves discoverability for iterative notebook work. I also removed the new `seaborn` dependency during validation and used pandas/matplotlib plotting instead, because the environment I tested in did not have `seaborn` installed and the extra dependency was not buying much beyond styling.
+
+**Assumptions.**
+- Assumed the notebook should still be run from `src/00-examine-data/`, matching the existing cwd guard and the rest of the exploratory workflow.
+- Assumed the training split remains the source of truth for the 26 label columns, so submission-schema checks compare against `train.csv` label ordering.
+- Assumed keeping notebook outputs empty was preferable so the file stays lightweight and re-runnable on different machines.
+
+**Gotchas.** The validation pass surfaced two non-obvious dataset/tooling issues worth preserving: first, `No Finding` is not mutually exclusive with other labels in this dataset (roughly 18–19% of `No Finding` rows also have another positive finding), so any downstream cleaning rule that assumes exclusivity needs to be deliberate. Second, the sample submission files are not equally informative: `development_sample_submission.csv` looks like plausible prediction scores, while `test_sample_submission.csv` has a near-0.5 mean score overall and may just be a schema/example artifact rather than something statistically meaningful.
+
+**Follow-ups.** The most useful next additions would be study-level multi-view analysis, label co-occurrence heatmaps, AP/PA/LATERAL-conditioned prevalence checks, and a path-availability join against local image storage before data-loader work. If this notebook becomes part of a larger EDA flow, it may also be worth adding report/text linkage checks against the MIMIC metadata used downstream by CaMCheX.
