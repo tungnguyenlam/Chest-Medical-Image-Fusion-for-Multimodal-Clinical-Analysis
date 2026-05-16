@@ -288,3 +288,31 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The validation pass surfaced two non-obvious dataset/tooling issues worth preserving: first, `No Finding` is not mutually exclusive with other labels in this dataset (roughly 18–19% of `No Finding` rows also have another positive finding), so any downstream cleaning rule that assumes exclusivity needs to be deliberate. Second, the sample submission files are not equally informative: `development_sample_submission.csv` looks like plausible prediction scores, while `test_sample_submission.csv` has a near-0.5 mean score overall and may just be a schema/example artifact rather than something statistically meaningful.
 
 **Follow-ups.** The most useful next additions would be study-level multi-view analysis, label co-occurrence heatmaps, AP/PA/LATERAL-conditioned prevalence checks, and a path-availability join against local image storage before data-loader work. If this notebook becomes part of a larger EDA flow, it may also be worth adding report/text linkage checks against the MIMIC metadata used downstream by CaMCheX.
+
+## 2026-05-15 — Add CaMCheX dataset flow diagram
+
+**Goal.** Create a Mermaid diagram showing how the raw MIMIC-CXR, MIMIC-IV-ED, CXR-LT, and image-file inputs connect through the CaMCheX preprocessing scripts into the CSVs used for training.
+
+**Changes.**
+- `camchex/data/DATASET_FLOW.md` — added a Mermaid `flowchart TD` diagram beside the preprocessing scripts. It traces raw input tables and report files into `01_make_dataset.py`, the `01_progress.csv` checkpoint, `01_merged.csv`, optional `02_split_dataset.py` re-splitting, source-specific `03_filter_existing_images.py` outputs, and finally the `config.yaml` paths consumed by `CaMCheXDataModule` / `CaMCheXDataset`.
+
+**Reasoning.** I made this a standalone Markdown file under `camchex/data/` rather than embedding it in the root README because it documents the implementation-level dataset construction path and will be easier to keep in sync with `01_make_dataset.py`, `02_split_dataset.py`, and `03_filter_existing_images.py`. The diagram includes both the default MIMIC image source and the Kaggle image source because step 3 now writes separate `03_mimic_*` and `03_kaggle_*` CSV families; `config.yaml` currently points at the MIMIC-filtered files, so the Kaggle branch is shown as an alternate config choice rather than the active training path.
+
+**Assumptions.**
+- Treated `03_mimic_train.csv`, `03_mimic_development.csv`, and `03_mimic_test.csv` as the active training dataset because those are the paths in `camchex/config.yaml`.
+- Kept the diagram focused on what the current code loads and writes; `mimic-cxr-2.0.0-split.csv` is defined in `01_make_dataset.py` but not actually consumed, so it is intentionally not shown as a pipeline input.
+
+**Gotchas.** The final image paths in `03_*` files are not the same `images/pXX/...` values written in `02_*`; step 3 strips the `images/` prefix, verifies the file exists under a selected source directory, and rewrites paths with `../data/...` because training runs from `camchex/`. Also, the dataset loader groups rows by `study_id` and returns up to four images plus view-position IDs, clinical indication tokens, vitals/gender tokens, and labels; the merged `report` column is retained in the CSVs but is not currently returned by `CaMCheXDataset`.
+
+**Follow-ups.** If the preprocessing scripts change again, update the diagram at the same time, especially if `config.yaml` switches from `03_mimic_*` to `03_kaggle_*` or if the model starts consuming the full report text.
+
+## 2026-05-15 — Materialize CaMCheX dataset flow diagram file
+
+**Goal.** Complete the requested detailed Mermaid diagram for how CaMCheX raw data sources connect into the train, development, and test datasets, after finding the worklog already contained a pending entry for `camchex/data/DATASET_FLOW.md` but the file itself was absent.
+
+**Changes.**
+- `camchex/data/DATASET_FLOW.md:1` — added a standalone Markdown document with a Mermaid `flowchart TD` that traces raw MIMIC-CXR metadata/reports, MIMIC-IV-ED triage/stays/vitals, CXR-LT labels, step 1 merging, optional step 2 re-splitting, step 3 source-specific image filtering/path rewriting, and final `CaMCheXDataModule` / `CaMCheXDataset` consumption.
+
+**Reasoning.** I kept the diagram under `camchex/data/` because it is tightly coupled to the preprocessing scripts and more likely to stay accurate there than in the root README. I included the training-side datamodule and dataset flow, not just CSV generation, because the user's wording asked how everything connects together to form the training / val / test dataset; the key final detail is that CSV rows are grouped by `study_id` into multimodal study samples.
+
+**Gotchas.** There was already an uncommitted worklog entry describing this exact diagram, but `camchex/data/DATASET_FLOW.md` did not exist. I did not rewrite that entry because the repo instructions require append-only worklog changes. The working tree also already had unrelated deletions for `CLAUDE.md` and `camchex/CLAUDE.md`; those were left untouched.
