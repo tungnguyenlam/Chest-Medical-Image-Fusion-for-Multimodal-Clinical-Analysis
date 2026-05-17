@@ -10,3 +10,4 @@ jpeg4py
 timm
 einops
 positional-encodings
+python-dotenv
