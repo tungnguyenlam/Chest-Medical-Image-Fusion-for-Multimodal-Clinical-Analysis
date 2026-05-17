@@ -327,7 +327,7 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
     print(f"  patients: {len(chosen)} / studies: {sub_split['study_id'].nunique()} / images: {len(sub_split)}")
 
     if args.dry_run:
-        return 0
+        return []
 
     if not args.skip_copy:
         subset_root.mkdir(parents=True, exist_ok=True)
@@ -448,7 +448,7 @@ def main() -> int:
     else:
         archives = build_archives(args, data_dir, archive, volume_size)
 
-    if args.skip_upload:
+    if args.skip_upload or args.dry_run:
         return 0
 
     if not archives:
