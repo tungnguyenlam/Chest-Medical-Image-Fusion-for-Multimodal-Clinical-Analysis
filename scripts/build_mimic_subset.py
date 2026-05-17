@@ -8,7 +8,9 @@ Run from the project root:
     python scripts/build_mimic_subset.py
     python scripts/build_mimic_subset.py --fraction 0.05 --skip-upload
     python scripts/build_mimic_subset.py --skip-copy --compression-level 0 --archive-threads 8
+    python scripts/build_mimic_subset.py --cpu-fraction 0.7
     python scripts/build_mimic_subset.py --skip-copy --volume-size 10g
+    python scripts/build_mimic_subset.py --upload-existing
 
 Reads HF_TOKEN and DATA_PASSWORD from .env (see .env.example).
 """
@@ -26,9 +28,9 @@ from multiprocessing import cpu_count
 from pathlib import Path
 
 
-def _default_workers() -> int:
-    """Half the visible CPU cores, floored at 1."""
-    return max(1, cpu_count() // 2)
+def _workers_from_cpu_fraction(fraction: float) -> int:
+    """Visible CPU cores multiplied by fraction, floored at 1."""
+    return max(1, int(cpu_count() * fraction))
 
 import numpy as np
 import pandas as pd
@@ -54,10 +56,13 @@ def parse_args() -> argparse.Namespace:
                    help="Create the HF repo as public. DEFAULT is private. "
                         "Public re-hosting of MIMIC violates the PhysioNet DUA — "
                         "only pass this for sanitized or non-credentialed bundles.")
-    p.add_argument("--workers", type=int, default=_default_workers(),
-                   help=f"Parallel copy workers (default: half of cpu_count() = {_default_workers()})")
-    p.add_argument("--archive-threads", type=int, default=_default_workers(),
-                   help=f"7z compression threads (default: half of cpu_count() = {_default_workers()})")
+    p.add_argument("--cpu-fraction", type=float, default=0.5,
+                   help="Fraction of visible CPU cores used for default worker/thread counts "
+                        "(default: 0.5)")
+    p.add_argument("--workers", type=int, default=None,
+                   help="Parallel copy workers (default: cpu_count() * --cpu-fraction)")
+    p.add_argument("--archive-threads", type=int, default=None,
+                   help="7z compression threads (default: cpu_count() * --cpu-fraction)")
     p.add_argument("--compression-level", type=int, choices=range(10), default=0,
                    metavar="{0..9}",
                    help="7z compression level: 0=store only, 1=fastest, 9=ultra (default: 0)")
@@ -67,11 +72,28 @@ def parse_args() -> argparse.Namespace:
                    help="Disable 7z volume splitting and write one archive file")
     p.add_argument("--preserve-hf-history", action="store_true",
                    help="Do not delete/recreate the HF dataset repo before upload")
+    p.add_argument("--hf-use-xet", action="store_true",
+                   help="Allow HuggingFace's Xet transfer backend. Default disables it because "
+                        "large WSL/server uploads have been observed getting killed mid-transfer.")
+    p.add_argument("--upload-existing", action="store_true",
+                   help="Skip copy/archive and upload existing archive file(s) from --archive-dir")
     p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree")
     p.add_argument("--skip-archive", action="store_true", help="Skip 7z step")
     p.add_argument("--skip-upload", action="store_true", help="Skip HuggingFace upload")
     p.add_argument("--dry-run", action="store_true", help="Sample + print stats, then exit")
-    return p.parse_args()
+    args = p.parse_args()
+    if not 0 < args.cpu_fraction <= 1:
+        p.error("--cpu-fraction must be > 0 and <= 1")
+    default_workers = _workers_from_cpu_fraction(args.cpu_fraction)
+    if args.workers is None:
+        args.workers = default_workers
+    if args.archive_threads is None:
+        args.archive_threads = default_workers
+    if args.workers < 1:
+        p.error("--workers must be >= 1")
+    if args.archive_threads < 1:
+        p.error("--archive-threads must be >= 1")
+    return args
 
 
 def resolve_subset_name(args: argparse.Namespace) -> str:
@@ -182,7 +204,26 @@ def run_7z(
 def archive_outputs(archive: Path, volume_size: str | None) -> list[Path]:
     if volume_size:
         return sorted(archive.parent.glob(f"{archive.name}.[0-9][0-9][0-9]"))
-    return [archive]
+    if archive.exists():
+        return [archive]
+    return []
+
+
+def discover_existing_archives(archive: Path) -> list[Path]:
+    parts = sorted(archive.parent.glob(f"{archive.name}.[0-9][0-9][0-9]"))
+    if parts:
+        return parts
+    if archive.exists():
+        return [archive]
+    return []
+
+
+def print_archive_summary(archives: list[Path]) -> None:
+    total_size = sum(path.stat().st_size for path in archives)
+    if len(archives) == 1:
+        print(f"  archive size: {total_size / 1e9:.2f} GB")
+    else:
+        print(f"  archive parts: {len(archives)} / total size: {total_size / 1e9:.2f} GB")
 
 
 def remove_archive_outputs(archive: Path) -> None:
@@ -246,7 +287,14 @@ def upload_to_hf(
     token: str,
     private: bool = True,
     preserve_history: bool = False,
+    use_xet: bool = False,
 ) -> None:
+    if use_xet:
+        print("HuggingFace Xet transfer backend is allowed for this upload.")
+    else:
+        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+        print("HuggingFace Xet transfer backend disabled for this upload.")
+
     from huggingface_hub import HfApi, create_repo
     api = HfApi(token=token)
     repo_id = resolve_hf_repo_id(api, repo_id, token)
@@ -262,14 +310,7 @@ def upload_to_hf(
         print(f"Uploaded {archive.name} to dataset repo {repo_id}.")
 
 
-def main() -> int:
-    args = parse_args()
-    load_dotenv()
-
-    if not Path("camchex").is_dir() or not Path("data").is_dir():
-        sys.exit("Run from project root.")
-
-    data_dir = Path(args.data_dir)
+def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volume_size: str | None) -> list[Path]:
     jpg_root = data_dir / "MIMIC-CXR-JPG"
     txt_root = data_dir / "MIMIC-CXR"
     split_csv = jpg_root / "mimic-cxr-2.0.0-split.csv"
@@ -348,7 +389,7 @@ def main() -> int:
         print(f"  manifest -> {subset_root / 'manifest.json'}")
 
     if args.skip_archive:
-        return 0
+        return []
 
     if args.archive_threads < 1:
         sys.exit("--archive-threads must be >= 1")
@@ -357,11 +398,7 @@ def main() -> int:
     if not password:
         sys.exit("DATA_PASSWORD not set in .env")
 
-    archive_dir = Path(args.archive_dir)
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    archive = (archive_dir / args.archive_name).resolve()
     remove_archive_outputs(archive)
-    volume_size = None if args.single_archive else args.volume_size
 
     # 7z sources, all relative to data_dir so the archive extracts straight into data/.
     sources = [subset_root]
@@ -385,14 +422,37 @@ def main() -> int:
     archives = archive_outputs(archive, volume_size)
     if not archives:
         sys.exit(f"No archive outputs found for {archive}")
-    total_size = sum(path.stat().st_size for path in archives)
-    if len(archives) == 1:
-        print(f"  archive size: {total_size / 1e9:.2f} GB")
+    print_archive_summary(archives)
+    return archives
+
+
+def main() -> int:
+    args = parse_args()
+    load_dotenv()
+
+    if not Path("camchex").is_dir() or not Path("data").is_dir():
+        sys.exit("Run from project root.")
+
+    data_dir = Path(args.data_dir)
+    archive_dir = Path(args.archive_dir)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive = (archive_dir / args.archive_name).resolve()
+    volume_size = None if args.single_archive else args.volume_size
+
+    if args.upload_existing:
+        archives = discover_existing_archives(archive)
+        if not archives:
+            sys.exit(f"No existing archive outputs found for {archive}")
+        print(f"Using existing archive output(s) from {archive.parent}")
+        print_archive_summary(archives)
     else:
-        print(f"  archive parts: {len(archives)} / total size: {total_size / 1e9:.2f} GB")
+        archives = build_archives(args, data_dir, archive, volume_size)
 
     if args.skip_upload:
         return 0
+
+    if not archives:
+        sys.exit("No archive outputs available to upload. Use --upload-existing to upload existing files.")
 
     token = os.environ.get("HF_TOKEN")
     if not token:
@@ -400,7 +460,14 @@ def main() -> int:
 
     visibility = "PUBLIC" if args.public else "private"
     print(f"Uploading to HuggingFace dataset repo: {args.hf_repo} ({visibility})")
-    upload_to_hf(archives, args.hf_repo, token, private=not args.public, preserve_history=args.preserve_hf_history)
+    upload_to_hf(
+        archives,
+        args.hf_repo,
+        token,
+        private=not args.public,
+        preserve_history=args.preserve_hf_history,
+        use_xet=args.hf_use_xet,
+    )
     return 0
 
 

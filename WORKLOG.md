@@ -523,3 +523,19 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 - The repo is a temporary private transfer mechanism, not a dataset card or public-facing artifact whose README/settings need to survive upload.
 
 **Gotchas.** Repo deletion is irreversible from this script's perspective: any README, settings, previous files, stars/discussions, and commit history tied to `tungnguyenlam/tung-thesis` can be lost. If the repo is moved under an org later, pass `--hf-repo org-name/tung-thesis`; if history should be kept for a future run, pass `--preserve-hf-history`.
+
+## 2026-05-18 — Add configurable CPU fraction for subset bundling
+
+**Goal.** Let `scripts/build_mimic_subset.py` use a configurable percentage of visible CPU cores for its default copy workers and 7z thread count, while preserving the old half-CPU default and still allowing exact overrides such as `--archive-threads 8`.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:11` — added a usage example for `--cpu-fraction 0.7`.
+- `scripts/build_mimic_subset.py:30` — replaced the fixed half-CPU helper with `_workers_from_cpu_fraction(fraction)`, which floors `cpu_count() * fraction` at 1.
+- `scripts/build_mimic_subset.py:58` — added `--cpu-fraction` with default `0.5`; `--workers` and `--archive-threads` now default to `None` until parsing fills them from the requested CPU fraction.
+- `scripts/build_mimic_subset.py:79` — parse-time validation rejects CPU fractions outside `(0, 1]` and rejects explicit worker/thread counts below 1.
+
+**Reasoning.** The old defaults were computed at argparse construction time, so adding a fraction knob required deferring the computed values until after parse. Keeping `--workers` and `--archive-threads` as exact overrides is important because existing commands may tune copy and compression separately. I chose floor semantics (`int(cpu_count() * fraction)`) because it matches the previous `cpu_count() // 2` behavior for the default `0.5`; using round or ceil would unexpectedly increase thread counts on odd-core machines.
+
+**Gotchas.** `--cpu-fraction 1` means all visible CPUs and is accepted; values above 1 are rejected because the flag is documented as a fraction/percentage rather than an oversubscription factor. On this machine, 16 visible CPUs means `--cpu-fraction 0.7` resolves to 11 workers/threads.
+
+**Follow-ups.** If a future use case needs oversubscription for I/O-bound copying, add a separate explicit argument or loosen this validation intentionally rather than overloading the percentage flag.
