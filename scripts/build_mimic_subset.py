@@ -6,7 +6,8 @@ and optionally upload to a private HuggingFace dataset repo.
 
 Run from the project root:
     python scripts/build_mimic_subset.py
-    python scripts/build_mimic_subset.py --fraction 0.05 --no-upload
+    python scripts/build_mimic_subset.py --fraction 0.05 --skip-upload
+    python scripts/build_mimic_subset.py --skip-copy --compression-level 0 --archive-threads 8
 
 Reads HF_TOKEN and DATA_PASSWORD from .env (see .env.example).
 """
@@ -54,6 +55,11 @@ def parse_args() -> argparse.Namespace:
                         "only pass this for sanitized or non-credentialed bundles.")
     p.add_argument("--workers", type=int, default=_default_workers(),
                    help=f"Parallel copy workers (default: half of cpu_count() = {_default_workers()})")
+    p.add_argument("--archive-threads", type=int, default=_default_workers(),
+                   help=f"7z compression threads (default: half of cpu_count() = {_default_workers()})")
+    p.add_argument("--compression-level", type=int, choices=range(10), default=0,
+                   metavar="{0..9}",
+                   help="7z compression level: 0=store only, 1=fastest, 9=ultra (default: 0)")
     p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree")
     p.add_argument("--skip-archive", action="store_true", help="Skip 7z step")
     p.add_argument("--skip-upload", action="store_true", help="Skip HuggingFace upload")
@@ -130,14 +136,34 @@ def patient_hash(patients: set[int]) -> str:
     return h.hexdigest()
 
 
-def run_7z(archive: Path, sources: list[Path], password: str, workdir: Path) -> None:
+def run_7z(
+    archive: Path,
+    sources: list[Path],
+    password: str,
+    workdir: Path,
+    compression_level: int,
+    archive_threads: int,
+) -> None:
     workdir = workdir.absolute()
     rels = []
     for source in sources:
         source = source if source.is_absolute() else Path.cwd() / source
         rels.append(str(source.absolute().relative_to(workdir)))
-    cmd = ["7z", "a", "-t7z", "-mhe=on", f"-p{password}", "-mx=5", str(archive), *rels]
-    print(f"  $ 7z a -t7z -mhe=on -p<DATA_PASSWORD> -mx=5 {archive.name} {' '.join(rels)}")
+    cmd = [
+        "7z",
+        "a",
+        "-t7z",
+        "-mhe=on",
+        f"-p{password}",
+        f"-mx={compression_level}",
+        f"-mmt={archive_threads}",
+        str(archive),
+        *rels,
+    ]
+    print(
+        "  $ 7z a -t7z -mhe=on -p<DATA_PASSWORD> "
+        f"-mx={compression_level} -mmt={archive_threads} {archive.name} {' '.join(rels)}"
+    )
     subprocess.run(cmd, cwd=str(workdir), check=True)
 
 
@@ -243,6 +269,9 @@ def main() -> int:
     if args.skip_archive:
         return 0
 
+    if args.archive_threads < 1:
+        sys.exit("--archive-threads must be >= 1")
+
     password = os.environ.get("DATA_PASSWORD")
     if not password:
         sys.exit("DATA_PASSWORD not set in .env")
@@ -263,7 +292,14 @@ def main() -> int:
             print(f"  warning: {path} missing; not bundled")
 
     print(f"Archiving -> {archive}")
-    run_7z(archive, sources, password, data_dir.resolve())
+    run_7z(
+        archive,
+        sources,
+        password,
+        data_dir.resolve(),
+        args.compression_level,
+        args.archive_threads,
+    )
     print(f"  archive size: {archive.stat().st_size / 1e9:.2f} GB")
 
     if args.skip_upload:

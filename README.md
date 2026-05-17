@@ -19,6 +19,8 @@ source miniforge3/bin/activate
 
 conda create -n tung python=3.13 -y
 
+conda install -c conda-forge p7zip -y
+
 pip install uv
 
 git clone https://github.com/tungnguyenlam/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis.git

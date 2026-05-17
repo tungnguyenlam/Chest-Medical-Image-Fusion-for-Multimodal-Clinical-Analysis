@@ -418,3 +418,25 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `Path.resolve()` and `Path.absolute()` differ in a load-bearing way here: `resolve()` follows symlinks, while `absolute()` keeps the lexical path under the repo. Since this repository intentionally uses symlinks for large data roots, resolving companion datasets during archive-name calculation can break `relative_to(data_dir)` even when the command-line path `CXR-LT` would be perfectly valid from inside `data/`.
 
 **Follow-ups.** On ict14, rerun the archive/upload portion with `python scripts/build_mimic_subset.py --skip-copy` from the project root. If upload is not wanted, add `--skip-upload`; if the archive already exists, the script will unlink and rebuild it.
+
+## 2026-05-18 — speed up subset 7z archive defaults
+
+**Goal.** The user hit a very slow archive step after copying the MIMIC subset on ict14, then decided to keep using the native `7z` binary installed via conda rather than switching to `py7zr`. The requested behavior was to use the faster archive option recommended in discussion and explicitly limit 7z threading to half of visible CPU cores.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:10` — added an example showing archive-only reruns with `--skip-copy --compression-level 0 --archive-threads 8`.
+- `scripts/build_mimic_subset.py:58` — added `--archive-threads`, defaulting to `_default_workers()` (half of `cpu_count()`, floored at 1), so archive compression uses the same conservative machine-sharing default as file copying.
+- `scripts/build_mimic_subset.py:60` — added `--compression-level {0..9}`, defaulting to `0` (store-only). The encrypted `.7z` wrapper and header encryption remain unchanged; only payload recompression is skipped by default.
+- `scripts/build_mimic_subset.py:136` — `run_7z()` now emits `-mx=<level>` and `-mmt=<threads>` instead of hardcoded `-mx=5`, and prints the sanitized command line with those values.
+- `scripts/build_mimic_subset.py:272` — validates `--archive-threads >= 1` before invoking `7z`.
+
+**Reasoning.** The bundle is dominated by JPEG files and already-compressed `.csv.gz` files, so `-mx=5` spends a lot of CPU for little expected size reduction. Switching to `py7zr` would be mechanically easy, and it avoids exposing the password as a process argument, but it is expected to be slower than native 7-Zip/p7zip for a tens-of-GB archive. Keeping native `7z` preserves the fastest implementation and lets us use `-mmt`; defaulting to `-mx=0` makes the archive step mostly package/encrypt/copy instead of recompressing content that will not shrink much. The thread limit defaults to half the CPU cores to avoid monopolizing shared school-server machines, but remains overridable for dedicated runs.
+
+**Assumptions.**
+- `7z` will be installed on ict14 via conda (`conda install -c conda-forge p7zip`) and available on `PATH` before rerunning the archive step.
+- The archive should still be password-protected with encrypted headers (`-mhe=on`), even when compression is disabled with `-mx=0`.
+- The existing copied subset data can be reused; rerun with `python scripts/build_mimic_subset.py --skip-copy` rather than copying the JPG/TXT tree again.
+
+**Gotchas.** `-mx=0` likely increases the archive size compared with `-mx=5`, but for JPEG-heavy data the runtime saving should be much larger than the storage penalty. `-mmt` matters most when compression is active; for store-only archives the bottleneck may become disk I/O and encryption, so do not expect linear scaling with threads. The script still passes the password to native `7z` as `-p...`, which can briefly expose it in process listings on a shared machine; that was accepted here to keep the native 7z performance path.
+
+**Follow-ups.** On ict14, install p7zip in the conda env and rerun `python scripts/build_mimic_subset.py --skip-copy`. If storage is tight, try `--compression-level 1` as the next compromise before going back to the old `5`.
