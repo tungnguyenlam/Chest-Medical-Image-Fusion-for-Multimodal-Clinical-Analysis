@@ -440,3 +440,86 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `-mx=0` likely increases the archive size compared with `-mx=5`, but for JPEG-heavy data the runtime saving should be much larger than the storage penalty. `-mmt` matters most when compression is active; for store-only archives the bottleneck may become disk I/O and encryption, so do not expect linear scaling with threads. The script still passes the password to native `7z` as `-p...`, which can briefly expose it in process listings on a shared machine; that was accepted here to keep the native 7z performance path.
 
 **Follow-ups.** On ict14, install p7zip in the conda env and rerun `python scripts/build_mimic_subset.py --skip-copy`. If storage is tight, try `--compression-level 1` as the next compromise before going back to the old `5`.
+
+## 2026-05-18 — split subset bundle into 7z volumes for HuggingFace upload
+
+**Goal.** User wanted the dataset bundle to be split into multiple archive files because a single tens-of-GB upload to HuggingFace is brittle. Keep native `7z`, the password/header encryption behavior, and the faster store-only compression defaults from the previous change.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:65` — added `--volume-size`, defaulting to `10g`, so the default build now creates `bundle-a3f9.7z.001`, `.002`, etc. Added `--single-archive` at `scripts/build_mimic_subset.py:67` for the old one-file behavior.
+- `scripts/build_mimic_subset.py:145` — `run_7z()` now accepts `volume_size` and appends `-v<size>` to the native 7z command when splitting is enabled.
+- `scripts/build_mimic_subset.py:181` and `scripts/build_mimic_subset.py:187` — added helpers to discover and remove local archive outputs, covering both single-file and split-volume forms.
+- `scripts/build_mimic_subset.py:193` — upload now removes any existing remote `bundle-a3f9.7z` and `bundle-a3f9.7z.NNN` files before uploading the current set. This prevents stale extra parts from an older/larger build remaining in the HF repo.
+- `scripts/build_mimic_subset.py:349` — after archiving, the script reports either one archive size or the number of parts plus total size, then uploads each part individually.
+- `scripts/download_subset.py:35` — added repo-file detection that prefers split volumes when present and falls back to a legacy single `.7z` for backwards compatibility.
+- `scripts/download_subset.py:70` — downloader now fetches all detected parts, extracts from the first part (`.001`), and removes all downloaded parts unless `--keep-archive` is passed.
+- `camchex/data/DATASET_FLOW.md:25` — documented split-volume default and legacy single-archive download support.
+
+**Reasoning.** 7z split volumes are the smallest change that makes HF upload more resilient: the archive format, password behavior, and extraction command all remain familiar, while each upload object is around 10 GB instead of 50-75 GB. Considered leaving splitting as opt-in, but the user explicitly wanted this for HF upload, and one-file bundles are still available with `--single-archive`. The downloader detects repo contents instead of requiring a separate `--split` flag because the target machine should not need to remember how the bundle was produced.
+
+**Assumptions.**
+- 10 GB is a reasonable default part size for HuggingFace upload and download retry behavior. It can be changed with `--volume-size 5g`, `--volume-size 20g`, etc.
+- Archive parts are uploaded at the repo root, matching the existing single-file behavior. The cleanup regex intentionally only targets root-level `archive_name` and `archive_name.NNN` files.
+- 7z extraction from the first part (`bundle-a3f9.7z.001`) is sufficient when all parts are present in the same directory; this is standard 7z split-volume behavior.
+
+**Gotchas.** If an upload dies halfway through, the HF repo may temporarily contain only a partial split set because the script deletes old archive files before uploading the new ones. This favors avoiding stale mixed generations over preserving the previous complete bundle. If that risk becomes annoying, upload to a versioned prefix or temporary archive name first, then promote after all parts land. Also, if a future bundle ever exceeds 999 parts, the current `.[0-9][0-9][0-9]` glob/regex would need widening; with 10 GB parts and a ~75 GB bundle this is far away.
+
+**Follow-ups.** On ict14, rerun `python scripts/build_mimic_subset.py --skip-copy` after installing p7zip. Expected outputs are `data/_bundles/bundle-a3f9.7z.001`, `.002`, etc.; the downloader on the cloud side can still be run as `python scripts/download_subset.py`.
+
+## 2026-05-18 — add HuggingFace upload preparation progress
+
+**Goal.** User saw the script print `Uploading to HuggingFace dataset repo...` and then sit silently, making it unclear whether anything was happening. Add visible progress around the slow upload path, especially the pre-upload hashing step that happens before network transfer.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:207` — added `upload_info_with_progress()`, which computes the SHA-256/sample/size metadata with a `tqdm` byte progress bar (`Prepare <archive-name>`). This replaces the silent `huggingface_hub` pre-hash for archive parts.
+- `scripts/build_mimic_subset.py:235` — added `upload_archive_file()`, which builds a `CommitOperationAdd` using the precomputed upload info and then calls `HfApi.create_commit()` so HuggingFace's LFS upload path still handles the actual transfer.
+- `scripts/build_mimic_subset.py:265` — each archive part now prints `Uploading <name> (<GB> GB) ...`, shows the preparation progress bar, then HuggingFace's own LFS progress bar should show the network upload.
+
+**Reasoning.** Passing a path directly to `HfApi.upload_file()` triggers a potentially long SHA-256 scan before the LFS upload starts, and that scan has no visible progress in the CLI. Wrapping only the file object's `read()` would not be enough because the same file is read once for metadata and again for upload. The chosen approach precomputes `UploadInfo` with our own progress bar, then hands that metadata to `create_commit()` so the normal HuggingFace upload machinery still performs the real upload and its built-in tqdm transfer bars.
+
+**Assumptions.**
+- Current `huggingface_hub` exposes `CommitOperationAdd` and `UploadInfo` from `huggingface_hub._commit_api`; these are internal APIs, but the public upload API does not expose a clean hook for pre-hash progress.
+- Archive parts are large enough to use LFS, so HuggingFace's upload stage should still emit its own byte progress bar after the preparation stage.
+
+**Gotchas.** This deliberately depends on a private HuggingFace module. If a future `huggingface_hub` release moves or changes `_commit_api`, the fallback is to either return to `api.upload_file(path_or_fileobj=str(path), ...)` with less progress, or update the imports to the new internal location. Also, if a file already exists in Hub LFS with identical content, the preparation bar will still run because the client must compute the SHA-256 before it can know the remote object already exists.
+
+**Follow-ups.** On ict14, make sure this latest script version is synced before rerunning. The user's pasted command output did not include `-v10g`, which means that machine was likely still running the pre-split version of `scripts/build_mimic_subset.py`.
+
+## 2026-05-18 — resolve short HuggingFace repo ids before upload/download
+
+**Goal.** User hit `RepositoryNotFoundError` at upload cleanup: `https://huggingface.co/api/datasets/tung-thesis/tree/main...` returned 404 after archiving succeeded. The script defaulted to `--hf-repo tung-thesis`, but HuggingFace API calls for listing repo files expect a fully qualified `namespace/repo` id in this code path.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:193` — added `resolve_hf_repo_id()`. If `--hf-repo` has no slash, it calls `HfApi.whoami(token=...)` and rewrites `tung-thesis` to `<hf-username>/tung-thesis`, printing the resolved id.
+- `scripts/build_mimic_subset.py:204` — remote cleanup now catches `RepositoryNotFoundError` from `list_repo_files()` and treats it as an empty/new repo for cleanup purposes. The subsequent commit/upload still owns real auth or existence failures.
+- `scripts/build_mimic_subset.py:271` — upload path now resolves the repo id before `create_repo()`, cleanup, and per-part commits.
+- `scripts/download_subset.py:45` and `scripts/download_subset.py:70` — downloader applies the same short-name resolution before listing/downloading archive parts, so the default `--hf-repo tung-thesis` remains usable.
+
+**Reasoning.** The previous implementation assumed HuggingFace would resolve a short repo id consistently across `create_repo()`, `list_repo_files()`, and `create_commit()`. The observed 404 shows that assumption is brittle. Requiring users to type `username/tung-thesis` everywhere would work, but it breaks the existing default and is easy to forget on cloud instances. Resolving short names once through the authenticated token keeps the CLI compact while making downstream API calls explicit. Catching `RepositoryNotFoundError` in cleanup avoids blocking first upload to a new/empty repo, but does not suppress errors from the actual upload commit.
+
+**Assumptions.**
+- If a repo id contains `/`, the user intentionally supplied the namespace (personal or org), and the script should not rewrite it.
+- `HF_TOKEN` belongs to the HuggingFace account/namespace where an unqualified `tung-thesis` should live.
+
+**Gotchas.** The user's pasted run on kubuntu copied only 6,505 JPGs and missed 31,295, producing an 11 GB archive. That is expected on a machine without the full image tree, but it is not the intended complete 10% bundle from ict14. For the real bundle, run on ict14 with the already copied subset and `--skip-copy` after syncing this fix. If the repo should live under an org rather than the token user's namespace, pass `--hf-repo org-name/tung-thesis` explicitly.
+
+**Follow-ups.** Consider adding an upload-only mode later if rerunning archive creation after an upload failure becomes annoying. Current recovery remains `python scripts/build_mimic_subset.py --skip-copy`, which reuses copied subset files but rebuilds the `.7z` parts before upload.
+
+## 2026-05-18 — delete/recreate HF dataset repo before upload
+
+**Goal.** User clarified the HuggingFace username is `tungnguyenlam` and requested that the dataset repo be deleted before upload so the bundle does not retain commit history.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:52` — changed the default upload repo from short `tung-thesis` to fully qualified `tungnguyenlam/tung-thesis`.
+- `scripts/build_mimic_subset.py:67` — added `--preserve-hf-history` as an explicit escape hatch. Default behavior is now destructive: delete/recreate the dataset repo before uploading archive parts.
+- `scripts/build_mimic_subset.py:262` — `upload_to_hf()` now calls `api.delete_repo(..., repo_type='dataset', missing_ok=True)` before `create_repo()` unless `--preserve-hf-history` is passed. This removes prior commits/history instead of only deleting files.
+- `scripts/download_subset.py:25` — changed the default download repo to `tungnguyenlam/tung-thesis`.
+- `camchex/data/DATASET_FLOW.md:25` — documented the delete/recreate upload behavior and fully qualified repo name.
+
+**Reasoning.** Deleting individual archive files leaves repository history and old blobs reachable through commit history, which is exactly what the user wants to avoid for this dataset. Deleting and recreating the dataset repo is the cleanest behavior for a throwaway private transport repo. Kept `--preserve-hf-history` because the script may be reused later for a non-sensitive dataset or for debugging upload behavior where preserving commits is useful.
+
+**Assumptions.**
+- The `HF_TOKEN` has permission to delete and recreate `tungnguyenlam/tung-thesis`.
+- The repo is a temporary private transfer mechanism, not a dataset card or public-facing artifact whose README/settings need to survive upload.
+
+**Gotchas.** Repo deletion is irreversible from this script's perspective: any README, settings, previous files, stars/discussions, and commit history tied to `tungnguyenlam/tung-thesis` can be lost. If the repo is moved under an org later, pass `--hf-repo org-name/tung-thesis`; if history should be kept for a future run, pass `--preserve-hf-history`.

@@ -22,11 +22,11 @@ Companion datasets (`data/CXR-LT/`, `data/MIMIC-IV-ED-2-2/`) are read from `data
 
 The subset is a deterministic patient-level 10% sample (seed 42, sampled by `subject_id` so a patient's full longitudinal record stays intact and there is no train/val leakage).
 
-- `scripts/build_mimic_subset.py` — sample patients → copy matching JPGs and reports into `data/subset/` (mirrors the original `MIMIC-CXR-JPG/files/...` and `MIMIC-CXR/files/...` tree, plus the small CSVs at each dataset root) → write `manifest.json` (seed, fraction, counts, SHA-256 of the sampled `subject_id` list) → archive `subset/ CXR-LT/ MIMIC-IV-ED-2-2/` into a single password-protected `.7z` (AES-256, header encryption `-mhe=on`) → upload to the private HuggingFace dataset repo `tung-thesis`.
-- `scripts/download_subset.py` — pulls the `.7z` from `tung-thesis` and extracts straight into `data/` on the target machine.
+- `scripts/build_mimic_subset.py` — sample patients → copy matching JPGs and reports into `data/subset/` (mirrors the original `MIMIC-CXR-JPG/files/...` and `MIMIC-CXR/files/...` tree, plus the small CSVs at each dataset root) → write `manifest.json` (seed, fraction, counts, SHA-256 of the sampled `subject_id` list) → archive `subset/ CXR-LT/ MIMIC-IV-ED-2-2/` into password-protected split `.7z` volumes (`bundle-a3f9.7z.001`, `.002`, ... by default; AES-256, header encryption `-mhe=on`) → delete/recreate the private HuggingFace dataset repo `tungnguyenlam/tung-thesis` so prior history is not retained → upload all parts.
+- `scripts/download_subset.py` — pulls either the split `.7z.*` volumes or a legacy single `.7z` from `tungnguyenlam/tung-thesis` and extracts straight into `data/` on the target machine.
 - Secrets live in `.env` (see `.env.example`): `HF_TOKEN` (HuggingFace) and `DATA_PASSWORD` (7z). Both files are gitignored.
 - Archive name is intentionally neutral (`bundle-a3f9.7z` by default) and the repo is **private** — public re-hosting of MIMIC would violate the PhysioNet DUA. Anyone with access must already be PhysioNet-credentialed.
-- Bundle size is roughly 50–75 GB for the 10% slice, well under HuggingFace's per-repo storage cap. Sanity-check the actual size before upload.
+- Bundle size is roughly 50–75 GB for the 10% slice, split into 10 GB parts by default. Sanity-check the actual total size before upload.
 
 ```mermaid
 flowchart TD

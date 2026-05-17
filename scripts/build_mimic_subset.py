@@ -8,6 +8,7 @@ Run from the project root:
     python scripts/build_mimic_subset.py
     python scripts/build_mimic_subset.py --fraction 0.05 --skip-upload
     python scripts/build_mimic_subset.py --skip-copy --compression-level 0 --archive-threads 8
+    python scripts/build_mimic_subset.py --skip-copy --volume-size 10g
 
 Reads HF_TOKEN and DATA_PASSWORD from .env (see .env.example).
 """
@@ -47,8 +48,8 @@ def parse_args() -> argparse.Namespace:
                    help="Output archive filename (default: bundle-a3f9.7z)")
     p.add_argument("--archive-dir", default="data/_bundles",
                    help="Directory to write the archive to (default: data/_bundles)")
-    p.add_argument("--hf-repo", default="tung-thesis",
-                   help="HuggingFace dataset repo (default: tung-thesis under your user)")
+    p.add_argument("--hf-repo", default="tungnguyenlam/tung-thesis",
+                   help="HuggingFace dataset repo (default: tungnguyenlam/tung-thesis)")
     p.add_argument("--public", action="store_true",
                    help="Create the HF repo as public. DEFAULT is private. "
                         "Public re-hosting of MIMIC violates the PhysioNet DUA — "
@@ -60,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--compression-level", type=int, choices=range(10), default=0,
                    metavar="{0..9}",
                    help="7z compression level: 0=store only, 1=fastest, 9=ultra (default: 0)")
+    p.add_argument("--volume-size", default="10g",
+                   help="Split 7z archive into volumes of this size, e.g. 5g, 10g, 500m (default: 10g)")
+    p.add_argument("--single-archive", action="store_true",
+                   help="Disable 7z volume splitting and write one archive file")
+    p.add_argument("--preserve-hf-history", action="store_true",
+                   help="Do not delete/recreate the HF dataset repo before upload")
     p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree")
     p.add_argument("--skip-archive", action="store_true", help="Skip 7z step")
     p.add_argument("--skip-upload", action="store_true", help="Skip HuggingFace upload")
@@ -143,12 +150,14 @@ def run_7z(
     workdir: Path,
     compression_level: int,
     archive_threads: int,
+    volume_size: str | None,
 ) -> None:
     workdir = workdir.absolute()
     rels = []
     for source in sources:
         source = source if source.is_absolute() else Path.cwd() / source
         rels.append(str(source.absolute().relative_to(workdir)))
+    volume_args = [f"-v{volume_size}"] if volume_size else []
     cmd = [
         "7z",
         "a",
@@ -157,28 +166,100 @@ def run_7z(
         f"-p{password}",
         f"-mx={compression_level}",
         f"-mmt={archive_threads}",
+        *volume_args,
         str(archive),
         *rels,
     ]
+    volume_display = f" -v{volume_size}" if volume_size else ""
     print(
         "  $ 7z a -t7z -mhe=on -p<DATA_PASSWORD> "
-        f"-mx={compression_level} -mmt={archive_threads} {archive.name} {' '.join(rels)}"
+        f"-mx={compression_level} -mmt={archive_threads}{volume_display} "
+        f"{archive.name} {' '.join(rels)}"
     )
     subprocess.run(cmd, cwd=str(workdir), check=True)
 
 
-def upload_to_hf(archive: Path, repo_id: str, token: str, private: bool = True) -> None:
-    from huggingface_hub import HfApi, create_repo
-    api = HfApi(token=token)
-    create_repo(repo_id=repo_id, repo_type="dataset", private=private, exist_ok=True, token=token)
-    api.upload_file(
-        path_or_fileobj=str(archive),
-        path_in_repo=archive.name,
+def archive_outputs(archive: Path, volume_size: str | None) -> list[Path]:
+    if volume_size:
+        return sorted(archive.parent.glob(f"{archive.name}.[0-9][0-9][0-9]"))
+    return [archive]
+
+
+def remove_archive_outputs(archive: Path) -> None:
+    archive.unlink(missing_ok=True)
+    for part in archive.parent.glob(f"{archive.name}.[0-9][0-9][0-9]"):
+        part.unlink()
+
+
+def resolve_hf_repo_id(api, repo_id: str, token: str) -> str:
+    if "/" in repo_id:
+        return repo_id
+    username = api.whoami(token=token)["name"]
+    resolved = f"{username}/{repo_id}"
+    print(f"Resolved HuggingFace repo: {repo_id} -> {resolved}")
+    return resolved
+
+
+def upload_info_with_progress(path: Path):
+    from huggingface_hub._commit_api import UploadInfo
+
+    size = path.stat().st_size
+    with path.open("rb") as file:
+        sample = file.peek(512)[:512]
+        file.seek(0)
+        sha = hashlib.sha256()
+        with tqdm(
+            total=size,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            desc=f"Prepare {path.name}",
+        ) as bar:
+            while True:
+                chunk = file.read(1024 * 1024)
+                if not chunk:
+                    break
+                sha.update(chunk)
+                bar.update(len(chunk))
+    return UploadInfo(size=size, sha256=sha.digest(), sample=sample)
+
+
+def upload_archive_file(api, archive: Path, repo_id: str, token: str) -> None:
+    from huggingface_hub._commit_api import CommitOperationAdd
+
+    upload_info = upload_info_with_progress(archive)
+    operation = CommitOperationAdd(path_or_fileobj=b"", path_in_repo=archive.name)
+    operation.path_or_fileobj = str(archive)
+    operation.upload_info = upload_info
+    api.create_commit(
         repo_id=repo_id,
         repo_type="dataset",
+        operations=[operation],
+        commit_message=f"Upload {archive.name}",
         token=token,
     )
-    print(f"Uploaded {archive.name} to dataset repo {repo_id}.")
+
+
+def upload_to_hf(
+    archives: list[Path],
+    repo_id: str,
+    token: str,
+    private: bool = True,
+    preserve_history: bool = False,
+) -> None:
+    from huggingface_hub import HfApi, create_repo
+    api = HfApi(token=token)
+    repo_id = resolve_hf_repo_id(api, repo_id, token)
+    if preserve_history:
+        print(f"Preserving existing HuggingFace dataset repo history for {repo_id}.")
+    else:
+        print(f"Deleting HuggingFace dataset repo {repo_id} before upload to avoid retained history.")
+        api.delete_repo(repo_id=repo_id, repo_type="dataset", token=token, missing_ok=True)
+    create_repo(repo_id=repo_id, repo_type="dataset", private=private, exist_ok=True, token=token)
+    for archive in archives:
+        print(f"Uploading {archive.name} ({archive.stat().st_size / 1e9:.2f} GB) ...")
+        upload_archive_file(api, archive, repo_id, token)
+        print(f"Uploaded {archive.name} to dataset repo {repo_id}.")
 
 
 def main() -> int:
@@ -279,8 +360,8 @@ def main() -> int:
     archive_dir = Path(args.archive_dir)
     archive_dir.mkdir(parents=True, exist_ok=True)
     archive = (archive_dir / args.archive_name).resolve()
-    if archive.exists():
-        archive.unlink()
+    remove_archive_outputs(archive)
+    volume_size = None if args.single_archive else args.volume_size
 
     # 7z sources, all relative to data_dir so the archive extracts straight into data/.
     sources = [subset_root]
@@ -299,8 +380,16 @@ def main() -> int:
         data_dir.resolve(),
         args.compression_level,
         args.archive_threads,
+        volume_size,
     )
-    print(f"  archive size: {archive.stat().st_size / 1e9:.2f} GB")
+    archives = archive_outputs(archive, volume_size)
+    if not archives:
+        sys.exit(f"No archive outputs found for {archive}")
+    total_size = sum(path.stat().st_size for path in archives)
+    if len(archives) == 1:
+        print(f"  archive size: {total_size / 1e9:.2f} GB")
+    else:
+        print(f"  archive parts: {len(archives)} / total size: {total_size / 1e9:.2f} GB")
 
     if args.skip_upload:
         return 0
@@ -311,7 +400,7 @@ def main() -> int:
 
     visibility = "PUBLIC" if args.public else "private"
     print(f"Uploading to HuggingFace dataset repo: {args.hf_repo} ({visibility})")
-    upload_to_hf(archive, args.hf_repo, token, private=not args.public)
+    upload_to_hf(archives, args.hf_repo, token, private=not args.public, preserve_history=args.preserve_hf_history)
     return 0
 
 
