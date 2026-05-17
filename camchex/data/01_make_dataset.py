@@ -15,15 +15,20 @@ import section_parser as sp
 
 _parser = argparse.ArgumentParser(description="Build the camchex merged dataset.")
 _parser.add_argument(
-    '--subset', default='seed42_10pct', choices=['full', 'seed42_10pct'],
-    help="Which MIMIC-CXR(-JPG) source to use. 'full' reads from data/MIMIC-CXR* (school server); "
-         "'seed42_10pct' reads from data/subset/MIMIC-CXR* (cloud GPU). Default: seed42_10pct."
+    '--subset', default='subset', choices=['full', 'subset', 'kaggle'],
+    help="Which MIMIC source to build against. "
+         "'full' = data/MIMIC-CXR* (school server, full credentialed copy). "
+         "'subset' = data/subset/MIMIC-CXR* (10%% deterministic subset). "
+         "'kaggle' = same MIMIC metadata/reports as 'full' (kaggle re-hosts images only); "
+         "the image-source switch only matters at step 03. "
+         "Default: subset."
 )
 _args, _ = _parser.parse_known_args()
 
 DATA_ROOT = 'data'
 DATA_CAMCHEX_ROOT = 'data/data-camchex'
-MIMIC_ROOT = 'data' if _args.subset == 'full' else 'data/subset'
+# Step 01 only differs for 'subset'; 'full' and 'kaggle' both read full MIMIC at data/.
+MIMIC_ROOT = 'data/subset' if _args.subset == 'subset' else 'data'
 print(f"[01_make_dataset] subset={_args.subset}  MIMIC_ROOT={MIMIC_ROOT}")
 
 mimic_cxr_metadata_fp     = f'{MIMIC_ROOT}/MIMIC-CXR-JPG/mimic-cxr-2.0.0-metadata.csv'

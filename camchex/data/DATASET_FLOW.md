@@ -4,12 +4,17 @@ This diagram traces how the raw tables, text reports, labels, and local image fi
 
 ## Dataset subsets (`--subset`)
 
-`01_make_dataset.py` and `03_filter_existing_images.py` take `--subset {full, seed42_10pct}`. Default is **`seed42_10pct`**.
+`01_make_dataset.py` and `03_filter_existing_images.py` take `--subset {full, subset, kaggle}`. Default is **`subset`**.
 
-| `--subset`       | MIMIC-CXR-JPG root                       | MIMIC-CXR (reports) root            | Where it's used                                    |
-| ---------------- | ---------------------------------------- | ----------------------------------- | -------------------------------------------------- |
-| `seed42_10pct`   | `data/subset/MIMIC-CXR-JPG/`             | `data/subset/MIMIC-CXR/`            | Cloud GPU (rented) and any iteration-heavy machine |
-| `full`           | `data/MIMIC-CXR-JPG/`                    | `data/MIMIC-CXR/`                   | School server (holds the full credentialed copy)   |
+| `--subset`     | Step 01 reads MIMIC metadata/reports from | Step 03 filters images against                       | Output CSVs                          | Where it's used                                    |
+| -------------- | ----------------------------------------- | ---------------------------------------------------- | ------------------------------------ | -------------------------------------------------- |
+| `subset` | `data/subset/MIMIC-CXR*`                  | `data/subset/MIMIC-CXR-JPG/files`                    | `03_mimic_{train,development,test}`  | Cloud GPU (rented) and iteration-heavy machines    |
+| `full`         | `data/MIMIC-CXR*`                         | `data/MIMIC-CXR-JPG/files`                           | `03_mimic_{train,development,test}`  | School server (holds the full credentialed copy)   |
+| `kaggle`       | `data/MIMIC-CXR*` (same as `full`)        | `data/data-kaggle/official_data_iccv_final/files`    | `03_kaggle_{train,development,test}` | Machines with the kaggle re-host instead of MIMIC  |
+
+`kaggle` is image-only: the kaggle re-host ships JPGs but no metadata or reports, so step 01 falls back to the full MIMIC roots (`data/MIMIC-CXR*`). Only step 03 differs. If a machine has only the kaggle images (and no MIMIC tree), step 01 with `--subset kaggle` will still fail at metadata read — step 01 fundamentally needs the MIMIC metadata and reports.
+
+`03` filters against **one** source per invocation. The previous behavior (loop over both `mimic` and `kaggle` in a single run) is gone — run twice (`--subset full && --subset kaggle`) if both output CSV sets are needed.
 
 Companion datasets (`data/CXR-LT/`, `data/MIMIC-IV-ED-2-2/`) are read from `data/` regardless of `--subset` — they are small and bundled whole.
 

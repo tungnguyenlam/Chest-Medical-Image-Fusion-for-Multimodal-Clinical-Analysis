@@ -20,7 +20,13 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import cpu_count
 from pathlib import Path
+
+
+def _default_workers() -> int:
+    """Half the visible CPU cores, floored at 1."""
+    return max(1, cpu_count() // 2)
 
 import numpy as np
 import pandas as pd
@@ -46,7 +52,8 @@ def parse_args() -> argparse.Namespace:
                    help="Create the HF repo as public. DEFAULT is private. "
                         "Public re-hosting of MIMIC violates the PhysioNet DUA — "
                         "only pass this for sanitized or non-credentialed bundles.")
-    p.add_argument("--workers", type=int, default=8, help="Parallel copy workers (default: 8)")
+    p.add_argument("--workers", type=int, default=_default_workers(),
+                   help=f"Parallel copy workers (default: half of cpu_count() = {_default_workers()})")
     p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree")
     p.add_argument("--skip-archive", action="store_true", help="Skip 7z step")
     p.add_argument("--skip-upload", action="store_true", help="Skip HuggingFace upload")

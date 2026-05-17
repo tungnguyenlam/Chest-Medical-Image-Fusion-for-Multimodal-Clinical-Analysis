@@ -355,3 +355,47 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 - If 50–75 GB upload bandwidth is painful, consider `7z`'s `-v<size>` to produce volumes and `HfApi.upload_folder` instead of a single `upload_file`.
 - `notuse-01_make_dataset.ipynb` still hardcodes `data/MIMIC-CXR-JPG/...`. It's named `notuse-*` so probably fine to leave as-is, but flag for deletion if it's truly abandoned.
 
+
+## 2026-05-18 — extend `--subset` to {full, seed42_10pct, kaggle}; 03 narrows to one source per run
+
+**Goal.** User wanted `camchex/data/01_make_dataset.py` and `camchex/data/03_filter_existing_images.py` to accept a single uniform flag covering all three image sources they actually iterate against: the full MIMIC tree, the seed-42 10% subset, and the kaggle re-host of CXR-LT images.
+
+**Changes.**
+- `camchex/data/01_make_dataset.py:16-29` — `--subset` choices extended to `{full, seed42_10pct, kaggle}`. `MIMIC_ROOT = 'data/subset' if subset == 'seed42_10pct' else 'data'`. `kaggle` reads from the same `data/MIMIC-CXR*` roots as `full` because the kaggle dataset ships images only — metadata and reports must come from the MIMIC tree. Comment in code calls this out.
+- `camchex/data/03_filter_existing_images.py:9-17, 33-43` — `--subset` choices extended to `{full, seed42_10pct, kaggle}`. The two-element `SOURCES` list is replaced by a `_SOURCE_BY_SUBSET` dict and `SOURCES = [_SOURCE_BY_SUBSET[subset]]`. Each entry carries the output tag (`mimic` or `kaggle`), the base dir at project-root cwd, and the base dir as seen from `camchex/` cwd (the `../`-prefixed form embedded in the rewritten CSV `path` column).
+- `camchex/data/DATASET_FLOW.md` — updated the "Dataset subsets" table to a three-row form covering all subsets, the output CSV tag, and the per-subset behavior of step 01 vs step 03; called out that 03 now filters against one source per invocation.
+
+**Why this approach.**
+- *Three choices in one flag, not two separate flags.* The user reasoned about all three as a single concept ("which dataset are we iterating against"); modeling them as three positional alternatives keeps the call sites short (`--subset kaggle`) and the help text legible. Considered exposing 01 and 03 with different flag schemas (`--subset` for 01, `--source` for 03) since 01 doesn't actually care about kaggle vs full at step 01 — rejected because it forces the user to remember which script takes which flag, and the worse half of that pair (`kaggle` on 01 doing nothing different from `full`) is already documented inline.
+- *03 narrows to one source per run, instead of looping over all.* Previously 03 ran both `mimic` and `kaggle` in a single invocation (worklog 2026-05-10). The user's mental model is now "pick a dataset," so the loop became misaligned with the flag. Looping over `_SOURCE_BY_SUBSET.values()` when `--subset` is unset was considered as a backwards-compatible fallback — rejected as needless complexity: the project has been on the per-source CSV outputs (`03_mimic_*`, `03_kaggle_*`) for a week, anyone who needs both can run the script twice (one-line shell). Cheap to undo if needed.
+- *01's `kaggle` choice deliberately behaves like `full`.* The kaggle re-host has no metadata or reports — step 01 fundamentally needs the MIMIC tree. The alternative (raise an error when `--subset kaggle` is passed to 01) would force users to mentally translate between scripts ("use --subset full for 01, then --subset kaggle for 03"). Accepting the flag and silently routing it to the MIMIC roots, with a one-line comment + docstring note explaining the asymmetry, was the least surprising option.
+
+**Assumptions and constraints.**
+- Machines with kaggle images typically also have the MIMIC metadata + reports nearby (this is true on `ict14`/`macmini`/`richmadam` per the existing rsync setup). A machine that has *only* the kaggle JPGs will fail step 01 — that's an inherent limit of kaggle being image-only, not a regression introduced here.
+- 02 (`02_split_dataset.py`) intentionally remains flag-less: it consumes `01_merged.csv` and writes `02_{train,development,test}.csv` without touching MIMIC source paths. Adding `--subset` there would be dead code.
+- Default is still `seed42_10pct` for both scripts. The school server now needs `--subset full` explicitly; same story as the previous worklog entry.
+
+**Gotchas / non-obvious findings.**
+- 03's output filenames still use the `mimic`/`kaggle` tag in `03_{tag}_{split}.csv`. So `--subset full` and `--subset seed42_10pct` both write to `03_mimic_*.csv` (overwriting each other if run back-to-back without renaming). This is consistent with the camchex training config, which references `03_mimic_*.csv` by name and is agnostic to whether those rows came from the full tree or the subset tree. If both sets are needed side-by-side on the same machine, rename one after building or stage them in different `data/data-camchex/` dirs.
+- The `_SOURCE_BY_SUBSET` mapping holds both `data/MIMIC-CXR-JPG/files` and `data/subset/MIMIC-CXR-JPG/files` as *strings*, not `Path` objects, because the rest of the script and the embedded CSV paths are string-based. Don't convert without auditing the `path.startswith('images/')` and `os.path.join` call sites.
+
+**Follow-ups.**
+- Optional: add a `--subset all` (or `--subset full,kaggle`) form to 03 if running both sources in one invocation is a common workflow. Not done here — the user's request was explicitly singular.
+- If `01 --subset kaggle` becomes confusing in practice (since it's an alias for `full`), consider raising a friendly stderr note ("kaggle uses MIMIC metadata at step 01 — see DATASET_FLOW.md") instead of the current silent passthrough.
+
+
+## 2026-05-18 — rename `--subset seed42_10pct` to `--subset subset`
+
+**Goal.** User found `seed42_10pct` too long to type. Renamed the choice to `subset`.
+
+**Changes.**
+- `camchex/data/01_make_dataset.py`, `camchex/data/03_filter_existing_images.py` — `--subset` choices are now `{full, subset, kaggle}`; default is `subset`. Internal routing unchanged: `subset` still resolves to `data/subset/MIMIC-CXR*` / `data/subset/MIMIC-CXR-JPG/files`.
+- `camchex/data/DATASET_FLOW.md` — table updated.
+- `scripts/build_mimic_subset.py` is unaffected: it already names the canonical 10% folder `subset` (the `subset_seed{seed}_{pct}pct` form only applies to non-default seed/fraction builds).
+
+**Why this approach.**
+- The CLI value `subset` collides verbally with the flag name (`--subset subset`), but the help text and DATASET_FLOW table both spell it out, and the typing economy was the user's actual ask. Considered `default`, `small`, `mini` — `subset` mirrors the on-disk folder name (`data/subset/`), which keeps a useful one-to-one mapping between flag value and path component.
+
+**Gotchas.**
+- Previous worklog entries reference the old `seed42_10pct` name and are left intact per the append-only rule. If a future agent searches for the old token, it will find historical context but should follow this entry for the current naming.
+

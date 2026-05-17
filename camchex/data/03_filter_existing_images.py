@@ -8,9 +8,12 @@ if not os.path.isdir('data') or not os.path.isdir('camchex'):
 
 _parser = argparse.ArgumentParser(description="Filter merged CSVs to images that exist on disk.")
 _parser.add_argument(
-    '--subset', default='seed42_10pct', choices=['full', 'seed42_10pct'],
-    help="MIMIC image source. 'full' = data/MIMIC-CXR-JPG/files; "
-         "'seed42_10pct' = data/subset/MIMIC-CXR-JPG/files. Default: seed42_10pct."
+    '--subset', default='subset', choices=['full', 'subset', 'kaggle'],
+    help="Which image source to filter against (and rewrite path columns for). "
+         "'full' = data/MIMIC-CXR-JPG/files. "
+         "'subset' = data/subset/MIMIC-CXR-JPG/files. "
+         "'kaggle' = data/data-kaggle/official_data_iccv_final/files. "
+         "Default: subset."
 )
 _args, _ = _parser.parse_known_args()
 
@@ -31,14 +34,17 @@ OUT_DIR = DATA_CAMCHEX_ROOT
 # (suffix, base_dir_for_images, base_dir_from_camchex_cwd)
 #   base_dir_for_images       — used at filter time (this script runs from project root)
 #   base_dir_from_camchex_cwd — written into the CSV (training script runs from camchex/)
-_MIMIC_BASE = 'data/MIMIC-CXR-JPG/files' if _args.subset == 'full' else 'data/subset/MIMIC-CXR-JPG/files'
-_MIMIC_BASE_FROM_CAMCHEX = f'../{_MIMIC_BASE}'
-
-SOURCES = [
-    ('mimic',  _MIMIC_BASE,                                       _MIMIC_BASE_FROM_CAMCHEX),
-    ('kaggle', 'data/data-kaggle/official_data_iccv_final/files', '../data/data-kaggle/official_data_iccv_final/files'),
-]
-print(f"[03_filter_existing_images] subset={_args.subset}  mimic base={_MIMIC_BASE}")
+# (output_tag, base_dir_at_project_root, base_dir_from_camchex_cwd)
+_SOURCE_BY_SUBSET = {
+    'full':         ('mimic',  'data/MIMIC-CXR-JPG/files',
+                                '../data/MIMIC-CXR-JPG/files'),
+    'subset': ('mimic',  'data/subset/MIMIC-CXR-JPG/files',
+                                '../data/subset/MIMIC-CXR-JPG/files'),
+    'kaggle':       ('kaggle', 'data/data-kaggle/official_data_iccv_final/files',
+                                '../data/data-kaggle/official_data_iccv_final/files'),
+}
+SOURCES = [_SOURCE_BY_SUBSET[_args.subset]]
+print(f"[03_filter_existing_images] subset={_args.subset}  source={SOURCES[0][0]}  base={SOURCES[0][1]}")
 
 SPLITS = ['train', 'development', 'test']
 
