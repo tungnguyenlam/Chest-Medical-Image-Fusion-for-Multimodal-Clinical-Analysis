@@ -399,3 +399,22 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.**
 - Previous worklog entries reference the old `seed42_10pct` name and are left intact per the append-only rule. If a future agent searches for the old token, it will find historical context but should follow this entry for the current naming.
 
+
+## 2026-05-18 — fix subset bundle archive path normalization
+
+**Goal.** Fix `scripts/build_mimic_subset.py` after a successful subset copy failed during the 7z archive step on ict14 with `ValueError: 'data/CXR-LT' is not in the subpath of .../data`. The user had already spent the expensive copy work, so the fix needed to make the archive step reusable with `--skip-copy` instead of requiring a rebuild.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:133` — changed `run_7z()` to normalize `workdir` and each source to absolute paths before computing archive-relative names. Relative inputs like `data/CXR-LT` are now anchored to the project cwd first, so `relative_to(data_dir)` receives comparable absolute paths.
+- `scripts/build_mimic_subset.py:138` — deliberately uses `Path.absolute()` rather than `Path.resolve()` for source entries, so archive path math does not chase data symlinks outside `data/` before calling `relative_to()`.
+
+**Reasoning.** The crash came from mixing an absolute `workdir` (`data_dir.resolve()`) with relative source paths (`data/CXR-LT`, `data/MIMIC-IV-ED-2-2`). One possible fix was to resolve every source when building the `sources` list, but that is risky in this repo because several data directories may be symlinks into external storage; resolving those could make them appear outside `data/` and either fail again or change the archive layout. Keeping `sources` as project-relative paths and making `run_7z()` responsible for path normalization localizes the invariant: 7z always runs with `cwd=data/`, and source arguments are always names relative to that cwd.
+
+**Assumptions.**
+- The script is run from the project root, which `main()` already enforces before archive path construction.
+- The desired archive layout is still `subset/`, `CXR-LT/`, and `MIMIC-IV-ED-2-2/` at the archive root, so extracting into `data/` recreates the expected tree.
+- Existing copied subset data can be reused with `python scripts/build_mimic_subset.py --skip-copy` after this fix, provided `DATA_PASSWORD` is set and `7z` is available.
+
+**Gotchas.** `Path.resolve()` and `Path.absolute()` differ in a load-bearing way here: `resolve()` follows symlinks, while `absolute()` keeps the lexical path under the repo. Since this repository intentionally uses symlinks for large data roots, resolving companion datasets during archive-name calculation can break `relative_to(data_dir)` even when the command-line path `CXR-LT` would be perfectly valid from inside `data/`.
+
+**Follow-ups.** On ict14, rerun the archive/upload portion with `python scripts/build_mimic_subset.py --skip-copy` from the project root. If upload is not wanted, add `--skip-upload`; if the archive already exists, the script will unlink and rebuild it.

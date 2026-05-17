@@ -131,7 +131,11 @@ def patient_hash(patients: set[int]) -> str:
 
 
 def run_7z(archive: Path, sources: list[Path], password: str, workdir: Path) -> None:
-    rels = [str(s.relative_to(workdir)) for s in sources]
+    workdir = workdir.absolute()
+    rels = []
+    for source in sources:
+        source = source if source.is_absolute() else Path.cwd() / source
+        rels.append(str(source.absolute().relative_to(workdir)))
     cmd = ["7z", "a", "-t7z", "-mhe=on", f"-p{password}", "-mx=5", str(archive), *rels]
     print(f"  $ 7z a -t7z -mhe=on -p<DATA_PASSWORD> -mx=5 {archive.name} {' '.join(rels)}")
     subprocess.run(cmd, cwd=str(workdir), check=True)
