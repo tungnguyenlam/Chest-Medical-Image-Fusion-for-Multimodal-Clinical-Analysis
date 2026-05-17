@@ -23,6 +23,6 @@ pip install uv
 
 git clone https://github.com/tungnguyenlam/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis.git
 
-uv pip install requirements.txt
+uv pip install -r requirements.txt
 
 ```
