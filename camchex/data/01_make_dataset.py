@@ -1,3 +1,4 @@
+import argparse
 import os
 import re
 import sys
@@ -12,15 +13,25 @@ if not os.path.isdir('data') or not os.path.isdir('camchex'):
 sys.path.append('mimic-cxr/txt')
 import section_parser as sp
 
+_parser = argparse.ArgumentParser(description="Build the camchex merged dataset.")
+_parser.add_argument(
+    '--subset', default='seed42_10pct', choices=['full', 'seed42_10pct'],
+    help="Which MIMIC-CXR(-JPG) source to use. 'full' reads from data/MIMIC-CXR* (school server); "
+         "'seed42_10pct' reads from data/subset/MIMIC-CXR* (cloud GPU). Default: seed42_10pct."
+)
+_args, _ = _parser.parse_known_args()
+
 DATA_ROOT = 'data'
 DATA_CAMCHEX_ROOT = 'data/data-camchex'
+MIMIC_ROOT = 'data' if _args.subset == 'full' else 'data/subset'
+print(f"[01_make_dataset] subset={_args.subset}  MIMIC_ROOT={MIMIC_ROOT}")
 
-mimic_cxr_metadata_fp     = f'{DATA_ROOT}/MIMIC-CXR-JPG/mimic-cxr-2.0.0-metadata.csv'
-mimic_cxr_split_fp        = f'{DATA_ROOT}/MIMIC-CXR-JPG/mimic-cxr-2.0.0-split.csv'
+mimic_cxr_metadata_fp     = f'{MIMIC_ROOT}/MIMIC-CXR-JPG/mimic-cxr-2.0.0-metadata.csv'
+mimic_cxr_split_fp        = f'{MIMIC_ROOT}/MIMIC-CXR-JPG/mimic-cxr-2.0.0-split.csv'
 mimic_iv_ed_triage_fp     = f'{DATA_ROOT}/MIMIC-IV-ED-2-2/mimic-iv-ed-2.2/ed/triage.csv.gz'
 mimic_iv_ed_edstays_fp    = f'{DATA_ROOT}/MIMIC-IV-ED-2-2/mimic-iv-ed-2.2/ed/edstays.csv.gz'
 mimic_iv_ed_vitalsigns_fp = f'{DATA_ROOT}/MIMIC-IV-ED-2-2/mimic-iv-ed-2.2/ed/vitalsign.csv.gz'
-reports_base_path         = f'{DATA_ROOT}/MIMIC-CXR/files'
+reports_base_path         = f'{MIMIC_ROOT}/MIMIC-CXR/files'
 
 _CXRLT_2023        = f'{DATA_ROOT}/CXR-LT/cxr-lt-multi-label-long-tailed-classification-on-chest-x-rays-2.0.0/cxr-lt-2023'
 labels_train_fp    = f'{_CXRLT_2023}/train.csv'

@@ -2,6 +2,27 @@
 
 This diagram traces how the raw tables, text reports, labels, and local image files become the train, development, and test CSVs consumed by CaMCheX training.
 
+## Dataset subsets (`--subset`)
+
+`01_make_dataset.py` and `03_filter_existing_images.py` take `--subset {full, seed42_10pct}`. Default is **`seed42_10pct`**.
+
+| `--subset`       | MIMIC-CXR-JPG root                       | MIMIC-CXR (reports) root            | Where it's used                                    |
+| ---------------- | ---------------------------------------- | ----------------------------------- | -------------------------------------------------- |
+| `seed42_10pct`   | `data/subset/MIMIC-CXR-JPG/`             | `data/subset/MIMIC-CXR/`            | Cloud GPU (rented) and any iteration-heavy machine |
+| `full`           | `data/MIMIC-CXR-JPG/`                    | `data/MIMIC-CXR/`                   | School server (holds the full credentialed copy)   |
+
+Companion datasets (`data/CXR-LT/`, `data/MIMIC-IV-ED-2-2/`) are read from `data/` regardless of `--subset` — they are small and bundled whole.
+
+### Building and distributing the subset
+
+The subset is a deterministic patient-level 10% sample (seed 42, sampled by `subject_id` so a patient's full longitudinal record stays intact and there is no train/val leakage).
+
+- `scripts/build_mimic_subset.py` — sample patients → copy matching JPGs and reports into `data/subset/` (mirrors the original `MIMIC-CXR-JPG/files/...` and `MIMIC-CXR/files/...` tree, plus the small CSVs at each dataset root) → write `manifest.json` (seed, fraction, counts, SHA-256 of the sampled `subject_id` list) → archive `subset/ CXR-LT/ MIMIC-IV-ED-2-2/` into a single password-protected `.7z` (AES-256, header encryption `-mhe=on`) → upload to the private HuggingFace dataset repo `tung-thesis`.
+- `scripts/download_subset.py` — pulls the `.7z` from `tung-thesis` and extracts straight into `data/` on the target machine.
+- Secrets live in `.env` (see `.env.example`): `HF_TOKEN` (HuggingFace) and `DATA_PASSWORD` (7z). Both files are gitignored.
+- Archive name is intentionally neutral (`bundle-a3f9.7z` by default) and the repo is **private** — public re-hosting of MIMIC would violate the PhysioNet DUA. Anyone with access must already be PhysioNet-credentialed.
+- Bundle size is roughly 50–75 GB for the 10% slice, well under HuggingFace's per-repo storage cap. Sanity-check the actual size before upload.
+
 ```mermaid
 flowchart TD
     %% Raw source files

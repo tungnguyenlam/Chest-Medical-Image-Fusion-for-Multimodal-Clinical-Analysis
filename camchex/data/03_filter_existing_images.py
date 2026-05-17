@@ -1,9 +1,18 @@
+import argparse
 import pandas as pd
 import os
 import sys
 
 if not os.path.isdir('data') or not os.path.isdir('camchex'):
     sys.exit("Run from project root: python camchex/data/03_filter_existing_images.py")
+
+_parser = argparse.ArgumentParser(description="Filter merged CSVs to images that exist on disk.")
+_parser.add_argument(
+    '--subset', default='seed42_10pct', choices=['full', 'seed42_10pct'],
+    help="MIMIC image source. 'full' = data/MIMIC-CXR-JPG/files; "
+         "'seed42_10pct' = data/subset/MIMIC-CXR-JPG/files. Default: seed42_10pct."
+)
+_args, _ = _parser.parse_known_args()
 
 # Reads 02_*.csv from data/data-camchex/, filters to rows whose image exists on disk,
 # and writes one set of 03_*.csv per image source. The training config picks which set
@@ -22,10 +31,14 @@ OUT_DIR = DATA_CAMCHEX_ROOT
 # (suffix, base_dir_for_images, base_dir_from_camchex_cwd)
 #   base_dir_for_images       — used at filter time (this script runs from project root)
 #   base_dir_from_camchex_cwd — written into the CSV (training script runs from camchex/)
+_MIMIC_BASE = 'data/MIMIC-CXR-JPG/files' if _args.subset == 'full' else 'data/subset/MIMIC-CXR-JPG/files'
+_MIMIC_BASE_FROM_CAMCHEX = f'../{_MIMIC_BASE}'
+
 SOURCES = [
-    ('mimic',  'data/MIMIC-CXR-JPG/files',                       '../data/MIMIC-CXR-JPG/files'),
+    ('mimic',  _MIMIC_BASE,                                       _MIMIC_BASE_FROM_CAMCHEX),
     ('kaggle', 'data/data-kaggle/official_data_iccv_final/files', '../data/data-kaggle/official_data_iccv_final/files'),
 ]
+print(f"[03_filter_existing_images] subset={_args.subset}  mimic base={_MIMIC_BASE}")
 
 SPLITS = ['train', 'development', 'test']
 
