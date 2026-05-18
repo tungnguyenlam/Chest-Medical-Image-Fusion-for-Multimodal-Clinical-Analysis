@@ -632,3 +632,26 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The documented `--print_config` check validates LightningCLI parsing but does not show the final per-run rewritten logger/checkpoint/prediction paths because those rewrites happen later in `before_instantiate_classes()` during real command construction. A true smoke test still needs data symlinks and CSVs; the readiness commands only prove syntax, dependency parsing, and config shape.
 
 **Verification.** Ran Python compile checks for the changed entry points/modules, parsed `configs/baseline.yaml`, checked `camchex/train.sh` with `bash -n`, verified the dependency-complete `pip13` environment imports `jsonargparse`, `lightning`, and `timm`, and reran LightningCLI `--print_config` successfully with `/home/tungnguyen/miniforge3/envs/pip13/bin/python`.
+
+## 2026-05-18 — migrate active training code to root src package
+
+**Goal.** Move the active CaMCheX training code out of the legacy `camchex/` folder and into a clean root `src/camchex/` package. The user chose a full cutover: treat `camchex/` as the original paper/legacy tree going forward, while new experiment infrastructure and future swappable architecture work happen under `src/`.
+
+**Changes.**
+- `src/camchex/` — added the active package with `callbacks/`, `data/`, `models/`, and `training/` subpackages. The current baseline code was migrated into this package as `src/camchex/models/architectures.py`, `src/camchex/training/lightning_module.py`, `src/camchex/data/*`, and `src/camchex/callbacks/*`.
+- `src/camchex/training/cli.py` — added the active LightningCLI entrypoint. It owns CPU-thread setup, run-directory creation, resolved config writing, logger/checkpoint/prediction path rewrites, and root-level CLI path resolution for `--config` and `--ckpt_path`.
+- `train.py` and root `train.sh` — added root-level launchers. `train.py` puts `src/` first on `sys.path` so `import camchex` resolves to `src/camchex`, not the legacy folder. `train.sh` now launches `python -u train.py fit` with `configs/baseline.yaml` plus optional `camchex/config.local.yaml`.
+- `configs/baseline.yaml` — updated callback class paths to the active package (`camchex.callbacks.*`) instead of the old top-level `callbacks.*` imports.
+- `README.md` and `configs/README.md` — updated commands and documentation to use root-level `train.py`/`train.sh`, explain the active `src/camchex` layout, and clarify that `camchex/` remains for original code, data preparation scripts, symlinks, and local machine overrides.
+- `camchex/README.md`, `camchex/main.py`, `camchex/model/wrapper.py`, and `camchex/train.sh` — restored to the legacy paper versions after the active code was copied to `src/`, so the old tree is no longer the place for new training changes. `camchex/config.local.yaml.example` remains lightly updated with neutral wording because the active root launcher still uses that local override file.
+
+**Reasoning.** I kept the package name clean as `camchex` per the user's preference, but avoided the import collision by making `train.py` insert `src/` at the front of `sys.path` before importing `camchex.training.cli`. The CLI still changes cwd to the legacy `camchex/` directory before constructing data/model objects because existing CSV image paths are relative to that directory (`images/p...`) and the config data paths are written as `../data/...`. This preserves behavior while moving ownership of active Python code to `src/`.
+
+**Assumptions.**
+- Future model architecture work should happen under `src/camchex/models/`, not under `camchex/model/`.
+- The old `camchex/` directory can remain in the repo because it still contains data scripts, image symlinks, old config, old train script, and paper-era code useful for comparison.
+- Machine-local overrides continue to live at `camchex/config.local.yaml` because rsync scripts already exclude that path.
+
+**Gotchas.** The active CLI is launched from the repo root but intentionally `chdir`s into legacy `camchex/` internally for path compatibility. To make root commands natural, `src/camchex/training/cli.py` resolves `--config` and `--ckpt_path` against the original cwd before the chdir. `--print_config` still shows the pre-instantiation config and not the final run-directory rewrites. Running `cd camchex && python main.py ...` uses the legacy code path; new experiments should use root `python train.py ...` or `bash train.sh`.
+
+**Verification.** Compiled the active root/src Python files, parsed `configs/baseline.yaml` and `camchex/config.local.yaml.example`, checked both root and legacy train scripts with `bash -n`, imported the active `src/camchex` callbacks/datamodule/LightningModule under the `pip13` environment, and reran `python train.py fit --config configs/baseline.yaml --print_config` successfully with `/home/tungnguyen/miniforge3/envs/pip13/bin/python`.

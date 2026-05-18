@@ -1,21 +1,22 @@
 # Experiment configs
 
 `baseline.yaml` is the canonical config for the original CaMCheX experiment.
-Training still runs from `camchex/`, so paths inside these configs remain
-relative to `camchex/` unless the code explicitly resolves them otherwise.
+Active training code lives in `src/camchex/` and is launched from the repo root.
+For compatibility with the original CSV/image paths, the training CLI changes
+its working directory to the legacy `camchex/` folder before data/model
+construction. Paths inside these configs therefore still behave like the old
+CaMCheX training paths unless the code explicitly resolves them otherwise.
 
 Typical use:
 
 ```bash
-cd camchex
 bash train.sh
 ```
 
 To run a different config without editing `train.sh`:
 
 ```bash
-cd camchex
-CAMCHEX_CONFIG=../configs/experiments/my_experiment.yaml bash train.sh
+CAMCHEX_CONFIG=configs/experiments/my_experiment.yaml bash train.sh
 ```
 
 Machine-specific overrides still live in `camchex/config.local.yaml`, which is

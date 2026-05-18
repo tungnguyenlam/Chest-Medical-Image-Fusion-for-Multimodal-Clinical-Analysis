@@ -18,8 +18,9 @@ pip install uv
 uv pip install -r requirements.txt
 ```
 
-Training commands run from `camchex/`. The baseline config lives at
-`configs/baseline.yaml`; machine-local overrides live at
+Active training commands run from the repo root through `train.py` or
+`train.sh`. The baseline config lives at `configs/baseline.yaml`;
+machine-local overrides live at
 `camchex/config.local.yaml`.
 
 ```bash
@@ -28,6 +29,23 @@ cp camchex/config.local.yaml.example camchex/config.local.yaml
 
 Edit `camchex/config.local.yaml` for local GPU count, batch size, workers, and
 optional run settings.
+
+## Code Layout
+
+Active experiment code lives under `src/camchex/`:
+
+```text
+src/camchex/
+  callbacks/   logging, EMA, prediction writers
+  data/        datasets, datamodule, transforms
+  models/      current CaMCheX baseline architecture and components
+  training/    LightningModule and CLI
+```
+
+The top-level `train.py` inserts `src/` into `PYTHONPATH` and launches
+`camchex.training.cli`. The legacy `camchex/` directory is kept for the original
+paper code, data preparation scripts, image symlinks, and machine-local
+`config.local.yaml`.
 
 ## Configs And Run Names
 
@@ -71,17 +89,22 @@ Run these from the repo root before a real training attempt:
 
 ```bash
 python -m py_compile \
-  camchex/main.py \
-  camchex/callbacks/run_logger.py \
-  camchex/model/wrapper.py \
-  camchex/model/models.py \
-  camchex/model/loss.py \
-  camchex/dataset/datamodule.py \
-  camchex/dataset/dataset.py
+  train.py \
+  src/camchex/training/cli.py \
+  src/camchex/training/lightning_module.py \
+  src/camchex/callbacks/run_logger.py \
+  src/camchex/callbacks/ema_callback.py \
+  src/camchex/callbacks/prediction_callback.py \
+  src/camchex/models/architectures.py \
+  src/camchex/models/loss.py \
+  src/camchex/models/ml_decoder.py \
+  src/camchex/data/datamodule.py \
+  src/camchex/data/dataset.py \
+  src/camchex/data/transforms.py
 
 python -c "import yaml; yaml.safe_load(open('configs/baseline.yaml')); print('config ok')"
-bash -n camchex/train.sh
-python camchex/main.py fit --config configs/baseline.yaml --print_config
+bash -n train.sh
+python train.py fit --config configs/baseline.yaml --print_config
 ```
 
 `--print_config` only checks LightningCLI parsing. It prints the static config
@@ -108,8 +131,7 @@ data:
 Then run:
 
 ```bash
-cd camchex
-python main.py fit --config ../configs/baseline.yaml --config config.local.yaml
+python train.py fit --config configs/baseline.yaml --config camchex/config.local.yaml
 ```
 
 This verifies model construction, dataloading, forward pass, loss, validation,
@@ -119,15 +141,13 @@ CSV files described in `camchex/AGENTS.md`.
 ## Full Training
 
 ```bash
-cd camchex
 bash train.sh
 ```
 
 To run a different model config without editing `train.sh`:
 
 ```bash
-cd camchex
-CAMCHEX_CONFIG=../configs/models/camchex-swin.yaml bash train.sh
+CAMCHEX_CONFIG=configs/models/camchex-swin.yaml bash train.sh
 ```
 
 Each run gets a fresh directory containing:
@@ -150,25 +170,22 @@ learning rate, global grad norm, and per-module grad norms.
 Resume is explicit so new runs do not overwrite old ones:
 
 ```bash
-cd camchex
-python main.py fit --config ../configs/baseline.yaml --config config.local.yaml \
-  --ckpt_path ../output/camchex/runs/<run>/checkpoints/last.ckpt
+python train.py fit --config configs/baseline.yaml --config camchex/config.local.yaml \
+  --ckpt_path output/camchex/runs/<run>/checkpoints/last.ckpt
 ```
 
 Validate:
 
 ```bash
-cd camchex
-python main.py validate --config ../configs/baseline.yaml --config config.local.yaml \
-  --ckpt_path ../output/camchex/runs/<run>/checkpoints/last.ckpt
+python train.py validate --config configs/baseline.yaml --config camchex/config.local.yaml \
+  --ckpt_path output/camchex/runs/<run>/checkpoints/last.ckpt
 ```
 
 Predict:
 
 ```bash
-cd camchex
-python main.py predict --config ../configs/baseline.yaml --config config.local.yaml \
-  --ckpt_path ../output/camchex/runs/<run>/checkpoints/<best>.ckpt
+python train.py predict --config configs/baseline.yaml --config camchex/config.local.yaml \
+  --ckpt_path output/camchex/runs/<run>/checkpoints/<best>.ckpt
 ```
 
 ## TCIA Download Helper

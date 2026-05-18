@@ -1,19 +1,14 @@
 # Machine-specific config overrides.
 # Copy this file to config.local.yaml and edit for your machine.
 # config.local.yaml is gitignored and excluded from rsync — it never leaves this machine.
-# Values here override ../configs/baseline.yaml. Only include keys you need to change.
+# Values here override whichever base config is passed on the CLI.
+# Only include keys you need to change.
 
 # Copy this file: cp config.local.yaml.example config.local.yaml
 
 trainer:
   devices: 1          # number of GPUs (auto = use all available)
   # num_nodes: 1      # for multi-node (e.g. SLURM cluster)
-
-run:
-  # model_name controls the artifact namespace: ../output/<model_name>/runs
-  model_name: camchex
-  output_root: null
-  log_every_n_steps: 50
 
 data:
   dataloader_init_args:

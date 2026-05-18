@@ -25,14 +25,14 @@ trainer:
         name: logs
         version: null
   callbacks:
-    - class_path: callbacks.run_logger.RunLoggerCallback
+    - class_path: camchex.callbacks.run_logger.RunLoggerCallback
       init_args:
         run_dir: null
         grad_norm_every_n_steps: 50
         log_module_grad_norms: true
         save_git_diff: true
         save_pip_freeze: true
-    - class_path: callbacks.ema_callback.EMACallback
+    - class_path: camchex.callbacks.ema_callback.EMACallback
       init_args:
         decay: 0.9999
         use_buffers: false
@@ -55,7 +55,7 @@ trainer:
         save_top_k: 1
         monitor: val_ap
         mode: max
-    - class_path: callbacks.prediction_callback.PredictionWriter
+    - class_path: camchex.callbacks.prediction_callback.PredictionWriter
       init_args:
           write_interval: epoch
           output_path: ../output/camchex/predictions.csv
