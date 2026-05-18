@@ -11,3 +11,4 @@ timm
 einops
 positional-encodings
 python-dotenv
+jsonargparse[signatures]>=4.27.7

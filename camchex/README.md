@@ -12,7 +12,7 @@ On a shared server with other users, the Linux OOM killer can pick your training
 
 ```bash
 # Launch training with a lowered OOM score (no root required for moderate values).
-choom -n -500 -- python main.py fit --config config.yaml --config config.local.yaml
+choom -n -500 -- python main.py fit --config ../configs/baseline.yaml --config config.local.yaml
 ```
 
 `choom` ships with `util-linux`. The score range is -1000 (immune, root-only) to +1000 (kill me first); non-root users can practically go down to about -500. Children inherit the score, so this also covers dataloader workers.
@@ -21,7 +21,7 @@ If `choom` isn't installed:
 
 ```bash
 echo -500 | sudo tee /proc/$$/oom_score_adj
-python main.py fit --config config.yaml --config config.local.yaml
+python main.py fit --config ../configs/baseline.yaml --config config.local.yaml
 ```
 
 Two complementary mitigations worth knowing about, in case score-lowering alone isn't enough:
@@ -31,7 +31,14 @@ Two complementary mitigations worth knowing about, in case score-lowering alone 
 
 ## After `python main.py fit`
 
-The training run produces two checkpoints under `../output/camchex/checkpoints/`:
+Each training run writes to a unique directory under
+`../output/<run.model_name>/runs/`. The original model uses
+`run.model_name: camchex`, so its runs go under `../output/camchex/runs/`.
+Set a new `run.model_name` for architecture variants such as encoder-swapped
+models. This prevents a new training run from overwriting checkpoints,
+predictions, logs, or resolved configs from an older run.
+
+The training run produces two checkpoints under the run's `checkpoints/` folder:
 
 - `last.ckpt` — most recent, regardless of metric.
 - `epoch=XX-val_loss=…-val_ap=….ckpt` — best by `val_ap`.
@@ -40,18 +47,17 @@ Typical follow-up commands (run from `camchex/`):
 
 ```bash
 # Validate a saved checkpoint on the development split.
-python main.py validate --config config.yaml --config config.local.yaml \
-  --ckpt_path ../output/camchex/checkpoints/last.ckpt
+python main.py validate --config ../configs/baseline.yaml --config config.local.yaml \
+  --ckpt_path ../output/camchex/runs/<run>/checkpoints/last.ckpt
 
-# Generate predictions on the test split. Writes ../output/camchex/predictions.csv
+# Generate predictions on the test split. Writes into the new run's predictions/ folder.
 # (sigmoid probabilities, with horizontal-flip TTA averaged in).
-python main.py predict --config config.yaml --config config.local.yaml \
-  --ckpt_path ../output/camchex/checkpoints/<best>.ckpt
+python main.py predict --config ../configs/baseline.yaml --config config.local.yaml \
+  --ckpt_path ../output/camchex/runs/<run>/checkpoints/<best>.ckpt
 
 # Resume training from the best checkpoint after a crash or to extend epochs.
-# `config.yaml` already sets `ckpt_path: last`, so re-running `fit` auto-resumes from
-# `last.ckpt` if one exists.
-python main.py fit --config config.yaml --config config.local.yaml
+python main.py fit --config ../configs/baseline.yaml --config config.local.yaml \
+  --ckpt_path ../output/camchex/runs/<run>/checkpoints/last.ckpt
 ```
 
 `predictions.csv` is a study-level CSV with one column per class. Scoring (per-class AP, mAP, head/medium/tail breakdowns) is not yet wrapped into a script — join `predictions.csv` against the labels in `../data/data-camchex/03_mimic_test.csv` and compute `sklearn.metrics.average_precision_score` per class.

@@ -539,3 +539,96 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `--cpu-fraction 1` means all visible CPUs and is accepted; values above 1 are rejected because the flag is documented as a fraction/percentage rather than an oversubscription factor. On this machine, 16 visible CPUs means `--cpu-fraction 0.7` resolves to 11 workers/threads.
 
 **Follow-ups.** If a future use case needs oversubscription for I/O-bound copying, add a separate explicit argument or loosen this validation intentionally rather than overloading the percentage flag.
+
+## 2026-05-18 — make subset upload retryable after WSL kill
+
+**Goal.** Diagnose why the server run stopped at `Data Upload ... Killed` after 7z successfully produced the split bundle, and make the retry path avoid rebuilding the 38.86 GB archive just to restart HuggingFace upload.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:75` — added `--hf-use-xet`; by default uploads now set `HF_HUB_DISABLE_XET=1` before importing `huggingface_hub`, because the killed progress bars came from the Xet-backed upload path and that backend is a plausible OOM trigger under WSL or constrained server cgroups.
+- `scripts/build_mimic_subset.py:78` — added `--upload-existing`, which discovers existing `bundle-a3f9.7z.001`, `.002`, etc. under `data/_bundles/` and uploads them without sampling, copying, or re-running 7z.
+- `scripts/build_mimic_subset.py:212` — added archive discovery/summary helpers so split-volume and legacy single-file bundles share one retry path.
+- `scripts/build_mimic_subset.py:313` and `scripts/build_mimic_subset.py:429` — split archive construction out of `main()` so upload-only retries can bypass the copy/archive prerequisites while normal builds keep the same behavior.
+
+**Reasoning.** The pasted terminal output showed 7z completed cleanly (`Everything is Ok`) and the process died during HuggingFace transfer with a bare `Killed`, which strongly points to the Linux OOM killer or an external job/cgroup limit rather than a Python exception. WSL is a credible cause because WSL has its own memory cap and kills Linux processes abruptly when it runs out. The least disruptive recovery is to reuse the already-created volumes and change only the upload backend. I avoided changing the default 10 GB volume size because the files already exist on the server; if disabling Xet is still not enough, the next step is rebuilding with smaller `--volume-size` values such as `2g`.
+
+**Assumptions.**
+- The archive parts from the killed run still exist in `data/_bundles/` on the server.
+- The upload died before all parts were committed, so deleting/recreating the HF dataset repo before retry remains the intended behavior.
+- `HF_HUB_DISABLE_XET=1` is read early enough because `huggingface_hub` is imported inside `upload_to_hf()`, after the script sets the environment variable.
+
+**Gotchas.** `--skip-archive` still means "do not archive and stop before upload" for compatibility; use `--upload-existing` for the new upload-only retry. If the process is killed again even with Xet disabled, check `dmesg -T | tail -100` or `journalctl -k -n 100` for OOM messages, then either increase WSL/server memory or rebuild smaller archive volumes.
+
+**Follow-ups.** On the server, retry with `python scripts/build_mimic_subset.py --upload-existing`. If you intentionally want to test HuggingFace's Xet backend again, add `--hf-use-xet` explicitly.
+
+## 2026-05-18 — move CaMCheX baseline config to root configs
+
+**Goal.** Start the architecture refactor by migrating the original CaMCheX experiment definition out of `camchex/config.yaml` and into the repo-level config layout discussed with the user. The intent is to make `configs/` the future switchboard for baseline and experimental model variants before moving architecture code into a package under root `src/`.
+
+**Changes.**
+- `configs/baseline.yaml` — added a root-level canonical baseline config that is YAML-equivalent to the existing `camchex/config.yaml`, preserving the original Lightning trainer, callbacks, class list, ASL arguments, ConvNeXt timm args, data paths, and `ckpt_path: last` behavior.
+- `configs/README.md` — documented that training still runs from `camchex/`, so relative paths inside configs are still interpreted from that working directory for now. Also documented `CAMCHEX_CONFIG` and `CAMCHEX_LOCAL_CONFIG` for running alternative configs without editing `train.sh`.
+- `camchex/train.sh` — changed the default config from `config.yaml` to `../configs/baseline.yaml`, while keeping automatic `config.local.yaml` overlay support. Added env-var overrides so experiments can point to a different config path without changing the script.
+- `camchex/config.local.yaml.example` and `camchex/README.md` — updated examples and comments to point at `../configs/baseline.yaml` instead of the legacy in-folder config.
+
+**Reasoning.** I kept this first migration deliberately behavior-preserving: the new baseline config loads to the same Python dictionary as `camchex/config.yaml`, so future architecture work can change one boundary at a time. I did not delete `camchex/config.yaml` yet because existing direct commands and older notes may still reference it; removing it before the code/package migration would create compatibility noise without helping swappability. The launcher now defaults to the root config, which makes `configs/` canonical for new runs while leaving the old file as a temporary fallback.
+
+**Assumptions.**
+- Training continues to be launched from `camchex/`, matching the existing AGENTS guidance and the relative paths in the dataset CSVs/config.
+- Machine-specific overrides should remain in `camchex/config.local.yaml` because rsync scripts already exclude that path.
+- The current baseline should remain exactly reproducible before introducing `src/camchex` components, registries, or class-path-based architecture swapping.
+
+**Gotchas.** `main.py` already rewrites `--config` paths to absolute paths before it changes cwd to `camchex/`, so `python camchex/main.py fit --config configs/baseline.yaml` from the repo root and `python main.py fit --config ../configs/baseline.yaml` from `camchex/` should both resolve the config file correctly. The values inside the YAML, however, remain relative to `camchex/` after the cwd change; this is intentional for now. I could not run a full LightningCLI parse in this shell because the active interpreter is missing the `lightning` package.
+
+**Follow-ups.** Next step is to make `model:` in `configs/baseline.yaml` describe a configurable architecture/loss/optimizer boundary, then update `camchex/model/wrapper.py` to instantiate those components while keeping the old baseline as the default behavior.
+
+## 2026-05-18 — add isolated run logging and module grad norms
+
+**Goal.** Improve training observability so each experiment keeps its own logs/artifacts, logs step and epoch metrics, captures validation loss and per-class validation metrics, records module-level gradient norms, and preserves old runs unless the user deliberately points at an old checkpoint or location.
+
+**Changes.**
+- `configs/baseline.yaml` — added a top-level `run:` block with `name`, `output_root`, `log_every_n_steps`, and metadata toggles. Added `callbacks.run_logger.RunLoggerCallback` and Lightning's `LearningRateMonitor`. Changed `ckpt_path` from `last` to `null` so a new run starts clean by default instead of trying to reuse or overwrite a prior run's `last.ckpt`.
+- `camchex/main.py` — added pre-instantiation run directory wiring in `MyLightningCLI.before_instantiate_classes()`. Each fit/validate/predict invocation now gets a unique directory under `run.output_root`, and the hook rewrites CSVLogger, both ModelCheckpoint callbacks, PredictionWriter, `trainer.default_root_dir`, and `data.datamodule_cfg.save_dir` to that run directory before Lightning creates the objects. It also writes `config.resolved.yaml` into the run folder.
+- `camchex/callbacks/run_logger.py` — added a callback that writes environment metadata (`environment.json`), command line, git commit/branch/status/diff, and `pip-freeze.txt`. The same callback logs global and per-module gradient norms every `run.log_every_n_steps` optimizer steps. For the current model, groups are derived from parameter prefixes such as `backbone.frontal_model`, `backbone.lateral_model`, `backbone.text_encoder`, `backbone.transformer_encoder`, `backbone.head`, and other immediate backbone children.
+- `camchex/model/wrapper.py` — expanded metric logging. Training now logs step and epoch loss separately; validation logs step loss, epoch mean validation loss, summary AP/AUROC metrics, head/medium/tail AP, and per-class AP/AUROC under namespaced keys while keeping legacy keys like `val_ap`, `val_loss`, and `val_head_ap` for checkpoint monitoring/backward familiarity.
+- `camchex/README.md`, `configs/README.md`, and `camchex/config.local.yaml.example` — documented unique run directories, explicit resume paths, `run.output_root`, and `run.log_every_n_steps`.
+
+**Reasoning.** I chose unique run directories over relying on CSVLogger version numbers because checkpoints and prediction CSVs were still hardcoded to flat paths and could overwrite older artifacts. Mutating the merged LightningCLI config before instantiation is the narrowest place to keep all artifacts consistent: the YAML stays simple, local overrides still work, and the instantiated logger/callback objects receive already-final paths. I changed resume from implicit `ckpt_path: last` to explicit checkpoint paths because implicit auto-resume conflicts with the requirement that reruns not overwrite old runs; if a user wants to resume, they should pass the exact previous run checkpoint.
+
+**Assumptions.**
+- Default run output root should be `../output/camchex/runs` relative to the `camchex/` working directory, matching existing output path conventions.
+- Step-level logging cadence can default to 50 optimizer steps and be overridden in `config.local.yaml` or a future experiment config.
+- Per-module gradient norms are more useful and cheaper than per-parameter norms for this project right now.
+
+**Gotchas.** `python main.py ... --print_config` shows the pre-instantiation config, so it still displays the static paths from YAML; the actual path rewrite happens in `before_instantiate_classes()` during real fit/validate/predict construction. I verified the hook directly with a `/tmp` output root and confirmed logger, checkpoint, prediction, callback, and datamodule paths are rewritten into the same run directory. The direct hook test created `/tmp/camchex-run-hook-test/test-hook-test`; it is harmless but not part of the repo. Full training was not run because it would instantiate/download the full model/data stack.
+
+**Follow-ups.** After the architecture is moved into root `src/`, the run logger should keep working, but the module grouping function may be worth updating so new architecture components can declare human-readable grad norm groups explicitly instead of relying only on parameter-name prefixes.
+
+## 2026-05-18 — add model-name artifact namespace
+
+**Goal.** Clarify how outputs should be organized once multiple architectures exist. The user wants the original model to remain `camchex` under `../output/camchex`, while a new architecture or encoder-swapped variant should live under its own output namespace such as `../output/new-model-name`.
+
+**Changes.**
+- `configs/baseline.yaml` — added `run.model_name: camchex` and changed `run.output_root` to `null`, meaning the output root is now derived as `../output/<run.model_name>/runs` unless explicitly overridden.
+- `camchex/main.py` — updated run path construction to slugify `run.model_name` and derive `run.output_root` from it. The same unique run directory logic still applies below that model namespace.
+- `configs/README.md`, `camchex/README.md`, and `camchex/config.local.yaml.example` — documented the distinction between `run.model_name` as the model/artifact namespace and `run.name` as the individual run label.
+
+**Reasoning.** A separate model-name namespace avoids mixing incompatible checkpoint families under one `output/camchex` directory. `run.name` remains useful for a specific trial, but it is not enough once the architecture itself changes. I kept `run.output_root` as an override for unusual storage locations, but the default should be derived from `run.model_name` so experiment configs can self-describe where their artifacts belong.
+
+**Gotchas.** `run.model_name` is slugified before paths are built, so names with spaces or slashes become filesystem-safe (`new model/name` becomes `new-model-name`). If a future config sets `run.output_root` explicitly, it bypasses the derived `../output/<model_name>/runs` location and the user is responsible for keeping that path meaningful.
+
+**Follow-ups.** When the architecture config schema lands, make `run.model_name` part of every experiment config template so swapped-encoder, swapped-fusion, and full-rewrite models do not accidentally write under the original `camchex` namespace.
+
+## 2026-05-18 — document testing workflow and readiness checks
+
+**Goal.** Check whether the current logging/config changes are ready for testing and write a practical guide in the root `README.md` so the user can run syntax checks, config parsing, smoke tests, full training, resume, validation, and prediction without rediscovering the new paths.
+
+**Changes.**
+- `README.md` — replaced the sparse setup notes with a structured guide covering environment setup, `config.local.yaml`, `run.model_name` versus `run.name`, readiness checks, fast smoke testing, full training, run artifact layout, explicit resume, validation, prediction, and the TCIA helper.
+- `requirements.txt` — added `jsonargparse[signatures]>=4.27.7`, which LightningCLI requires for signature-based config parsing. This was discovered when the `pip13` environment had `lightning` and `timm` but failed `--print_config` until the extra was installed manually.
+
+**Reasoning.** The code was close to testable, but the missing `jsonargparse[signatures]` dependency meant a fresh environment following `requirements.txt` could fail before training started. I put the testing guide in the root README because the user asked for `README.md` and because it is the first place a future machine/session will look before entering `camchex/`. The guide keeps the root-level config convention explicit while still warning that actual training commands run from `camchex/`.
+
+**Gotchas.** The documented `--print_config` check validates LightningCLI parsing but does not show the final per-run rewritten logger/checkpoint/prediction paths because those rewrites happen later in `before_instantiate_classes()` during real command construction. A true smoke test still needs data symlinks and CSVs; the readiness commands only prove syntax, dependency parsing, and config shape.
+
+**Verification.** Ran Python compile checks for the changed entry points/modules, parsed `configs/baseline.yaml`, checked `camchex/train.sh` with `bash -n`, verified the dependency-complete `pip13` environment imports `jsonargparse`, `lightning`, and `timm`, and reran LightningCLI `--print_config` successfully with `/home/tungnguyen/miniforge3/envs/pip13/bin/python`.

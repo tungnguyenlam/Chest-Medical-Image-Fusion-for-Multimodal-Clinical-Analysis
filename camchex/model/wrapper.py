@@ -41,37 +41,53 @@ class CaMCheX(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         res = self.shared_step(batch, batch_idx)
-        self.log_dict({'loss': res['loss'].detach()}, prog_bar=True)
-        self.log_dict({'train_loss': res['loss'].detach()}, prog_bar=True, on_step=False, on_epoch=True)
+        self.log('loss', res['loss'].detach(), prog_bar=True, on_step=True, on_epoch=False)
+        self.log('train/loss_step', res['loss'].detach(), prog_bar=False, on_step=True, on_epoch=False)
+        self.log('train/loss_epoch', res['loss'].detach(), prog_bar=True, on_step=False, on_epoch=True)
         return res['loss']
         
     def validation_step(self, batch, batch_idx):
         res = self.shared_step(batch, batch_idx)
-        self.log_dict({'val_loss': res['loss'].detach()}, prog_bar=True)
+        self.log('val/loss_step', res['loss'].detach(), prog_bar=False, on_step=True, on_epoch=False)
         self.validation_step_outputs.append(res)
 
     def on_validation_epoch_end(self):
         preds = torch.cat([x['pred'] for x in self.validation_step_outputs])
         labels = torch.cat([x['label'] for x in self.validation_step_outputs])
+        val_loss = torch.stack([x['loss'].detach() for x in self.validation_step_outputs]).mean()
 
         val_ap = []
         val_auroc = []
+        class_metrics = {}
         for i in range(26):
             ap = self.val_ap(preds[:, i], labels[:, i].long())
             auroc = self.val_auc(preds[:, i], labels[:, i].long())
             val_ap.append(ap)
             val_auroc.append(auroc)
+            class_metrics[f'val/ap/{self.classes[i]}'] = ap
+            class_metrics[f'val/auroc/{self.classes[i]}'] = auroc
             print(f'{self.classes[i]}_ap: {ap}')
         
         head_idx = [0, 2, 4, 12, 14, 16, 20, 24]
         medium_idx = [1, 3, 5, 6, 8, 9, 10, 13, 15, 22]
         tail_idx = [7, 11, 17, 18, 19, 21, 23, 25]
 
-        self.log_dict({'val_ap': sum(val_ap)/26}, prog_bar=True)
-        self.log_dict({'val_auroc': sum(val_auroc)/26}, prog_bar=True)
-        self.log_dict({'val_head_ap': sum([val_ap[i] for i in head_idx]) / len(head_idx)}, prog_bar=True)
-        self.log_dict({'val_medium_ap': sum([val_ap[i] for i in medium_idx]) / len(medium_idx)}, prog_bar=True)
-        self.log_dict({'val_tail_ap': sum([val_ap[i] for i in tail_idx]) / len(tail_idx)}, prog_bar=True)
+        summary_metrics = {
+            'val_loss': val_loss,
+            'val/loss': val_loss,
+            'val_ap': sum(val_ap)/26,
+            'val_auroc': sum(val_auroc)/26,
+            'val_head_ap': sum([val_ap[i] for i in head_idx]) / len(head_idx),
+            'val_medium_ap': sum([val_ap[i] for i in medium_idx]) / len(medium_idx),
+            'val_tail_ap': sum([val_ap[i] for i in tail_idx]) / len(tail_idx),
+            'val/ap': sum(val_ap)/26,
+            'val/auroc': sum(val_auroc)/26,
+            'val/ap_head': sum([val_ap[i] for i in head_idx]) / len(head_idx),
+            'val/ap_medium': sum([val_ap[i] for i in medium_idx]) / len(medium_idx),
+            'val/ap_tail': sum([val_ap[i] for i in tail_idx]) / len(tail_idx),
+        }
+        self.log_dict(class_metrics, prog_bar=False, on_step=False, on_epoch=True)
+        self.log_dict(summary_metrics, prog_bar=True, on_step=False, on_epoch=True)
         self.validation_step_outputs = []
 
     def predict_step(self, batch, batch_idx):

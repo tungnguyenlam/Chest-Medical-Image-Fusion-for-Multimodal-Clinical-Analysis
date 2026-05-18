@@ -1,0 +1,186 @@
+seed_everything: 42
+# CPU threads for torch/OMP/MKL. null = use half of os.cpu_count(). Override per machine in camchex/config.local.yaml.
+cpu_threads: null
+run:
+  model_name: camchex
+  name: baseline
+  # null means ../output/<run.model_name>/runs
+  output_root: null
+  id: null
+  dir: null
+  log_every_n_steps: 50
+  log_module_grad_norms: true
+  save_git_diff: true
+  save_pip_freeze: true
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: 16-mixed
+  logger:
+    - class_path: lightning.pytorch.loggers.CSVLogger
+      init_args:
+        save_dir: ../output/camchex
+        name: logs
+        version: null
+  callbacks:
+    - class_path: callbacks.run_logger.RunLoggerCallback
+      init_args:
+        run_dir: null
+        grad_norm_every_n_steps: 50
+        log_module_grad_norms: true
+        save_git_diff: true
+        save_pip_freeze: true
+    - class_path: callbacks.ema_callback.EMACallback
+      init_args:
+        decay: 0.9999
+        use_buffers: false
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+        log_momentum: false
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: ../output/camchex/checkpoints
+        filename: "last"
+        save_last: true
+        save_top_k: 0
+        monitor: null
+        every_n_epochs: 1
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: ../output/camchex/checkpoints
+        filename: '{epoch:02d}-{val_loss:.4f}-{val_ap:.5f}'
+        save_top_k: 1
+        monitor: val_ap
+        mode: max
+    - class_path: callbacks.prediction_callback.PredictionWriter
+      init_args:
+          write_interval: epoch
+          output_path: ../output/camchex/predictions.csv
+          pred_df_path: ../data/data-camchex/03_mimic_test.csv
+          prediction_level: study # image | study
+  fast_dev_run: false
+  overfit_batches: 0.0
+  val_check_interval: 0.25
+  num_sanity_val_steps: 4
+  log_every_n_steps: 50
+  accumulate_grad_batches: 16
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  deterministic: null
+  benchmark: true
+  max_epochs: 1000
+model:
+  lr: 3e-5
+  classes:
+  - Atelectasis
+  - Calcification of the Aorta
+  - Cardiomegaly
+  - Consolidation
+  - Edema
+  - Emphysema
+  - Enlarged Cardiomediastinum
+  - Fibrosis
+  - Fracture
+  - Hernia
+  - Infiltration
+  - Lung Lesion
+  - Lung Opacity
+  - Mass
+  - No Finding
+  - Nodule
+  - Pleural Effusion
+  - Pleural Other
+  - Pleural Thickening
+  - Pneumomediastinum
+  - Pneumonia
+  - Pneumoperitoneum
+  - Pneumothorax
+  - Subcutaneous Emphysema
+  - Support Devices
+  - Tortuous Aorta
+  loss_init_args:
+    class_instance_nums:
+      - 67597
+      - 4361
+      - 76900
+      - 16038
+      - 38574
+      - 4255
+      - 30119
+      - 1158
+      - 11883
+      - 4049
+      - 10218
+      - 2533
+      - 79931
+      - 5529
+      - 41869
+      - 7663
+      - 69240
+      - 675
+      - 3369
+      - 788
+      - 48093
+      - 543
+      - 14983
+      - 2453
+      - 89140
+      - 3499
+    total_instance_num: 264849
+  timm_init_args:
+    num_classes: 26
+    model_name: convnext_small.fb_in22k_ft_in1k
+    pretrained: true
+    drop_path_rate: 0.0 # stochastic depth
+data:
+  dataloader_init_args:
+    batch_size: 16
+    num_workers: 8
+    pin_memory: true
+    persistent_workers: true
+  datamodule_cfg:
+    tokenizer: null  # biobert: dmis-lab/biobert-v1.1
+    predict_pseudo_label: null # chexpert | nih | vinbig | null
+    use_pseudo_label: false # noisy student training select yes to train on all pseudo labeled data
+    data_dir: data
+    train_df_path: ../data/data-camchex/03_mimic_train.csv
+    devel_df_path: ../data/data-camchex/03_mimic_development.csv
+    pred_df_path: ../data/data-camchex/03_mimic_test.csv
+    vinbig_train_df_path: data/vinbig/vinbig_pseudo_labeled.csv
+    nih_train_df_path: data/nih/nih_pseudo_labeled.csv
+    chexpert_train_df_path: data/chexpert/chexpert_pseudo_labeled.csv
+    save_dir: ../output/camchex
+    val_split: 0.1
+    size: 512
+    classes:
+      - Atelectasis
+      - Calcification of the Aorta
+      - Cardiomegaly
+      - Consolidation
+      - Edema
+      - Emphysema
+      - Enlarged Cardiomediastinum
+      - Fibrosis
+      - Fracture
+      - Hernia
+      - Infiltration
+      - Lung Lesion
+      - Lung Opacity
+      - Mass
+      - No Finding
+      - Nodule
+      - Pleural Effusion
+      - Pleural Other
+      - Pleural Thickening
+      - Pneumomediastinum
+      - Pneumonia
+      - Pneumoperitoneum
+      - Pneumothorax
+      - Subcutaneous Emphysema
+      - Support Devices
+      - Tortuous Aorta
+
+ckpt_path: null # set to ../output/camchex/runs/<run>/checkpoints/last.ckpt to resume explicitly

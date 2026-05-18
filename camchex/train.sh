@@ -14,9 +14,12 @@ cd "$SLURM_SUBMIT_DIR"
 
 mkdir -p ../output/camchex/slurm ../output/camchex/checkpoints ../output/camchex/logs
 
-CONFIG_OVERRIDE=""
-if [ -f "config.local.yaml" ]; then
-    CONFIG_OVERRIDE="--config config.local.yaml"
+CONFIG_PATH="${CAMCHEX_CONFIG:-../configs/baseline.yaml}"
+LOCAL_CONFIG_PATH="${CAMCHEX_LOCAL_CONFIG:-config.local.yaml}"
+
+CONFIG_ARGS=(--config "$CONFIG_PATH")
+if [ -f "$LOCAL_CONFIG_PATH" ]; then
+    CONFIG_ARGS+=(--config "$LOCAL_CONFIG_PATH")
 fi
 
-python -u main.py fit --config config.yaml $CONFIG_OVERRIDE
+python -u main.py fit "${CONFIG_ARGS[@]}"
