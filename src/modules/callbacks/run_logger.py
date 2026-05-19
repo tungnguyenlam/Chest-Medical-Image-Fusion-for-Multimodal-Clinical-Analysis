@@ -63,6 +63,7 @@ class RunLoggerCallback(Callback):
         if step % self.grad_norm_every_n_steps != 0:
             return
 
+        param_to_group = self._build_param_group_index(pl_module)
         sums: Dict[str, float] = {}
         total_sq = 0.0
         for name, param in pl_module.named_parameters():
@@ -74,7 +75,8 @@ class RunLoggerCallback(Callback):
             norm = float(torch.linalg.vector_norm(grad.float(), ord=2).item())
             sq = norm * norm
             total_sq += sq
-            sums[self._module_group(name)] = sums.get(self._module_group(name), 0.0) + sq
+            group = param_to_group.get(name, self._fallback_group(name))
+            sums[group] = sums.get(group, 0.0) + sq
 
         metrics = {"grad_norm/global": math.sqrt(total_sq)}
         for group, sq in sorted(sums.items()):
@@ -82,7 +84,23 @@ class RunLoggerCallback(Callback):
 
         pl_module.log_dict(metrics, on_step=True, on_epoch=False, prog_bar=False, logger=True)
 
-    def _module_group(self, param_name: str) -> str:
+    def _build_param_group_index(self, pl_module) -> Dict[str, str]:
+        # Map each parameter's qualified name to the nearest ancestor module
+        # that declares ``component_name``. Lets RunLogger group grad norms
+        # by human-readable component label (e.g. "image_encoder_frontal")
+        # rather than by Python attribute path.
+        index: Dict[str, str] = {}
+        for module_name, module in pl_module.named_modules():
+            component_name = getattr(module, "component_name", None)
+            if component_name is None:
+                continue
+            prefix = f"{module_name}." if module_name else ""
+            for param_name, _ in module.named_parameters(recurse=True):
+                full = f"{prefix}{param_name}"
+                index.setdefault(full, component_name)
+        return index
+
+    def _fallback_group(self, param_name: str) -> str:
         parts = param_name.split(".")
         if len(parts) >= 2 and parts[0] == "backbone":
             return f"backbone.{parts[1]}"

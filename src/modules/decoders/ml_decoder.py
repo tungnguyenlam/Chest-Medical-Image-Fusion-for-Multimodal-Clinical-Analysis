@@ -102,8 +102,9 @@ class GroupFC(object):
 
 class MLDecoder(nn.Module):
     def __init__(self, num_classes, num_of_groups=-1, decoder_embedding=768,
-                 initial_num_features=2048, zsl=0):
+                 initial_num_features=2048, zsl=0, name="ml_decoder"):
         super(MLDecoder, self).__init__()
+        self.component_name = name
         embed_len_decoder = 100 if num_of_groups < 0 else num_of_groups
         if embed_len_decoder > num_classes:
             embed_len_decoder = num_classes
