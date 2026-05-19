@@ -47,7 +47,9 @@ class CaMCheXModel(nn.Module):
         x = einops.rearrange(x, "b s c h w -> (b s) c h w")
         view_positions = einops.rearrange(view_positions, "b s -> (b s)")
 
-        nonzero_mask = (x.sum(dim=(1, 2, 3)) != 0)
+        nonzero_mask = (
+            (view_positions == self.FRONTAL_VIEW) | (view_positions == self.LATERAL_VIEW)
+        ) & (x.sum(dim=(1, 2, 3)) != 0)
         x_nonzero = x[nonzero_mask]
         vp_nonzero = view_positions[nonzero_mask]
 
