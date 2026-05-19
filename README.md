@@ -1,7 +1,12 @@
 # Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis
 
-This repository reproduces and extends CaMCheX, a multimodal chest X-ray
-classification model that combines images, clinical text, and ED observations.
+Reproduces and extends CaMCheX — a multimodal chest X-ray classifier that
+fuses up to 4 image views with ED clinical text and vital signs for 26-class
+multi-label disease classification.
+
+Active training code lives under `src/modules/`. The original paper code
+remains in `camchex/` as legacy / reference and is no longer used by the
+new training entry.
 
 ## Setup
 
@@ -12,191 +17,142 @@ source miniforge3/bin/activate
 
 conda create -n camchex python=3.13 -y
 conda activate camchex
-conda install -c conda-forge p7zip -y
+conda install -c conda-forge p7zip -y       # only needed to (un)bundle subsets
 
 pip install uv
 uv pip install -r requirements.txt
 ```
 
-Active training commands run from the repo root through `train.py` or
-`train.sh`. The baseline config lives at `configs/baseline.yaml`;
-machine-local overrides live at
-`camchex/config.local.yaml`.
+Copy the env template if you'll bundle/upload subsets or pull a private HF dataset:
 
 ```bash
-cp camchex/config.local.yaml.example camchex/config.local.yaml
+cp .env.example .env
+# fill in HF_TOKEN and DATA_PASSWORD
 ```
 
-Edit `camchex/config.local.yaml` for local GPU count, batch size, workers, and
-optional run settings.
-
-## Code Layout
-
-Active experiment code lives under `src/camchex/`:
+## Repository layout
 
 ```text
-src/camchex/
-  callbacks/   logging, EMA, prediction writers
-  data/        datasets, datamodule, transforms
-  models/      current CaMCheX baseline architecture and components
-  training/    LightningModule and CLI
+src/modules/
+  encoders/          TimmImageEncoder, BioBertTextEncoder      (shared)
+  decoders/          MLDecoder                                  (shared)
+  dataloaders/       MimicMultiViewDataset + DataModule         (shared)
+  callbacks/         EMA, PredictionWriter, RunLogger          (shared)
+  models/
+    camchex/         camchex.py (assembly), fusion.py,
+                     lightning_module.py, loss.py,
+                     train_camchex.py                          (per-model)
+scripts/
+  build_mimic_subset.py        Patient-level subset bundler (+ optional HF upload)
+  prepare_subset_labels.py     Subset-aware label CSV prep
+camchex/             Legacy paper code (kept verbatim, no longer used by training)
+data/                Datasets — mostly gitignored, lives at data/<subset_name>/
+output/              Run outputs: output/<model_name>/runs/<run_id>-<run_name>/
 ```
 
-The top-level `train.py` inserts `src/` into `PYTHONPATH` and launches
-`camchex.training.cli`. The legacy `camchex/` directory is kept for the original
-paper code, data preparation scripts, image symlinks, and machine-local
-`config.local.yaml`.
+Each architecture you experiment with lives in its own folder under
+`src/modules/models/<name>/` with its own assembly, Lightning module, and
+`train_<name>.py` argparse entry. Encoders, decoders, dataloaders, and
+callbacks under `src/modules/` are shared building blocks reused across
+models.
 
-## Configs And Run Names
+## End-to-end workflow
 
-The current baseline model uses:
+```bash
+# 1. (optional) build a small subset of MIMIC for local experimentation.
+#    Default = 10% by patient, written to data/subset/.
+python scripts/build_mimic_subset.py --fraction 0.1 --skip-archive --skip-upload
 
-```yaml
-run:
-  model_name: camchex
-  name: baseline
-  output_root: null
+# 2. produce label CSVs for the subset.
+#    Writes data/<subset>/labels/{train,val,test}.csv with 26 CXR-LT labels,
+#    clinical_indication, and ED vitals.
+python scripts/prepare_subset_labels.py --subset-name subset
+
+# 3. train.
+python -m src.modules.models.camchex.train_camchex \
+    --subset-name subset \
+    --batch-size 4 --max-epochs 30 --lr 1e-4
 ```
 
-`run.model_name` is the model family and output namespace. With the baseline
-settings, runs write to:
+Run all commands from the project root.
+
+## Subset naming
+
+`build_mimic_subset.py` auto-names its output:
+
+| Command | Subset dir |
+|---|---|
+| `--fraction 0.1 --seed 42` (defaults) | `data/subset/` |
+| `--fraction 0.01 --seed 42` | `data/subset_seed42_1pct/` |
+| `--fraction 0.05 --seed 7` | `data/subset_seed7_5pct/` |
+| `--subset-name foo` | `data/foo/` |
+
+Pass the same `--subset-name` to `prepare_subset_labels.py` and to
+`train_camchex.py`.
+
+## Outputs
 
 ```text
-output/camchex/runs/<timestamp>-baseline/
+output/camchex/runs/<run_id>-<run_name>/
+  checkpoints/                  ModelCheckpoint
+  logs/                         CSVLogger
+  predictions/predictions.csv   PredictionWriter (test-set inference)
+  metadata/                     RunLogger: git diff, pip freeze, env, command
+  config.resolved.json          argparse values for the run
 ```
 
-For a new model family, such as an encoder-swapped model, create a model config
-with a different name:
+`<run_id>` defaults to a timestamp; override with `--run-id` to resume into
+the same directory. `<run_name>` defaults to `baseline`; pass `--run-name`
+to label sweeps.
 
-```yaml
-run:
-  model_name: camchex-swin
-  name: swapped-image-encoder
-```
-
-That writes to:
-
-```text
-output/camchex-swin/runs/<timestamp>-swapped-image-encoder/
-```
-
-Keep model identity in model configs, and keep machine/runtime details in
-`camchex/config.local.yaml`.
-
-## Readiness Checks
-
-Run these from the repo root before a real training attempt:
+## Useful training flags
 
 ```bash
-python -m py_compile \
-  train.py \
-  src/camchex/training/cli.py \
-  src/camchex/training/lightning_module.py \
-  src/camchex/callbacks/run_logger.py \
-  src/camchex/callbacks/ema_callback.py \
-  src/camchex/callbacks/prediction_callback.py \
-  src/camchex/models/architectures.py \
-  src/camchex/models/loss.py \
-  src/camchex/models/ml_decoder.py \
-  src/camchex/data/datamodule.py \
-  src/camchex/data/dataset.py \
-  src/camchex/data/transforms.py
-
-python -c "import yaml; yaml.safe_load(open('configs/baseline.yaml')); print('config ok')"
-bash -n train.sh
-python train.py fit --config configs/baseline.yaml --print_config
+python -m src.modules.models.camchex.train_camchex \
+    --backbone-name convnext_small.fb_in22k_ft_in1k_384 \
+    --image-size 384 --batch-size 4 --num-workers 4 \
+    --fusion-num-layers 2 --fusion-nhead 8 \
+    --accumulate-grad-batches 16 \
+    --precision 16-mixed --accelerator auto --devices auto \
+    --val-check-interval 0.25 \
+    --no-ema --no-prediction-writer    # disable optional callbacks
 ```
 
-`--print_config` only checks LightningCLI parsing. It prints the static config
-before the run directory is created, so it will not show the final rewritten
-checkpoint/log paths.
+Full list: `python -m src.modules.models.camchex.train_camchex --help`.
 
-## Smoke Test
+## Adding a new model
 
-Use a tiny local override first:
+1. Create `src/modules/models/<name>/`.
+2. Build an assembly (`<name>.py`) wiring whichever encoders/decoders/fusion
+   you want from `src/modules/`.
+3. Subclass `pl.LightningModule` in `lightning_module.py`.
+4. Copy `train_camchex.py` to `train_<name>.py` and adjust imports + argparse.
+5. Train with `python -m src.modules.models.<name>.train_<name> ...`.
+   Outputs land in `output/<name>/runs/...` automatically.
 
-```yaml
-# camchex/config.local.yaml
-trainer:
-  devices: 1
-  fast_dev_run: true
+Encoder, decoder, fusion, and head modules all accept a `name=` kwarg.
+The `RunLoggerCallback` groups grad norms by `component_name`, so logs stay
+stable across architecture swaps (e.g. `grad_norm/image_encoder_frontal`
+regardless of which timm backbone is wired in).
 
-data:
-  dataloader_init_args:
-    batch_size: 1
-    num_workers: 0
-    persistent_workers: false
-```
+## Device portability
 
-Then run:
+The training stack runs on CUDA, ROCm (presents as CUDA in PyTorch), MPS,
+or CPU — pick via `--accelerator`. Note: 16-mixed precision is flaky on MPS;
+fall back to `--precision 32` there.
 
-```bash
-python train.py fit --config configs/baseline.yaml --config camchex/config.local.yaml
-```
+## Legacy
 
-This verifies model construction, dataloading, forward pass, loss, validation,
-logging, and checkpoint path wiring. It still requires the dataset symlinks and
-CSV files described in `camchex/AGENTS.md`.
+The `camchex/` directory contains the original paper code: a LightningCLI
++ YAML config layout with its own data pipeline (`camchex/data/01,02,03_*.py`)
+against the full MIMIC tree. It is no longer used by the new training
+entry but kept for reference and comparison.
 
-## Full Training
-
-```bash
-bash train.sh
-```
-
-To run a different model config without editing `train.sh`:
-
-```bash
-CAMCHEX_CONFIG=configs/models/camchex-swin.yaml bash train.sh
-```
-
-Each run gets a fresh directory containing:
-
-```text
-config.resolved.yaml
-checkpoints/
-logs/
-metadata/
-predictions/
-```
-
-Metadata includes the command line, package versions, git commit/status/diff,
-environment details, and `pip-freeze.txt`. Metrics include train loss,
-validation loss, validation AP/AUROC summaries, per-class validation AP/AUROC,
-learning rate, global grad norm, and per-module grad norms.
-
-## Resume, Validate, Predict
-
-Resume is explicit so new runs do not overwrite old ones:
-
-```bash
-python train.py fit --config configs/baseline.yaml --config camchex/config.local.yaml \
-  --ckpt_path output/camchex/runs/<run>/checkpoints/last.ckpt
-```
-
-Validate:
-
-```bash
-python train.py validate --config configs/baseline.yaml --config camchex/config.local.yaml \
-  --ckpt_path output/camchex/runs/<run>/checkpoints/last.ckpt
-```
-
-Predict:
-
-```bash
-python train.py predict --config configs/baseline.yaml --config camchex/config.local.yaml \
-  --ckpt_path output/camchex/runs/<run>/checkpoints/<best>.ckpt
-```
-
-## TCIA Download Helper
-
-Install the NBIA Data Retriever CLI from:
+## TCIA download helper
 
 ```text
 https://github.com/ygidtu/NBIA_data_retriever_CLI
 ```
-
-Example:
 
 ```bash
 ./NBIA_data_retriever_CLI -i your_manifest.tcia -s ./output -p 4
