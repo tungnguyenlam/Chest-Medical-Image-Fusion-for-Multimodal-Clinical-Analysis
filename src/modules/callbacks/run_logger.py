@@ -53,7 +53,8 @@ class RunLoggerCallback(Callback):
             if res is not None:
                 self._write_text(run_dir / "metadata" / "pip-freeze.txt", res)
 
-        pl_module.log("run/log_every_n_steps", float(self.grad_norm_every_n_steps), logger=True)
+        if trainer.logger is not None:
+            trainer.logger.log_hyperparams({"run/log_every_n_steps": float(self.grad_norm_every_n_steps)})
 
     def on_before_optimizer_step(self, trainer, pl_module, optimizer) -> None:
         if not self.log_module_grad_norms or self.grad_norm_every_n_steps <= 0:
