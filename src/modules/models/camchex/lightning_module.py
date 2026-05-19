@@ -44,6 +44,7 @@ class CaMCheX(pl.LightningModule):
         fusion_dropout: float = 0.1,
         decoder_embedding: int = 768,
         weight_decay: float = 0.01,
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
         self.lr = lr
@@ -53,12 +54,17 @@ class CaMCheX(pl.LightningModule):
         frontal_encoder = TimmImageEncoder(
             timm_init_args, pretrained_path=frontal_pretrained_path,
             name="image_encoder_frontal",
+            gradient_checkpointing=gradient_checkpointing,
         )
         lateral_encoder = TimmImageEncoder(
             timm_init_args, pretrained_path=lateral_pretrained_path,
             name="image_encoder_lateral",
+            gradient_checkpointing=gradient_checkpointing,
         )
-        text_encoder = BioBertTextEncoder(model_name=text_model, name="text_encoder")
+        text_encoder = BioBertTextEncoder(
+            model_name=text_model, name="text_encoder",
+            gradient_checkpointing=gradient_checkpointing,
+        )
         fusion = TransformerFusion(
             feature_dim=feature_dim,
             num_views=num_views,

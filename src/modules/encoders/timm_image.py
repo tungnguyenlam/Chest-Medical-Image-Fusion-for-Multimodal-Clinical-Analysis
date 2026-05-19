@@ -18,6 +18,7 @@ class TimmImageEncoder(nn.Module):
         timm_init_args: dict,
         pretrained_path: Optional[str] = None,
         name: str = "image_encoder",
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
         self.component_name = name
@@ -27,6 +28,9 @@ class TimmImageEncoder(nn.Module):
         if pretrained_path is not None:
             state_dict = torch.load(pretrained_path, map_location="cpu")
             self.model.load_state_dict(state_dict, strict=False)
+
+        if gradient_checkpointing:
+            self.model.set_grad_checkpointing(enable=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)

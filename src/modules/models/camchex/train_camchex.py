@@ -71,6 +71,8 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--fusion-nhead", type=int, default=8)
     g.add_argument("--fusion-dropout", type=float, default=0.1)
     g.add_argument("--decoder-embedding", type=int, default=768)
+    g.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=False,
+                   help="Trade compute for memory: re-run forward in backward on backbone & text encoder.")
 
     g = p.add_argument_group("loss")
     g.add_argument("--gamma-neg", type=float, default=4.0)
@@ -181,6 +183,7 @@ def build_model(args: argparse.Namespace, class_counts: List[float], total_insta
         fusion_dropout=args.fusion_dropout,
         decoder_embedding=args.decoder_embedding,
         weight_decay=args.weight_decay,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
 
 

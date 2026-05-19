@@ -14,10 +14,14 @@ class BioBertTextEncoder(nn.Module):
         self,
         model_name: str = "dmis-lab/biobert-v1.1",
         name: str = "text_encoder",
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
         self.component_name = name
         self.model = AutoModel.from_pretrained(model_name)
+        if gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+            self.model.config.use_cache = False
 
     @property
     def hidden_size(self) -> int:

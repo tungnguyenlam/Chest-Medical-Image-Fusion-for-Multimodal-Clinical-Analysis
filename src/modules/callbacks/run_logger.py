@@ -79,11 +79,13 @@ class RunLoggerCallback(Callback):
             group = param_to_group.get(name, self._fallback_group(name))
             sums[group] = sums.get(group, 0.0) + sq
 
-        metrics = {"grad_norm/global": math.sqrt(total_sq)}
+        global_norm = math.sqrt(total_sq)
+        metrics = {"grad_norm/global": global_norm}
         for group, sq in sorted(sums.items()):
             metrics[f"grad_norm/{group}"] = math.sqrt(sq)
 
         pl_module.log_dict(metrics, on_step=True, on_epoch=False, prog_bar=False, logger=True)
+        pl_module.log("grad_norm", global_norm, on_step=True, on_epoch=False, prog_bar=True, logger=False)
 
     def _build_param_group_index(self, pl_module) -> Dict[str, str]:
         # Map each parameter's qualified name to the nearest ancestor module
