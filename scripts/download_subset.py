@@ -15,9 +15,16 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import cpu_count
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+
+def _workers_from_cpu_fraction(fraction: float) -> int:
+    """Visible CPU cores multiplied by fraction, floored at 1."""
+    return max(1, int(cpu_count() * fraction))
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,7 +36,28 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-dir", default="data", help="Extraction target (default: data)")
     p.add_argument("--keep-archive", action="store_true",
                    help="Keep the downloaded .7z file or .7z.* parts after extraction")
-    return p.parse_args()
+    p.add_argument("--cpu-fraction", type=float, default=0.5,
+                   help="Fraction of visible CPU cores used for default worker/thread counts "
+                        "(default: 0.5)")
+    p.add_argument("--download-workers", type=int, default=None,
+                   help="Number of archive files to download in parallel "
+                        "(default: cpu_count() * --cpu-fraction)")
+    p.add_argument("--extract-threads", type=int, default=None,
+                   help="Number of CPU threads for 7z extraction "
+                        "(default: cpu_count() * --cpu-fraction)")
+    args = p.parse_args()
+    if not 0 < args.cpu_fraction <= 1:
+        p.error("--cpu-fraction must be > 0 and <= 1")
+    default_workers = _workers_from_cpu_fraction(args.cpu_fraction)
+    if args.download_workers is None:
+        args.download_workers = default_workers
+    if args.extract_threads is None:
+        args.extract_threads = default_workers
+    if args.download_workers < 1:
+        p.error("--download-workers must be >= 1")
+    if args.extract_threads < 1:
+        p.error("--extract-threads must be >= 1")
+    return args
 
 
 def repo_archive_names(repo_files: list[str], archive_name: str) -> list[str]:
@@ -51,6 +79,82 @@ def resolve_hf_repo_id(api, repo_id: str, token: str) -> str:
     return resolved
 
 
+def download_archive(
+    archive_name: str,
+    *,
+    repo_id: str,
+    token: str,
+    local_dir: Path,
+) -> Path:
+    from huggingface_hub import hf_hub_download
+
+    archive_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=archive_name,
+        repo_type="dataset",
+        token=token,
+        local_dir=str(local_dir),
+    )
+    return Path(archive_path).resolve()
+
+
+def download_archives(
+    archive_names: list[str],
+    *,
+    repo_id: str,
+    token: str,
+    local_dir: Path,
+    download_workers: int,
+) -> list[Path]:
+    if download_workers < 1:
+        sys.exit("--download-workers must be >= 1")
+
+    archive_paths_by_name: dict[str, Path] = {}
+    worker_count = min(download_workers, len(archive_names))
+    if worker_count == 1:
+        for archive_name in archive_names:
+            archive_path = download_archive(
+                archive_name,
+                repo_id=repo_id,
+                token=token,
+                local_dir=local_dir,
+            )
+            archive_paths_by_name[archive_name] = archive_path
+            print(f"  -> {archive_path} ({archive_path.stat().st_size / 1e9:.2f} GB)")
+        return [archive_paths_by_name[name] for name in archive_names]
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(
+                download_archive,
+                archive_name,
+                repo_id=repo_id,
+                token=token,
+                local_dir=local_dir,
+            ): archive_name
+            for archive_name in archive_names
+        }
+        for future in as_completed(futures):
+            archive_name = futures[future]
+            archive_path = future.result()
+            archive_paths_by_name[archive_name] = archive_path
+            print(f"  -> {archive_path} ({archive_path.stat().st_size / 1e9:.2f} GB)")
+
+    return [archive_paths_by_name[name] for name in archive_names]
+
+
+def extract_archive(archive_path: Path, *, data_dir: Path, password: str, extract_threads: int) -> None:
+    if extract_threads < 1:
+        sys.exit("--extract-threads must be >= 1")
+
+    print(f"Extracting into {data_dir} with {extract_threads} thread(s) ...")
+    subprocess.run(
+        ["7z", "x", "-y", f"-p{password}", f"-mmt={extract_threads}", str(archive_path)],
+        cwd=str(data_dir),
+        check=True,
+    )
+
+
 def main() -> int:
     args = parse_args()
     load_dotenv()
@@ -65,7 +169,7 @@ def main() -> int:
     if not password:
         sys.exit("DATA_PASSWORD not set in .env")
 
-    from huggingface_hub import HfApi, hf_hub_download
+    from huggingface_hub import HfApi
 
     data_dir = Path(args.data_dir).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -77,25 +181,24 @@ def main() -> int:
     if not archive_names:
         sys.exit(f"No archive named {args.archive_name} or split volumes {args.archive_name}.001, ... found")
 
-    print(f"Downloading {len(archive_names)} archive file(s) from {args.hf_repo} ...")
-    archive_paths = []
-    for archive_name in archive_names:
-        archive_path = hf_hub_download(
-            repo_id=args.hf_repo,
-            filename=archive_name,
-            repo_type="dataset",
-            token=token,
-            local_dir=str(data_dir / "_bundles"),
-        )
-        archive_path = Path(archive_path).resolve()
-        archive_paths.append(archive_path)
-        print(f"  -> {archive_path} ({archive_path.stat().st_size / 1e9:.2f} GB)")
+    worker_count = min(args.download_workers, len(archive_names))
+    print(
+        f"Downloading {len(archive_names)} archive file(s) from {args.hf_repo} "
+        f"with {worker_count} worker(s) ..."
+    )
+    archive_paths = download_archives(
+        archive_names,
+        repo_id=args.hf_repo,
+        token=token,
+        local_dir=data_dir / "_bundles",
+        download_workers=args.download_workers,
+    )
 
-    print(f"Extracting into {data_dir} ...")
-    subprocess.run(
-        ["7z", "x", "-y", f"-p{password}", str(archive_paths[0])],
-        cwd=str(data_dir),
-        check=True,
+    extract_archive(
+        archive_paths[0],
+        data_dir=data_dir,
+        password=password,
+        extract_threads=args.extract_threads,
     )
 
     if not args.keep_archive:

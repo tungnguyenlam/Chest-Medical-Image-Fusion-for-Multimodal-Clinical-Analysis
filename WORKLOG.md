@@ -655,3 +655,53 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The active CLI is launched from the repo root but intentionally `chdir`s into legacy `camchex/` internally for path compatibility. To make root commands natural, `src/camchex/training/cli.py` resolves `--config` and `--ckpt_path` against the original cwd before the chdir. `--print_config` still shows the pre-instantiation config and not the final run-directory rewrites. Running `cd camchex && python main.py ...` uses the legacy code path; new experiments should use root `python train.py ...` or `bash train.sh`.
 
 **Verification.** Compiled the active root/src Python files, parsed `configs/baseline.yaml` and `camchex/config.local.yaml.example`, checked both root and legacy train scripts with `bash -n`, imported the active `src/camchex` callbacks/datamodule/LightningModule under the `pip13` environment, and reran `python train.py fit --config configs/baseline.yaml --print_config` successfully with `/home/tungnguyen/miniforge3/envs/pip13/bin/python`.
+
+## 2026-05-22 — parallelize subset archive downloads
+
+**Goal.** Update `scripts/download_subset.py` so split HuggingFace subset archive volumes download in parallel instead of one file at a time.
+
+**Changes.**
+- `scripts/download_subset.py:18` — imported `ThreadPoolExecutor` / `as_completed` for concurrent archive-part downloads.
+- `scripts/download_subset.py:33` — added `--download-workers` with a default of 4 so parallelism is configurable and can be reduced to 1 for sequential behavior.
+- `scripts/download_subset.py:57` — split single-file download logic into `download_archive()` and added `download_archives()` to run downloads concurrently, print each completed file, validate worker count, and return paths in the original sorted archive-volume order.
+- `scripts/download_subset.py:147` — replaced the sequential download loop with the new parallel helper while keeping extraction pointed at the first sorted volume.
+
+**Reasoning.** The subset bundle is commonly split into `.7z.001`, `.7z.002`, etc., and each part can be fetched independently from HuggingFace. A thread pool is enough here because the work is network-bound and lets the script keep using `hf_hub_download` rather than shelling out to `huggingface-cli` or changing the storage layout. I kept the return list sorted by archive name rather than completion order because `7z x` must start from the first volume.
+
+**Assumptions.**
+- HuggingFace Hub client downloads for distinct filenames are safe to run concurrently into the same local bundle directory.
+- Four concurrent transfers is a reasonable default for the current private subset workflow; users on slower links or rate-limited connections can pass `--download-workers 1` or `2`.
+
+**Gotchas.** Completion messages now appear in download-completion order, not volume order, but extraction still uses the first sorted volume. This was only syntax/help checked locally; I did not run a real HuggingFace download because it requires credentials and large archive transfer.
+
+**Verification.** Ran `python -m py_compile scripts/download_subset.py` and `python scripts/download_subset.py --help` successfully.
+
+## 2026-05-22 — add threaded 7z extraction option
+
+**Goal.** Answer whether unzip/extraction can run in parallel and make `scripts/download_subset.py` use the supported form of parallelism for the split 7z bundle.
+
+**Changes.**
+- `scripts/download_subset.py:35` — added `--extract-threads`, defaulting to all detected CPUs, so users can control `7z` decompression threading.
+- `scripts/download_subset.py:120` — added `extract_archive()` to validate the thread count and pass `-mmt=<threads>` to `7z x`.
+- `scripts/download_subset.py:174` — replaced the inline extraction subprocess call with `extract_archive()`.
+
+**Reasoning.** Split `.7z.001`, `.7z.002`, etc. files are volumes of one archive stream, so launching one extractor per volume is not valid and would corrupt or duplicate work. The safe parallelism is inside `7z` itself via `-mmt=N`, which lets supported codecs use multiple CPU threads while still reading the archive as one ordered stream.
+
+**Gotchas.** This can speed CPU-bound decompression, especially for LZMA2-style archives, but extraction may still be limited by disk I/O, password/header handling, small-file creation overhead, or codecs that do not parallelize much. The previous command may already have used some automatic 7z threading depending on the build; the new option makes it explicit and configurable.
+
+**Verification.** Ran `7z` help locally and confirmed `-mmt[N]` is supported. Ran `python -m py_compile scripts/download_subset.py` and `python scripts/download_subset.py --help` successfully.
+
+## 2026-05-22 — align download subset CPU fraction defaults
+
+**Goal.** Make `scripts/download_subset.py` follow the same CPU-percentage defaulting pattern as `scripts/build_mimic_subset.py` instead of defaulting extraction to every visible CPU.
+
+**Changes.**
+- `scripts/download_subset.py:19` — imported `multiprocessing.cpu_count` to match the build script's visible-core calculation.
+- `scripts/download_subset.py:25` — added `_workers_from_cpu_fraction()` with the same `max(1, int(cpu_count() * fraction))` behavior used by `build_mimic_subset.py`.
+- `scripts/download_subset.py:39` — added `--cpu-fraction` defaulting to `0.5`, changed `--download-workers` and `--extract-threads` to default to `None`, and resolved both from the CPU fraction unless explicitly provided.
+
+**Reasoning.** The extraction path should avoid grabbing all CPU by default on shared machines, matching the existing archive-building behavior. I also let download worker defaults use the same fraction-derived count for consistency with the CLI wording, while still capping active download workers to the number of archive files in the repo.
+
+**Gotchas.** Download workers are network concurrency rather than CPU-bound work, so `--download-workers` remains the better manual knob if HuggingFace rate limits or the network connection behaves poorly. `--extract-threads` is the important CPU knob for `7z` decompression.
+
+**Verification.** Ran `python -m py_compile scripts/download_subset.py`, `python scripts/download_subset.py --help`, and `python scripts/download_subset.py --cpu-fraction 0` to confirm argparse rejects invalid fractions before requiring credentials.
