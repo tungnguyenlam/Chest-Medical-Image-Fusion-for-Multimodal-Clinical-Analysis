@@ -20,6 +20,9 @@ conda activate camchex
 conda install -c conda-forge p7zip -y       # only needed to (un)bundle subsets
 
 pip install uv
+
+git clone https://github.com/tungnguyenlam/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis.git
+cd Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis
 uv pip install -r requirements.txt
 ```
 
