@@ -1,0 +1,101 @@
+\documentclass[13pt]{extarticle}
+\usepackage[a4paper, tmargin=2.5cm, lmargin=3cm, rmargin=3cm, bmargin=2.5cm]{geometry}
+\usepackage{hyperref}
+%\usepackage{multicol}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    filecolor=magenta,      
+    urlcolor=blue,
+    citecolor=black,
+}
+%\usepackage[numbers,sort&compress]{natbib} % for a numerical citation list
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption} % trong preamble
+\usepackage{indentfirst}
+\usepackage[utf8]{inputenc}
+\usepackage{textcomp}
+\usepackage[T1]{fontenc}
+\usepackage{CJKutf8}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{lmodern}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{amsmath,amssymb} 
+\usepackage{placeins}
+\usepackage{setspace}
+% \usepackage{bbm}
+\usepackage{adjustbox}
+
+\setstretch{1.15}
+\usetikzlibrary{positioning, arrows.meta, calc}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+
+\fancyfoot[L]{\footnotesize Bubble Extraction and Dialog Translation for Japanese Manga}
+\fancyfoot[R]{\thepage}
+
+\renewcommand{\footrulewidth}{0pt}
+\renewcommand{\headrulewidth}{0pt}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{document}
+\begin{CJK*}{UTF8}{gbsn}
+\pagenumbering{arabic}
+
+\begin{titlepage}
+    \thispagestyle{empty}
+    \centering
+    \vspace{2cm}
+    {\large \textbf{UNIVERSITY OF SCIENCE AND TECHNOLOGY OF HANOI}}\\[0.5cm]
+    {DEPARTMENT OF INFORMATION AND COMMUNICATION TECHNOLOGY}\\[2cm]
+
+    \includegraphics[width=0.3\linewidth]{img/usth.jpg}
+    \\[2cm]
+
+    {\Huge \textbf{Group Project Report}}\\[1cm]
+    {\Huge \textbf{Chest Medical Image Fusion for Multimodal Clinical Analysis}}\\[2cm]
+
+    {\fontsize{16pt}{22pt}\selectfont
+    \raggedright
+    \begin{tabular}{@{} l l l @{}}
+        \textbf{Supervisor} & Assoc. Prof. Tran Giang Son & \\[0.3cm]
+        \textbf{Group}      & 49 & \\[0.3cm]
+        \textbf{Student}  & Nguyen Lam Tung       & 23BI14446\\
+
+    \end{tabular}
+    }
+
+\end{titlepage}
+
+\addtocontents{toc}{\protect\setcounter{tocdepth}{-1}}
+\section*{List of Abbreviations}
+\vspace{0.6em}
+\addtocontents{toc}{\protect\setcounter{tocdepth}{3}}
+\begin{table}[H]
+    \centering
+    \large 
+    \begin{tabular}{ll}
+        BERT & Bidirectional Encoder Representations from Transformers \\
+
+    \end{tabular}
+\end{table}
+
+
+\end{CJK*}
+\end{document}

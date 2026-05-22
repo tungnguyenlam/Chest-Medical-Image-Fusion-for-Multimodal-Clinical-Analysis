@@ -13,3 +13,8 @@ NBIA_data_retriever_CLI_darwin_arm64
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Latex artifacts
+*.aux
+*.log
+*.out
