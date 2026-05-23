@@ -1,31 +1,22 @@
 import einops
-import timm
 import torch
 import torch.nn as nn
 from positional_encodings.torch_encodings import PositionalEncoding2D, Summer
-from transformers import AutoModel
 
 from src.decoder.MLDecoder import MLDecoder
+from src.encoder import CaMCheXImageEncoder, CaMCheXTextEncoder
 
 
 class CaMCheXModel(nn.Module):
     def __init__(self, timm_init_args, frontal_pretrained_path=None, lateral_pretrained_path=None, text_model="dmis-lab/biobert-v1.1"):
         super().__init__()
 
-        self.frontal_model = timm.create_model(**timm_init_args)
-        self.lateral_model = timm.create_model(**timm_init_args)
-        self.text_encoder = AutoModel.from_pretrained(text_model)
-
-        self.frontal_model.head = nn.Identity()
-        self.lateral_model.head = nn.Identity()
-
-        if frontal_pretrained_path is not None:
-            state_dict = torch.load(frontal_pretrained_path, map_location='cpu')
-            self.frontal_model.load_state_dict(state_dict, strict=False)
-
-        if lateral_pretrained_path is not None:
-            state_dict = torch.load(lateral_pretrained_path, map_location='cpu')
-            self.lateral_model.load_state_dict(state_dict, strict=False)
+        self.image_encoder = CaMCheXImageEncoder(
+            timm_init_args=timm_init_args,
+            frontal_pretrained_path=frontal_pretrained_path,
+            lateral_pretrained_path=lateral_pretrained_path,
+        )
+        self.text_encoder = CaMCheXTextEncoder(text_model=text_model)
             
         self.conv2d = nn.Conv2d(768, 768, kernel_size=3, stride=2, padding=1)
 
@@ -44,25 +35,9 @@ class CaMCheXModel(nn.Module):
 
     def forward(self, data):
         _, x, view_positions, clinical_input_ids, clinical_attention_mask, clinical_obs_input_ids, clinical_obs_attention_mask = data
-        b, s, c, h, w = x.shape
+        b, s = x.shape[:2]
 
-        x = einops.rearrange(x, 'b s c h w -> (b s) c h w')
-        view_positions = einops.rearrange(view_positions, 'b s -> (b s)')
-
-        nonzero_mask = (x.sum(dim=(1, 2, 3)) != 0)
-        x_nonzero = x[nonzero_mask]
-        view_positions_nonzero = view_positions[nonzero_mask]
-
-        frontal_mask = (view_positions_nonzero == 1)
-        lateral_mask = (view_positions_nonzero == 2)
-
-        feats = torch.zeros((x_nonzero.shape[0], 768, h // 32, w // 32), device=x.device)
-        
-        if frontal_mask.any():
-            feats[frontal_mask] = self.frontal_model(x_nonzero[frontal_mask])
-        if lateral_mask.any():
-            feats[lateral_mask] = self.lateral_model(x_nonzero[lateral_mask])
-
+        feats, nonzero_mask = self.image_encoder(x, view_positions)
         feats = self.conv2d(feats)
         feats = self.pos_encoding(feats)
 
@@ -80,14 +55,12 @@ class CaMCheXModel(nn.Module):
         feats_img = pad_tokens
         b, s_img, cdim, h2, w2 = feats_img.shape
 
-        #with torch.no_grad():
-        clin_cls = self.text_encoder(
-            input_ids=clinical_input_ids, attention_mask=clinical_attention_mask
-        ).last_hidden_state[:, 0, :]  # [B, C]
-
-        obs_cls = self.text_encoder(
-            input_ids=clinical_obs_input_ids, attention_mask=clinical_obs_attention_mask
-        ).last_hidden_state[:, 0, :]  # [B, C]
+        clin_cls, obs_cls = self.text_encoder(
+            clinical_input_ids=clinical_input_ids,
+            clinical_attention_mask=clinical_attention_mask,
+            clinical_obs_input_ids=clinical_obs_input_ids,
+            clinical_obs_attention_mask=clinical_obs_attention_mask,
+        )
 
         clin_seg = self.segment_embedding[4].view(cdim).to(clin_cls.device)  
         obs_seg  = self.segment_embedding[5].view(cdim).to(obs_cls.device)   

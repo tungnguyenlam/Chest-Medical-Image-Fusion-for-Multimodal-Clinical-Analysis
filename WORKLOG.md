@@ -750,3 +750,69 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `git status` showed `src/modules/` deleted before this work started and the replacement `src/model`, `src/dataloader`, `src/decoder`, and `src/loss` trees untracked, so `git diff` does not show normal tracked-file patches for these files yet. Runtime imports trigger an albumentations network-version warning in this sandbox, but the imports themselves succeed.
 
 **Follow-ups.** Decide whether this legacy-style `src/` layout should be committed as the intended replacement for `src/modules/` or whether the deleted component-organised modules need to be restored before the next training run.
+
+## 2026-05-24 — split CaMCheX encoders into src/encoder
+
+**Goal.** Move the encoder responsibilities out of `src/model/CaMCheXModel.py` into a dedicated encoder package so the model assembly is easier to read and the image/text encoders can be swapped independently later.
+
+**Changes.**
+- `src/encoder/ImageEncoder.py:1` — added `MultiViewImageEncoder`, which owns the frontal/lateral timm backbone creation, optional checkpoint loading, padded-view filtering, and view-position routing.
+- `src/encoder/TextEncoder.py:1` — added `BioBertTextEncoder`, which owns the HuggingFace BioBERT model and returns CLS embeddings for clinical indication text and observation/vital text.
+- `src/encoder/__init__.py:1` — exported the encoder classes through the new `src.encoder` package.
+- `src/model/CaMCheXModel.py:1` — removed direct timm and AutoModel construction; the model now uses `self.image_encoder` and `self.text_encoder` while keeping fusion, segment embeddings, transformer fusion, and MLDecoder in the model file.
+
+**Reasoning.** I kept the split conservative: only the true encoding work moved out. The convolutional downsample, positional encoding, segment embeddings, padding tokens, transformer fusion, and classification head stayed in `CaMCheXModel` because they are part of CaMCheX's multimodal assembly rather than reusable modality encoders. An alternative was to move the post-image `conv2d` and positional encoding into the image encoder too, but that would mix backbone feature extraction with CaMCheX-specific fusion preparation and make future encoder swaps less clean.
+
+**Assumptions.**
+- `src/encoder/` is the intended package name for this refactor, matching the user's request, even though the earlier component-organised code used `src/modules/encoders/`.
+- The current view-position convention remains `1` for frontal and `2` for lateral.
+- The timm backbone still returns 768-channel feature maps at approximately `H/32 x W/32`, as the existing code assumed.
+
+**Gotchas.** `MultiViewImageEncoder` intentionally returns both encoded nonzero-view features and the `nonzero_mask`; the mask is still needed by `CaMCheXModel` to rebuild fixed study slots and construct the transformer padding mask. I did not alter the single-view model, although it also has direct timm encoder creation and could be moved into `src/encoder/` in the same style.
+
+**Verification.** Ran `python -m py_compile src/encoder/ImageEncoder.py src/encoder/TextEncoder.py src/encoder/__init__.py src/model/CaMCheXModel.py` successfully.
+
+## 2026-05-24 — rename split encoders with CaMCheX ownership
+
+**Goal.** Correct the encoder naming from generic image/text names to CaMCheX-specific names so future model experiments can add their own encoders without ambiguity.
+
+**Changes.**
+- `src/encoder/CaMCheXImageEncoder.py:6` — renamed `MultiViewImageEncoder` to `CaMCheXImageEncoder` and moved it into a CaMCheX-named module.
+- `src/encoder/CaMCheXTextEncoder.py:5` — renamed `BioBertTextEncoder` to `CaMCheXTextEncoder` and moved it into a CaMCheX-named module.
+- `src/encoder/__init__.py:1` — updated package exports to the CaMCheX-specific encoder classes.
+- `src/model/CaMCheXModel.py:7` — updated imports and construction sites to use `CaMCheXImageEncoder` and `CaMCheXTextEncoder`.
+
+**Reasoning.** The encoder folder can be shared, but the classes and file names should identify the architecture they belong to. Generic names like `ImageEncoder` imply reusable baseline components, while these modules still encode CaMCheX-specific assumptions: frontal/lateral routing, two text streams, BioBERT CLS extraction, and fixed 768-channel features.
+
+**Gotchas.** I did not edit the previous worklog entry because repo instructions require append-only updates for `WORKLOG.md`. This entry supersedes the earlier generic names.
+
+## 2026-05-24 — make encoder names match actual backbones
+
+**Goal.** Correct the encoder split so names describe the real components: BioBERT for text and two timm image encoders for CaMCheX's frontal/lateral branches.
+
+**Changes.**
+- `src/encoder/BioBertEncoder.py:5` — renamed the text encoder to `BioBertEncoder` and made it encode one tokenized text input at a time, returning the CLS embedding.
+- `src/encoder/TimmImageEncoder.py:6` — added `TimmImageEncoder`, a single timm backbone wrapper with optional checkpoint loading.
+- `src/encoder/CaMCheXImageEncoder.py:7` — changed the CaMCheX image encoder into a two-branch router composed from `frontal_encoder = TimmImageEncoder(...)` and `lateral_encoder = TimmImageEncoder(...)`.
+- `src/model/CaMCheXModel.py:7` — updated the model to use `BioBertEncoder` directly for both clinical and observation/vital text streams, while keeping `CaMCheXImageEncoder` as the model-specific frontal/lateral router.
+
+**Reasoning.** `CaMCheXTextEncoder` was a misleading name because the component is fundamentally a BioBERT encoder, and future models may reuse BioBERT without being CaMCheX. Conversely, the image router is CaMCheX-specific because it encodes the paper's frontal/lateral branch structure and view-position convention, but each branch should still be an explicit reusable `TimmImageEncoder` rather than hidden direct `timm.create_model` calls inside the router.
+
+**Gotchas.** `CaMCheXImageEncoder` still returns `nonzero_mask` along with features because the downstream CaMCheX fusion code needs to reconstruct padded study slots and create the transformer key-padding mask. `SingleViewModel` still directly creates a timm model; it was outside this request but can now be converted to `TimmImageEncoder` cleanly.
+
+**Verification.** Ran `python -m py_compile src/encoder/BioBertEncoder.py src/encoder/TimmImageEncoder.py src/encoder/CaMCheXImageEncoder.py src/encoder/__init__.py src/model/CaMCheXModel.py` successfully, and searched `src/` for stale `CaMCheXTextEncoder`, `BioBertTextEncoder`, `MultiViewImageEncoder`, `frontal_model`, and `lateral_model` references.
+
+## 2026-05-24 — add CaMCheX text encoder wrapper over BioBERT
+
+**Goal.** Separate the generic BioBERT backbone from the CaMCheX-specific two-stream text encoder so the user can adjust either layer independently.
+
+**Changes.**
+- `src/encoder/CaMCheXTextEncoder.py:6` — added `CaMCheXTextEncoder`, which owns one shared `BioBertEncoder` and calls it separately for clinical text and observation/vital text.
+- `src/encoder/__init__.py:3` — exported `CaMCheXTextEncoder` alongside `BioBertEncoder`, `TimmImageEncoder`, and `CaMCheXImageEncoder`.
+- `src/model/CaMCheXModel.py:7` — changed the model back to depending on a CaMCheX-level text encoder instead of calling `BioBertEncoder` directly twice.
+
+**Reasoning.** This keeps two distinct concepts in two files: `BioBertEncoder` is the reusable backbone wrapper, while `CaMCheXTextEncoder` is the architecture-specific component that combines the two text streams used by CaMCheX. That mirrors the image side, where `TimmImageEncoder` is the reusable single-branch backbone and `CaMCheXImageEncoder` combines frontal/lateral branches.
+
+**Gotchas.** `CaMCheXTextEncoder` intentionally uses one shared `BioBertEncoder` instance, matching the original implementation's shared `self.text_encoder` called on two text inputs. It does not yet own segment embeddings; those remain in `CaMCheXModel` with the multimodal fusion code.
+
+**Verification.** Ran `python -m py_compile src/encoder/BioBertEncoder.py src/encoder/CaMCheXTextEncoder.py src/encoder/TimmImageEncoder.py src/encoder/CaMCheXImageEncoder.py src/encoder/__init__.py src/model/CaMCheXModel.py` successfully.
