@@ -20,4 +20,4 @@ __pycache__/
 *.out
 *.pdf
 
-./output/
+output/

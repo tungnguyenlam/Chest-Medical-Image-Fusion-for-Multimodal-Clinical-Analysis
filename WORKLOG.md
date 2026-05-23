@@ -705,3 +705,48 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** Download workers are network concurrency rather than CPU-bound work, so `--download-workers` remains the better manual knob if HuggingFace rate limits or the network connection behaves poorly. `--extract-threads` is the important CPU knob for `7z` decompression.
 
 **Verification.** Ran `python -m py_compile scripts/download_subset.py`, `python scripts/download_subset.py --help`, and `python scripts/download_subset.py --cpu-fraction 0` to confirm argparse rejects invalid fractions before requiring credentials.
+
+## 2026-05-24 — add subset dataset analysis script
+
+**Goal.** Provide runnable code for the user to inspect the prepared MIMIC/CXR-LT subset before training, focused on split health, label imbalance, modality missingness, view availability, text length, co-occurrence, and vital-sign signal.
+
+**Changes.**
+- `scripts/analyze_subset_dataset.py:23` — added the 26 CXR-LT label constants and vital/base column definitions expected in `data/<subset>/labels/{train,val,test}.csv`.
+- `scripts/analyze_subset_dataset.py:62` — added split loading with schema validation so failures point to missing prepared label columns rather than producing misleading summaries.
+- `scripts/analyze_subset_dataset.py:77` — added split-level row/patient/study/image and positive-label density summaries.
+- `scripts/analyze_subset_dataset.py:95` — added patient-overlap checks across train/val/test to verify the patient-level split invariant.
+- `scripts/analyze_subset_dataset.py:115` — added image-level and study-level label prevalence outputs for class imbalance analysis.
+- `scripts/analyze_subset_dataset.py:151` — added missingness summaries for identifiers, clinical indication, gender, and ED vitals.
+- `scripts/analyze_subset_dataset.py:167` — added image- and study-level view distribution summaries, separating frontal-only, lateral-only, paired frontal+lateral, and unknown/other studies.
+- `scripts/analyze_subset_dataset.py:199` — added clinical indication length summaries to catch empty or unusually short text inputs.
+- `scripts/analyze_subset_dataset.py:219` — added label co-occurrence counts; `scripts/analyze_subset_dataset.py:228` adds vital means for positive vs negative rows by label.
+- `scripts/analyze_subset_dataset.py:248` — added optional PNG plots for top train label prevalence, missingness heatmap, and conditional label co-occurrence.
+
+**Reasoning.** I made this a plain script instead of a notebook because the repo already uses scripts for dataset preparation and the user asked for code they can run directly. The script analyzes the prepared label CSVs rather than raw MIMIC files, because those CSVs are the actual training contract and include the relative image paths, clinical indication, vitals, and CXR-LT labels in one place. I kept matplotlib/seaborn optional at runtime via `--skip-plots`; CSV outputs are the durable artifacts that future modeling scripts or notebooks can consume.
+
+**Assumptions.**
+- The prepared subset CSV schema from `scripts/prepare_subset_labels.py` remains the source of truth for analysis.
+- Rows are image/DICOM rows, so the script reports both image-level and study-level label prevalence to avoid confusing multi-view duplication with patient/study prevalence.
+- Simple mean differences in vitals are intended as exploratory signals only, not adjusted clinical effects.
+
+**Gotchas.** The current worktree already has many unrelated modified/deleted files, including deleted `src/modules/*`; I did not touch or restore them. Matplotlib initially warned that `/home/tungnguyen/.config/matplotlib` was not writable, so the plotting helper now defaults `MPLCONFIGDIR` to an output-local cache directory before importing matplotlib. The study view-type classification treats AP/PA as frontal and any view containing `LATERAL` or equal to `LL` as lateral; rare MIMIC view labels fall into `other_or_unknown`.
+
+**Verification.** Ran `python -m py_compile scripts/analyze_subset_dataset.py`, `python scripts/analyze_subset_dataset.py --help`, and `python scripts/analyze_subset_dataset.py --subset-name subset --top-k-labels 10`. The subset run wrote summaries and plots under `output/dataset_analysis/subset/` and reported zero patient overlap across train/val/test.
+
+## 2026-05-24 — restore imports for split `src/` modules
+
+**Goal.** Fix the missing imports under `src/` so the current split legacy-style model, dataloader, decoder, and loss packages can be imported and linted for undefined names.
+
+**Changes.**
+- `src/model/CaMCheXModel.py:1` — added torch, timm, einops, BioBERT, positional encoding, and `MLDecoder` imports needed by the CaMCheX assembly.
+- `src/model/SingleViewModel.py:1` — added timm, torch `nn`, positional encoding, and `MLDecoder` imports for the single-view assembly.
+- `src/dataloader/CaMCheXDataset.py:1` and `src/dataloader/SingleViewDataset.py:1` — added dataset base class, numpy/pandas/path/warnings dependencies, and the local `_safe_decode_jpeg` helper import.
+- `src/dataloader/CaMCheXDataLoader.py:1` — replaced stale `dataset.*` imports with package-qualified `src.dataloader.*` imports and removed unused copied imports.
+- `src/decoder/MLDecoder.py:1`, `src/decoder/TransformerDecoderLayerOptimal.py:1`, and `src/decoder/utils.py:1` — restored torch/typing/internal transformer helper imports and connected the split decoder files through `src.decoder.*` imports.
+- `src/{model,dataloader,decoder,loss}/__init__.py:1` — added package marker files so the new directories behave consistently as importable `src.*` packages.
+
+**Reasoning.** The code present in `src/` is currently a split version of the legacy CaMCheX modules, not the deleted `src/modules/` component tree. I kept the fix scoped to import restoration and package wiring instead of moving code back into `src/modules/` or refactoring behavior, because the user asked specifically for missing imports and the worktree already contains unrelated deletions/untracked replacements.
+
+**Gotchas.** `git status` showed `src/modules/` deleted before this work started and the replacement `src/model`, `src/dataloader`, `src/decoder`, and `src/loss` trees untracked, so `git diff` does not show normal tracked-file patches for these files yet. Runtime imports trigger an albumentations network-version warning in this sandbox, but the imports themselves succeed.
+
+**Follow-ups.** Decide whether this legacy-style `src/` layout should be committed as the intended replacement for `src/modules/` or whether the deleted component-organised modules need to be restored before the next training run.
