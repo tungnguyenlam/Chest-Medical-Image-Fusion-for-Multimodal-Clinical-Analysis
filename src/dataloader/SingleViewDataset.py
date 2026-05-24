@@ -1,10 +1,9 @@
-import os
 import warnings
 
 import numpy as np
 from torch.utils.data import Dataset
 
-from src.dataloader.utils import _safe_decode_jpeg
+from src.dataloader.utils import _safe_decode_jpeg, resolve_preferred_image_path
 
 
 class SingleViewDataset(Dataset):
@@ -23,8 +22,7 @@ class SingleViewDataset(Dataset):
             label = np.zeros(len(self.cfg['classes']))
 
         path = self.df.iloc[index]["path"]
-        path_resized = path.replace(".jpg", "_resized_1024.jpg")
-        path = path_resized if os.path.exists(path_resized) else path
+        path = resolve_preferred_image_path(path)
 
         img = _safe_decode_jpeg(path)
         if img is None:

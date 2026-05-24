@@ -901,3 +901,23 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The `training/` directory is currently untracked in git status, so diffs for `training/common.py` will not appear in `git diff` until that directory is added or tracked.
 
 **Follow-ups.** If configs later need optimizer or scheduler knobs, route those config values into the new builder functions rather than reintroducing optimizer details into `training/common.py`.
+
+## 2026-05-25 - make active dataloader image reads cwd-portable
+
+**Goal.** Investigate training-time spam from `CaMCheXDataset` reporting skipped unreadable images, and decide whether the active refactor should use cv2-only image decoding.
+
+**Changes.**
+- `src/dataloader/utils.py:31` - added shared path resolution that tries the raw CSV path, the current working directory, the repository root, and the legacy `camchex/` cwd interpretation so CSV paths like `../data/subset/...` work when training is launched from the repo root.
+- `src/dataloader/utils.py:57` - added `resolve_preferred_image_path()` to keep using `_resized_1024.jpg` files when present while falling back to the original image path.
+- `src/dataloader/utils.py:65` - changed `_safe_decode_jpeg()` to cv2-only decoding and removed per-image `jpeg4py` fallback warnings.
+- `src/dataloader/CaMCheXDataset.py:8` and `src/dataloader/SingleViewDataset.py:7` - moved resized-path and path-resolution behavior to the shared utility so both dataset classes use the same logic.
+
+**Reasoning.** The shown warning is emitted after the shared decoder returns `None`; the old decoder already fell back to cv2, so simply adding cv2 would not explain or fix the final skip warning. The suspicious part was the `../data/...` path: legacy `03_mimic_*.csv` files are written relative to a `camchex/` training cwd, while the active root `src/` refactor is commonly launched from the repository root. The fix therefore handles both cwd conventions and simplifies decoding to cv2 to avoid noisy `jpeg4py` failures.
+
+**Assumptions.**
+- Active training should use the root `src/` dataloaders, not modify the preserved legacy `camchex/` package.
+- OpenCV is already an expected dependency because albumentations transforms use `cv2` interpolation constants.
+
+**Gotchas.** If warnings persist after this change, the remaining cases are likely genuinely missing/corrupt files in the subset bundle, not a `jpeg4py` issue. The current dataset still warns once per failed image; a future change could pre-filter unreadable paths at datamodule setup time or rate-limit warnings if the dataset artifact is known to be partially corrupt.
+
+**Follow-ups.** Run one short training/data-loader smoke test on the server from the same cwd used for training and confirm the skip warning count drops sharply or disappears.
