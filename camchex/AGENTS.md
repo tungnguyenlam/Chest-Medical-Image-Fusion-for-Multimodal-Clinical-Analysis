@@ -1,12 +1,31 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance when an agent is working inside the legacy
+`camchex/` directory.
 
-## Project overview
+## Status
 
-CaMCheX (Clinically-aligned Multi-modal Chest X-ray Classification) — a PyTorch/Lightning model that fuses chest X-ray images with clinical text (reports, indication/history) and ED vital signs for 26-class multi-label disease classification. Accepted at ML4H 2025.
+This directory is the preserved paper-era CaMCheX baseline. It is useful for
+reference and comparison, but it is no longer the main place for refactor work.
+Current active code lives in the root `src/` split packages:
 
-All training code lives under `camchex/`. Data preparation scripts live under `camchex/data/`. Training is always launched from `camchex/` as the working directory.
+```text
+src/encoder/
+src/decoder/
+src/dataloader/
+src/model/
+src/loss/
+```
+
+Do not modify files under `camchex/` unless the user explicitly asks to change
+the legacy baseline or old data pipeline.
+
+## Legacy project overview
+
+CaMCheX (Clinically-aligned Multi-modal Chest X-ray Classification) is a
+PyTorch/Lightning model that fuses chest X-ray images with clinical text and
+ED vital signs for 26-class multi-label disease classification. The code in
+this folder reflects the original LightningCLI/YAML-style implementation.
 
 ## Data pipeline (run from project root)
 
@@ -44,7 +63,8 @@ cp camchex/config.local.yaml.example camchex/config.local.yaml
 # edit devices, batch_size, num_workers
 ```
 
-`config.local.yaml` is gitignored and excluded from all rsync scripts — it never leaves the machine.
+`config.local.yaml` is gitignored and excluded from all rsync scripts; it
+never leaves the machine.
 
 ## Architecture
 
@@ -56,7 +76,11 @@ The model (`camchex/model/`) has two backbones selectable in `wrapper.py`:
 
 Loss is Asymmetric Loss (ASL) with per-class instance counts from `config.yaml` for long-tail reweighting. Validation tracks mAP split into head / medium / tail frequency groups (indices hardcoded in `wrapper.py`).
 
-LightningCLI wires everything; `config.yaml` is the single source of truth for hyperparameters, paths, and class lists.
+LightningCLI wires everything in this legacy tree; `config.yaml` is the
+single source of truth for hyperparameters, paths, and class lists here.
+
+For new refactor work, inspect root `AGENTS.md` and work under root `src/`
+instead.
 
 ## Key data sources and symlinks
 

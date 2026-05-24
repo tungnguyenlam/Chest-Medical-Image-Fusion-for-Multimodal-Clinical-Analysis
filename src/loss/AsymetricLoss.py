@@ -6,8 +6,8 @@ class AsymetricLoss(nn.Module):
         super(AsymetricLoss, self).__init__()
         class_instance_nums = torch.tensor(class_instance_nums, dtype=torch.float32)
         p = class_instance_nums / total_instance_num
-        self.pos_weights = torch.exp(1-p)
-        self.neg_weights = torch.exp(p)
+        self.register_buffer("pos_weights", torch.exp(1-p))
+        self.register_buffer("neg_weights", torch.exp(p))
         self.gamma_neg = gamma_neg
         self.gamma_pos = gamma_pos
         self.clip = clip
@@ -20,7 +20,7 @@ class AsymetricLoss(nn.Module):
         if torch.isnan(label).any():
             print("NaN detected in `label`")
 
-        weight = label * self.pos_weights.cuda() + (1 - label) * self.neg_weights.cuda()
+        weight = label * self.pos_weights + (1 - label) * self.neg_weights
 
         xs_pos = torch.sigmoid(pred)
         xs_neg = 1.0 - xs_pos

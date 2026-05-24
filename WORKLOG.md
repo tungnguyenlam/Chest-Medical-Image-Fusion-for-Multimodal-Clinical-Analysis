@@ -816,3 +816,88 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `CaMCheXTextEncoder` intentionally uses one shared `BioBertEncoder` instance, matching the original implementation's shared `self.text_encoder` called on two text inputs. It does not yet own segment embeddings; those remain in `CaMCheXModel` with the multimodal fusion code.
 
 **Verification.** Ran `python -m py_compile src/encoder/BioBertEncoder.py src/encoder/CaMCheXTextEncoder.py src/encoder/TimmImageEncoder.py src/encoder/CaMCheXImageEncoder.py src/encoder/__init__.py src/model/CaMCheXModel.py` successfully.
+
+## 2026-05-24 - update agent instructions for current src split
+
+**Goal.** Refresh the agent guidance after reading the last 200 lines of `WORKLOG.md`, because the root instructions still described the deleted `src/modules/` plan rather than the current split `src/` package layout.
+
+**Changes.**
+- `AGENTS.md:11` - replaced the stale `src/modules/` migration description with the current `src/{encoder,decoder,dataloader,model,loss}` refactor state.
+- `AGENTS.md:19` - rewrote the repository layout and component map around the files that actually exist now, including `scripts/download_subset.py` and `scripts/analyze_subset_dataset.py`.
+- `AGENTS.md:40` - updated conventions to emphasize root `src/` as the active work area, the reusable backbone wrappers versus CaMCheX-specific routers, the current non-dependency-injected model assembly, and the remaining device-portability caution around legacy `.cuda()` usage.
+- `AGENTS.md:115` - replaced the old per-model `src/modules/models/<name>` guidance with incremental combining guidance that matches the current component split.
+- `camchex/AGENTS.md:1` - reframed the nested instruction file as legacy-directory guidance and added an explicit warning that new refactor work belongs in root `src/` unless the user asks to modify the paper baseline.
+
+**Reasoning.** The worklog shows two overlapping histories: an earlier root `src/camchex` / `src/modules` direction and a newer 2026-05-24 sequence that restored and then split the active code into singular `src/encoder`, `src/decoder`, `src/dataloader`, `src/model`, and `src/loss` packages. I updated the instructions to reflect the newest on-disk state instead of reviving the deleted module tree. I also updated `camchex/AGENTS.md` because agents entering that subdirectory would otherwise still be told that all training code lives there, which conflicts with the root handoff.
+
+**Assumptions.**
+- The latest 2026-05-24 worklog entries supersede the older `src/modules/` and root `src/camchex` plans.
+- The current split `src/` layout is an intermediate refactor, not yet a finished train-entry architecture, so the guidance should avoid promising argparse or per-model-folder behavior that does not exist locally.
+
+**Gotchas.** `src/loss/AsymetricLoss.py` still has legacy `.cuda()` usage despite older device-agnostic aspirations, so the updated instructions call it out as something to avoid when touching that area rather than claiming it is already fixed. The nested `camchex/AGENTS.md` still documents legacy commands because that is useful when intentionally comparing against the old baseline, but it now clearly points new work back to root `src/`.
+
+## 2026-05-24 - add root training entrypoints for single-view and CaMCheX
+
+**Goal.** Fill the empty `training/` scripts so stage-1 single-view image training and full multimodal CaMCheX training/evaluation can run against the active root `src/` refactor, while reusing shared code instead of copying the legacy `camchex/` wrapper wholesale.
+
+**Changes.**
+- `training/common.py:37` - added `MultiLabelModule`, a reusable Lightning wrapper around either `SingleViewModel` or `CaMCheXModel` with ASL loss, validation AP/AUROC logging, optimizer/scheduler setup, config/path helpers, dataloader builders, checkpoint loading, and prediction helpers.
+- `training/singleview/singleview_train.py:29` - added the stage-1 image-only training script with `--view-position {all,frontal,lateral}` filtering and optional/exported raw timm encoder weights for CaMCheX stage-2 loading.
+- `training/camchex/camchex_train.py:28` - added full CaMCheX training with multimodal dataloading and optional `--frontal-pretrained-path` / `--lateral-pretrained-path` arguments for stage-1 encoder state dicts.
+- `training/singleview/singleview_eval.py:26` and `training/camchex/camchex_eval.py:26` - added checkpoint evaluation/prediction scripts that write prediction CSVs and metrics JSON when labels are present.
+- `src/loss/AsymetricLoss.py:9` - changed ASL class weights from `.cuda()` calls to registered buffers so the shared training scripts can run on CPU/CUDA/MPS according to the module device.
+
+**Reasoning.** I made a shared `training/common.py` because the train/eval loops, config parsing, metrics, path resolution, and checkpoint handling are identical across single-view and CaMCheX, while the model/dataset contracts differ. I kept the scripts as plain argparse entrypoints rather than trying to restore LightningCLI because the current root `src/` split does not have the old callback package or a complete per-model-folder config system anymore. For stage 1, the single-view script exports the inner timm backbone state dict, not the whole Lightning checkpoint, because `CaMCheXImageEncoder` loads raw timm branch weights into `TimmImageEncoder`.
+
+**Assumptions.**
+- `configs/baseline.yaml` remains the default source for class names, ASL counts, timm args, and CSV paths, with CLI flags used for overrides.
+- Single-view frontal/lateral pretraining should be expressed by filtering `ViewPosition` rows rather than changing `SingleViewDataset` itself.
+- Evaluation scripts are allowed to write labels alongside predictions when labels exist; unlabeled prediction CSVs still work because metrics are skipped if class columns are absent.
+
+**Gotchas.** The baseline config still has `pretrained: true`, so first-time model construction may need network/cache access for timm weights unless the caller passes `--no-pretrained`. CaMCheX training still needs BioBERT tokenizer/model files available locally or downloadable by Transformers. The help smoke tests emitted matplotlib cache warnings because `/home/tungnguyen/.config/matplotlib` is not writable in this shell, and albumentations attempted a network version check; neither blocked script parsing.
+
+**Verification.** Ran `python -m compileall training src/loss/AsymetricLoss.py` successfully. Ran `python training/singleview/singleview_train.py --help`, `python training/camchex/camchex_train.py --help`, `python training/singleview/singleview_eval.py --help`, and `python training/camchex/camchex_eval.py --help` successfully.
+
+## 2026-05-24 - add component names and run manifests
+
+**Goal.** Let every active `src/` component carry a human-readable name that can be overridden, so run outputs show which model is assembled from which encoders, decoders, datasets, and loss.
+
+**Changes.**
+- `src/naming.py:8` - added `NamedComponent` with `_init_name()` and `rename()`, plus manifest helpers that walk named child modules and write `components.json`.
+- `src/encoder/TimmImageEncoder.py:6`, `src/encoder/BioBertEncoder.py:7`, `src/encoder/CaMCheXImageEncoder.py:8`, and `src/encoder/CaMCheXTextEncoder.py:7` - added optional `name` constructor args and default child names for CaMCheX frontal/lateral and shared BioBERT branches.
+- `src/decoder/MLDecoder.py:7` and `src/decoder/TransformerDecoderLayerOptimal.py:12` - added optional names to the MLDecoder head and its decoder layer.
+- `src/model/SingleViewModel.py:9` and `src/model/CaMCheXModel.py:11` - added top-level model names and propagated names to model-owned components.
+- `src/dataloader/SingleViewDataset.py:10`, `src/dataloader/CaMCheXDataset.py:11`, `src/dataloader/CaMCheXDataLoader.py:10`, and `src/loss/AsymetricLoss.py:7` - added names to datasets, datamodule, and ASL loss.
+- `training/common.py:37` - added a name to the Lightning wrapper/loss and `write_run_component_manifest()` for `output/.../components.json`.
+- `training/singleview/singleview_train.py:30` and `training/camchex/camchex_train.py:29` - added CLI name override flags and write the component manifest before training starts.
+
+**Reasoning.** A tiny mixin is enough here because the active components are simple Python/PyTorch classes and do not need a registry yet. I avoided changing forward contracts or checkpoint keys. The manifest captures names by module path so it is useful even when two child modules share the same class, e.g. frontal and lateral `TimmImageEncoder`.
+
+**Assumptions.**
+- Human-readable names are metadata, not architectural identifiers that should affect state dict loading or model behavior.
+- Datasets should also carry names for consistency, but the first manifest only walks the Lightning/model tree; dataset manifesting can be added when the dataloading layer is promoted into a first-class run object.
+
+**Gotchas.** `SingleViewModel` still owns a raw third-party timm model, so the scripts attach a plain `.name` attribute to that object when `--image-backbone-name` is provided rather than making timm inherit `NamedComponent`. Renaming a parent after construction does not automatically rewrite already-created child names; use the explicit child rename flags when that matters.
+
+**Verification.** Ran `python -m compileall src training` successfully. Ran help smoke tests for all four training/eval scripts and confirmed the new name override flags parse.
+
+## 2026-05-24 - Split optimizer and scheduler builders
+
+**Goal.** Move the optimizer and scheduler construction out of `training/common.py` into the active split-root `src/` package so training code can reuse those pieces independently.
+
+**Changes.**
+- `src/optimizer/AdamWOptimizer.py:9` - added `build_adamw_optimizer`, preserving the existing AdamW defaults from the training module.
+- `src/optimizer/__init__.py:1` - exported the optimizer builder from the new optimizer package.
+- `src/scheduler/WarmupCosineScheduler.py:7` - added `build_warmup_cosine_scheduler`, preserving the existing LinearLR warmup plus CosineAnnealingWarmRestarts wrapped by SequentialLR.
+- `src/scheduler/__init__.py:1` - exported the scheduler builder from the new scheduler package.
+- `training/common.py:27` - imports the new builders and keeps `MultiLabelModule.configure_optimizers` responsible only for trainer-derived step counts and Lightning return shape.
+
+**Reasoning.** The split keeps trainer-specific values, such as `estimated_stepping_batches` and `max_epochs`, in `training/common.py` while moving reusable optimizer/scheduler construction into `src/`. I kept function builders instead of classes because the existing behavior is a fixed AdamW setup and a fixed warmup-cosine schedule; adding class abstractions now would not remove complexity.
+
+**Assumptions.**
+- The current AdamW defaults and warmup/cosine scheduler behavior are intended to remain unchanged.
+- `training/common.py` remains the Lightning integration point for now, so scheduler interval metadata stays there.
+
+**Gotchas.** The `training/` directory is currently untracked in git status, so diffs for `training/common.py` will not appear in `git diff` until that directory is added or tracked.
+
+**Follow-ups.** If configs later need optimizer or scheduler knobs, route those config values into the new builder functions rather than reintroducing optimizer details into `training/common.py`.
