@@ -10,7 +10,6 @@ if str(ROOT) not in sys.path:
 
 from src.model.CaMCheXModel import CaMCheXModel
 from training.common import (
-    MultiLabelModule,
     add_common_args,
     classes_from_config,
     load_config,
@@ -20,7 +19,7 @@ from training.common import (
     make_run_dir,
     resolve_path,
     timm_args_from_config,
-    trainer_from_args,
+    train_model,
     write_resolved_config,
 )
 
@@ -49,15 +48,16 @@ def main() -> None:
         lateral_pretrained_path=lateral_pretrained_path,
         text_model=args.text_model,
     )
-    module = MultiLabelModule(
+    train_model(
         model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        args=args,
+        run_dir=run_dir,
         lr=lr_from_config(cfg, args),
         classes=classes_from_config(cfg),
         loss_init_args=loss_args_from_config(cfg),
     )
-    trainer = trainer_from_args(args, run_dir)
-    ckpt_path = str(resolve_path(args.checkpoint_path)) if args.checkpoint_path else None
-    trainer.fit(module, train_loader, val_loader, ckpt_path=ckpt_path)
 
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@ Reproduces and extends CaMCheX — a multimodal chest X-ray classifier that
 fuses up to 4 image views with ED clinical text and vital signs for 26-class
 multi-label disease classification.
 
-Active training code lives under `src/modules/`. The original paper code
-remains in `camchex/` as legacy / reference and is no longer used by the
-new training entry.
+Active reusable components live under the root `src/` package, and active
+train/eval entrypoints live under `training/`. The original paper code
+remains in `camchex/` as legacy / reference.
 
 ## Setup
 
@@ -39,28 +39,28 @@ cp .env.example .env
 ## Repository layout
 
 ```text
-src/modules/
-  encoders/          TimmImageEncoder, BioBertTextEncoder      (shared)
-  decoders/          MLDecoder                                  (shared)
-  dataloaders/       MimicMultiViewDataset + DataModule         (shared)
-  callbacks/         EMA, PredictionWriter, RunLogger          (shared)
-  models/
-    camchex/         camchex.py (assembly), fusion.py,
-                     lightning_module.py, loss.py,
-                     train_camchex.py                          (per-model)
+src/
+  encoder/           TimmImageEncoder, BioBertEncoder,
+                     CaMCheXImageEncoder, CaMCheXTextEncoder
+  decoder/           MLDecoder and transformer decoder helpers
+  dataloader/        CaMCheXDataset, SingleViewDataset, transforms
+  model/             CaMCheXModel, SingleViewModel
+  loss/              AsymetricLoss
+training/
+  camchex/           train/eval entrypoints for multimodal CaMCheX
+  singleview/        train/eval entrypoints for single-view image models
+  common.py          plain PyTorch train/eval helpers
 scripts/
   build_mimic_subset.py        Patient-level subset bundler (+ optional HF upload)
   prepare_subset_labels.py     Subset-aware label CSV prep
-camchex/             Legacy paper code (kept verbatim, no longer used by training)
+camchex/             Legacy paper code (kept for reference/comparison)
 data/                Datasets — mostly gitignored, lives at data/<subset_name>/
 output/              Run outputs: output/<model_name>/runs/<run_id>-<run_name>/
 ```
 
-Each architecture you experiment with lives in its own folder under
-`src/modules/models/<name>/` with its own assembly, Lightning module, and
-`train_<name>.py` argparse entry. Encoders, decoders, dataloaders, and
-callbacks under `src/modules/` are shared building blocks reused across
-models.
+Model assemblies stay in `src/model/`; generic encoders/decoders stay in
+their shared packages. Training scripts compose those pieces from
+`training/` without Lightning.
 
 ## End-to-end workflow
 
@@ -75,8 +75,10 @@ python scripts/build_mimic_subset.py --fraction 0.1 --skip-archive --skip-upload
 python scripts/prepare_subset_labels.py --subset-name subset
 
 # 3. train.
-python -m src.modules.models.camchex.train_camchex \
-    --subset-name subset \
+python training/camchex/camchex_train.py \
+    --train-df-path data/subset/labels/train.csv \
+    --val-df-path data/subset/labels/val.csv \
+    --test-df-path data/subset/labels/test.csv \
     --batch-size 4 --max-epochs 30 --lr 1e-4
 ```
 
@@ -93,17 +95,16 @@ Run all commands from the project root.
 | `--fraction 0.05 --seed 7` | `data/subset_seed7_5pct/` |
 | `--subset-name foo` | `data/foo/` |
 
-Pass the same `--subset-name` to `prepare_subset_labels.py` and to
-`train_camchex.py`.
+Pass the generated label CSV paths to the training/eval scripts with
+`--train-df-path`, `--val-df-path`, and `--test-df-path`.
 
 ## Outputs
 
 ```text
 output/camchex/runs/<run_id>-<run_name>/
-  checkpoints/                  ModelCheckpoint
-  logs/                         CSVLogger
-  predictions/predictions.csv   PredictionWriter (test-set inference)
-  metadata/                     RunLogger: git diff, pip freeze, env, command
+  checkpoints/last.pt           latest torch checkpoint
+  checkpoints/best.pt           best validation AP torch checkpoint
+  logs/metrics.csv              train/validation metrics
   config.resolved.json          argparse values for the run
 ```
 
@@ -111,35 +112,29 @@ output/camchex/runs/<run_id>-<run_name>/
 the same directory. `<run_name>` defaults to `baseline`; pass `--run-name`
 to label sweeps.
 
+Eval scripts write predictions and metrics to `--predictions-path` and
+`--metrics-path`.
+
 ## Useful training flags
 
 ```bash
-python -m src.modules.models.camchex.train_camchex \
+python training/camchex/camchex_train.py \
     --backbone-name convnext_small.fb_in22k_ft_in1k_384 \
     --image-size 384 --batch-size 4 --num-workers 4 \
-    --fusion-num-layers 2 --fusion-nhead 8 \
     --accumulate-grad-batches 16 \
     --precision 16-mixed --accelerator auto --devices auto \
-    --val-check-interval 0.25 \
-    --no-ema --no-prediction-writer    # disable optional callbacks
+    --val-check-interval 0.25
 ```
 
-Full list: `python -m src.modules.models.camchex.train_camchex --help`.
+Full list: `python training/camchex/camchex_train.py --help`.
 
 ## Adding a new model
 
-1. Create `src/modules/models/<name>/`.
-2. Build an assembly (`<name>.py`) wiring whichever encoders/decoders/fusion
-   you want from `src/modules/`.
-3. Subclass `pl.LightningModule` in `lightning_module.py`.
-4. Copy `train_camchex.py` to `train_<name>.py` and adjust imports + argparse.
-5. Train with `python -m src.modules.models.<name>.train_<name> ...`.
+1. Add reusable components under `src/{encoder,decoder,dataloader,model,loss}`.
+2. Build a model assembly in `src/model/` wiring the pieces you need.
+3. Copy an existing script under `training/` and adjust imports + argparse.
+4. Train with `python training/<name>/<name>_train.py ...`.
    Outputs land in `output/<name>/runs/...` automatically.
-
-Encoder, decoder, fusion, and head modules all accept a `name=` kwarg.
-The `RunLoggerCallback` groups grad norms by `component_name`, so logs stay
-stable across architecture swaps (e.g. `grad_norm/image_encoder_frontal`
-regardless of which timm backbone is wired in).
 
 ## Device portability
 

@@ -10,7 +10,6 @@ if str(ROOT) not in sys.path:
 
 from src.model.SingleViewModel import SingleViewModel
 from training.common import (
-    MultiLabelModule,
     add_common_args,
     classes_from_config,
     load_config,
@@ -19,9 +18,8 @@ from training.common import (
     make_run_dir,
     make_single_view_loaders,
     save_single_view_encoder,
-    resolve_path,
     timm_args_from_config,
-    trainer_from_args,
+    train_model,
     write_resolved_config,
 )
 
@@ -50,21 +48,22 @@ def main() -> None:
 
     train_loader, val_loader = make_single_view_loaders(cfg, args, args.view_position)
     model = SingleViewModel(timm_args_from_config(cfg, args))
-    module = MultiLabelModule(
+    train_model(
         model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        args=args,
+        run_dir=run_dir,
         lr=lr_from_config(cfg, args),
         classes=classes_from_config(cfg),
         loss_init_args=loss_args_from_config(cfg),
     )
-    trainer = trainer_from_args(args, run_dir)
-    ckpt_path = str(resolve_path(args.checkpoint_path)) if args.checkpoint_path else None
-    trainer.fit(module, train_loader, val_loader, ckpt_path=ckpt_path)
 
     encoder_output_path = args.encoder_output_path
     if encoder_output_path is None and args.view_position in {"frontal", "lateral"}:
         encoder_output_path = run_dir / f"{args.view_position}_encoder.pt"
     if encoder_output_path is not None:
-        save_single_view_encoder(module, encoder_output_path)
+        save_single_view_encoder(model, encoder_output_path)
 
 
 if __name__ == "__main__":

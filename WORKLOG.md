@@ -921,3 +921,26 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** If warnings persist after this change, the remaining cases are likely genuinely missing/corrupt files in the subset bundle, not a `jpeg4py` issue. The current dataset still warns once per failed image; a future change could pre-filter unreadable paths at datamodule setup time or rate-limit warnings if the dataset artifact is known to be partially corrupt.
 
 **Follow-ups.** Run one short training/data-loader smoke test on the server from the same cwd used for training and confirm the skip warning count drops sharply or disappears.
+
+## 2026-05-25 - remove Lightning from active training entrypoints
+
+**Goal.** Remove PyTorch Lightning from the active `training/` package while keeping the root `src/` model and dataloader components usable from the existing train/eval scripts.
+
+**Changes.**
+- `training/common.py:206` - replaced Lightning autocast/trainer behavior with small plain-PyTorch helpers for precision context, train steps, validation, checkpointing, metric CSV logging, and checkpoint resume.
+- `training/common.py:295` - added `train_model()`, a direct epoch/batch loop using `AsymetricLoss`, the local AdamW builder, warmup-cosine scheduler, gradient accumulation, optional CUDA AMP, `--fast-dev-run`, and optional `--val-check-interval`.
+- `training/common.py:433` - updated checkpoint loading to support new plain torch checkpoints (`model_state_dict`) while still accepting older Lightning-style `state_dict` checkpoints with `model.` prefixes.
+- `training/camchex/camchex_train.py:51` - swapped the Lightning module/trainer wrapper for direct `train_model()` execution around `CaMCheXModel`.
+- `training/singleview/singleview_train.py:51` - swapped the Lightning wrapper for direct `train_model()` execution around `SingleViewModel`, and now exports the timm encoder from the plain model.
+- `README.md:7` - updated active layout and training docs from the old `src/modules`/Lightning design to the current `src/` + `training/` split and plain torch checkpoints.
+
+**Reasoning.** The root `src/` models are already plain `nn.Module`s, so the least invasive change was to remove only the orchestration wrapper in `training/common.py` rather than rewriting model or dataloader contracts. I kept the existing argparse surface where possible so server commands still work, and wrote checkpoints as simple torch dictionaries to make resume/eval independent of Lightning internals.
+
+**Assumptions.**
+- Legacy `camchex/` remains allowed to use Lightning; the request targeted `./training`.
+- `--devices` remains accepted for CLI compatibility, but device selection is still handled by `--accelerator`/auto detection in the plain loop.
+- CUDA AMP is used only on CUDA/ROCm devices; CPU and MPS run full precision even if the default precision string is `16-mixed`.
+
+**Gotchas.** New training checkpoints are `checkpoints/last.pt` and `checkpoints/best.pt`, not Lightning `.ckpt` files. Eval loading can read either the new `model_state_dict` format or older Lightning-style `state_dict` format, but optimizer/scheduler resume state is only available from the new plain torch checkpoints. Import-time `--help` checks emitted environment warnings from matplotlib cache permissions and albumentations' online version check, but both entrypoints loaded and printed help successfully.
+
+**Follow-ups.** Run a short `--fast-dev-run` on a server with real labels/images to validate the full forward/backward path and checkpoint write path on the target accelerator.

@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import lightning.pytorch as pl
 import pandas as pd
 import torch
 import yaml
-from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.loggers import CSVLogger
 from torch.utils.data import DataLoader
 from torchmetrics import AveragePrecision, AUROC
 
@@ -32,65 +31,6 @@ VIEW_ALIASES = {
     "frontal": {"AP", "PA", "FRONTAL"},
     "lateral": {"LATERAL", "LL"},
 }
-
-
-class MultiLabelModule(pl.LightningModule):
-    def __init__(self, model, lr: float, classes: list[str], loss_init_args: dict[str, Any]):
-        super().__init__()
-        self.model = model
-        self.lr = lr
-        self.classes = classes
-        self.criterion = AsymetricLoss(**loss_init_args)
-        self.validation_step_outputs: list[dict[str, torch.Tensor]] = []
-        self.val_ap = AveragePrecision(task="binary")
-        self.val_auc = AUROC(task="binary")
-
-    def forward(self, data):
-        return self.model(data)
-
-    def _shared_step(self, batch):
-        data, label = batch
-        label = label.float()
-        pred = self(data)
-        loss = self.criterion(pred, label)
-        return {"loss": loss, "pred": torch.sigmoid(pred.detach()), "label": label.detach()}
-
-    def training_step(self, batch, batch_idx):
-        out = self._shared_step(batch)
-        self.log("loss", out["loss"], prog_bar=True, on_step=True, on_epoch=False)
-        self.log("train/loss", out["loss"], prog_bar=True, on_step=False, on_epoch=True)
-        return out["loss"]
-
-    def validation_step(self, batch, batch_idx):
-        out = self._shared_step(batch)
-        self.validation_step_outputs.append(out)
-        self.log("val/loss_step", out["loss"], prog_bar=False, on_step=True, on_epoch=False)
-
-    def on_validation_epoch_end(self):
-        if not self.validation_step_outputs:
-            return
-
-        preds = torch.cat([x["pred"] for x in self.validation_step_outputs])
-        labels = torch.cat([x["label"] for x in self.validation_step_outputs])
-        val_loss = torch.stack([x["loss"].detach() for x in self.validation_step_outputs]).mean()
-        metrics = compute_metrics(preds, labels, self.classes)
-        metrics["val/loss"] = val_loss
-        metrics["val_loss"] = val_loss
-        self.log_dict(metrics, prog_bar=True, on_step=False, on_epoch=True)
-        self.validation_step_outputs.clear()
-
-    def configure_optimizers(self):
-        optimizer = build_adamw_optimizer(self.parameters(), lr=self.lr)
-        total_steps = max(1, int(getattr(self.trainer, "estimated_stepping_batches", 1)))
-        steps_per_epoch = max(1, total_steps // max(1, self.trainer.max_epochs))
-        warmup_steps = max(1, min(int(0.05 * steps_per_epoch), total_steps))
-        scheduler = build_warmup_cosine_scheduler(
-            optimizer,
-            lr=self.lr,
-            steps_per_epoch=steps_per_epoch,
-            warmup_steps=warmup_steps,
-        )
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
 
 def add_common_args(parser: argparse.ArgumentParser, model_name: str) -> None:
@@ -263,26 +203,203 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
     return loader, labels_available
 
 
-def trainer_from_args(args: argparse.Namespace, run_dir: Path) -> pl.Trainer:
-    callbacks = [
-        ModelCheckpoint(dirpath=run_dir / "checkpoints", filename="last", save_last=True, save_top_k=0),
-        ModelCheckpoint(dirpath=run_dir / "checkpoints", filename="{epoch:02d}-{val_ap:.5f}", monitor="val_ap", mode="max", save_top_k=1),
-    ]
-    trainer_kwargs = {
-        "logger": CSVLogger(save_dir=str(run_dir), name="logs"),
-        "callbacks": callbacks,
-        "max_epochs": args.max_epochs if args.max_epochs is not None else 1000,
-        "fast_dev_run": args.fast_dev_run,
-        "accelerator": args.accelerator or "auto",
-        "devices": args.devices or "auto",
-        "precision": args.precision or "16-mixed",
-        "accumulate_grad_batches": args.accumulate_grad_batches or 1,
-        "log_every_n_steps": 50,
-        "num_sanity_val_steps": 2,
-    }
-    if args.val_check_interval is not None:
-        trainer_kwargs["val_check_interval"] = args.val_check_interval
-    return pl.Trainer(**trainer_kwargs)
+def precision_context(device: torch.device, precision: str | None):
+    precision = (precision or "32-true").lower()
+    enabled = precision not in {"32", "32-true"} and device.type == "cuda"
+    if not enabled:
+        return torch.amp.autocast(device_type=device.type, enabled=False)
+    dtype = torch.bfloat16 if "bf16" in precision else torch.float16
+    return torch.amp.autocast(device_type=device.type, dtype=dtype)
+
+
+def train_step(model, criterion, batch, device: torch.device, precision: str | None):
+    data, label = batch
+    data = move_to_device(data, device)
+    label = label.to(device).float()
+    with precision_context(device, precision):
+        pred = model(data)
+        loss = criterion(pred, label)
+    return loss, pred, label
+
+
+@torch.inference_mode()
+def validate_model(model, criterion, loader, classes: list[str], device: torch.device, precision: str | None, max_batches: int | None = None):
+    model.eval()
+    losses = []
+    preds = []
+    labels = []
+    for batch_idx, batch in enumerate(loader):
+        if max_batches is not None and batch_idx >= max_batches:
+            break
+        loss, pred, label = train_step(model, criterion, batch, device, precision)
+        losses.append(loss.detach().cpu())
+        preds.append(torch.sigmoid(pred.detach()).cpu())
+        labels.append(label.detach().cpu())
+
+    if not losses:
+        raise RuntimeError("Validation loader produced no batches")
+
+    pred_tensor = torch.cat(preds)
+    label_tensor = torch.cat(labels)
+    metrics = compute_metrics(pred_tensor, label_tensor, classes)
+    val_loss = torch.stack(losses).mean()
+    metrics["val/loss"] = val_loss
+    metrics["val_loss"] = val_loss
+    return metrics
+
+
+def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_step: int, best_val_ap: float, classes: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "epoch": epoch,
+            "global_step": global_step,
+            "best_val_ap": best_val_ap,
+            "classes": classes,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+        },
+        path,
+    )
+
+
+def append_metric_row(csv_path: Path, row: dict[str, Any]) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    serializable = {}
+    for key, value in row.items():
+        if torch.is_tensor(value):
+            serializable[key] = float(value.detach().cpu())
+        else:
+            serializable[key] = value
+    write_header = not csv_path.exists()
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(serializable.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(serializable)
+
+
+def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path) -> tuple[int, int, float]:
+    checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
+    load_model_state(model, checkpoint)
+    if isinstance(checkpoint, dict) and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if isinstance(checkpoint, dict) and scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    start_epoch = int(checkpoint.get("epoch", -1)) + 1 if isinstance(checkpoint, dict) else 0
+    global_step = int(checkpoint.get("global_step", 0)) if isinstance(checkpoint, dict) else 0
+    best_val_ap = float(checkpoint.get("best_val_ap", float("-inf"))) if isinstance(checkpoint, dict) else float("-inf")
+    return start_epoch, global_step, best_val_ap
+
+
+def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_dir: Path, lr: float, classes: list[str], loss_init_args: dict[str, Any]):
+    device = select_device(args.accelerator)
+    model.to(device)
+    criterion = AsymetricLoss(**loss_init_args)
+    optimizer = build_adamw_optimizer(model.parameters(), lr=lr)
+    max_epochs = args.max_epochs if args.max_epochs is not None else 1000
+    accumulate_grad_batches = args.accumulate_grad_batches or 1
+    steps_per_epoch = max(1, math.ceil(len(train_loader) / accumulate_grad_batches))
+    total_steps = max(1, steps_per_epoch * max_epochs)
+    warmup_steps = max(1, min(int(0.05 * steps_per_epoch), total_steps))
+    scheduler = build_warmup_cosine_scheduler(
+        optimizer,
+        lr=lr,
+        steps_per_epoch=steps_per_epoch,
+        warmup_steps=warmup_steps,
+    )
+
+    start_epoch = 0
+    global_step = 0
+    best_val_ap = float("-inf")
+    if args.checkpoint_path:
+        start_epoch, global_step, best_val_ap = load_training_checkpoint(model, optimizer, scheduler, args.checkpoint_path)
+
+    use_scaler = device.type == "cuda" and (args.precision or "16-mixed").startswith("16")
+    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
+    checkpoint_dir = run_dir / "checkpoints"
+    metrics_path = run_dir / "logs" / "metrics.csv"
+    val_interval = args.val_check_interval
+    val_every_batches = None
+    if val_interval is not None:
+        if val_interval <= 0:
+            raise ValueError("--val-check-interval must be positive")
+        val_every_batches = max(1, int(len(train_loader) * val_interval)) if val_interval <= 1 else int(val_interval)
+
+    for epoch in range(start_epoch, max_epochs):
+        model.train()
+        optimizer.zero_grad(set_to_none=True)
+        running_loss = 0.0
+        train_batches = 0
+
+        for batch_idx, batch in enumerate(train_loader):
+            if args.fast_dev_run and batch_idx > 0:
+                break
+            loss, _, _ = train_step(model, criterion, batch, device, args.precision or "16-mixed")
+            scaled_loss = loss / accumulate_grad_batches
+            if scaler.is_enabled():
+                scaler.scale(scaled_loss).backward()
+            else:
+                scaled_loss.backward()
+
+            should_step = (batch_idx + 1) % accumulate_grad_batches == 0 or (batch_idx + 1) == len(train_loader)
+            if should_step:
+                if scaler.is_enabled():
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+
+            running_loss += float(loss.detach().cpu())
+            train_batches += 1
+
+            if global_step > 0 and global_step % 50 == 0 and should_step:
+                print(f"epoch={epoch} step={global_step} loss={running_loss / max(1, train_batches):.6f}")
+
+            if val_every_batches is not None and (batch_idx + 1) % val_every_batches == 0:
+                metrics = validate_model(
+                    model,
+                    criterion,
+                    val_loader,
+                    classes,
+                    device,
+                    args.precision or "16-mixed",
+                    max_batches=1 if args.fast_dev_run else None,
+                )
+                metrics.update({"epoch": epoch, "global_step": global_step, "train/loss": running_loss / max(1, train_batches)})
+                append_metric_row(metrics_path, metrics)
+                val_ap = float(metrics["val_ap"].detach().cpu())
+                print(f"epoch={epoch} step={global_step} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
+                model.train()
+
+        metrics = validate_model(
+            model,
+            criterion,
+            val_loader,
+            classes,
+            device,
+            args.precision or "16-mixed",
+            max_batches=1 if args.fast_dev_run else None,
+        )
+        train_loss = running_loss / max(1, train_batches)
+        metrics.update({"epoch": epoch, "global_step": global_step, "train/loss": train_loss})
+        append_metric_row(metrics_path, metrics)
+        val_ap = float(metrics["val_ap"].detach().cpu())
+        print(f"epoch={epoch} train_loss={train_loss:.6f} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
+
+        if val_ap > best_val_ap:
+            best_val_ap = val_ap
+            save_checkpoint(checkpoint_dir / "best.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes)
+        save_checkpoint(checkpoint_dir / "last.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes)
+
+        if args.fast_dev_run:
+            break
+
+    return model
 
 
 def compute_metrics(preds: torch.Tensor, labels: torch.Tensor, classes: list[str]) -> dict[str, torch.Tensor]:
@@ -314,9 +431,10 @@ def compute_metrics(preds: torch.Tensor, labels: torch.Tensor, classes: list[str
     return metrics
 
 
-def load_weights(model: torch.nn.Module, checkpoint_path: str | Path) -> None:
-    checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
-    state_dict = checkpoint.get("state_dict", checkpoint)
+def load_model_state(model: torch.nn.Module, checkpoint: Any) -> None:
+    state_dict = checkpoint
+    if isinstance(checkpoint, dict):
+        state_dict = checkpoint.get("model_state_dict") or checkpoint.get("state_dict") or checkpoint
     candidates = [
         state_dict,
         {k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")},
@@ -333,13 +451,24 @@ def load_weights(model: torch.nn.Module, checkpoint_path: str | Path) -> None:
         except RuntimeError as exc:
             errors.append(str(exc))
     detail = errors[-1] if errors else "no checkpoint keys matched the model"
-    raise RuntimeError(f"Could not load checkpoint {checkpoint_path}: {detail}")
+    raise RuntimeError(f"Could not load checkpoint: {detail}")
+
+
+def load_weights(model: torch.nn.Module, checkpoint_path: str | Path) -> None:
+    checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
+    try:
+        load_model_state(model, checkpoint)
+    except RuntimeError as exc:
+        raise RuntimeError(f"Could not load checkpoint {checkpoint_path}: {exc}") from exc
 
 
 def save_single_view_encoder(model, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.model.model.state_dict(), path)
+    encoder = model.model
+    if hasattr(encoder, "model"):
+        encoder = encoder.model
+    torch.save(encoder.state_dict(), path)
 
 
 def select_device(requested: str | None = None) -> torch.device:
