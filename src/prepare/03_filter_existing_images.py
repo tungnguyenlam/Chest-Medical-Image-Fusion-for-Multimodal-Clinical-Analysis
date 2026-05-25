@@ -60,12 +60,40 @@ def strip_images_prefix(p: str) -> str:
     return p[len('images/'):] if p.startswith('images/') else p
 
 
+def index_jpgs(base_dir: str) -> set:
+    """Walk base_dir once and return the set of .jpg paths relative to base_dir.
+
+    Membership tests against this set are O(1) and avoid one stat() per CSV row,
+    which is the dominant cost on networked storage.
+    """
+    found = set()
+    stack = [base_dir]
+    base_prefix_len = len(base_dir.rstrip(os.sep)) + 1
+    with tqdm(desc=f"  Indexing {base_dir}", unit=" files") as pbar:
+        while stack:
+            d = stack.pop()
+            try:
+                with os.scandir(d) as it:
+                    for entry in it:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.name.endswith('.jpg'):
+                            found.add(entry.path[base_prefix_len:])
+                            pbar.update(1)
+            except OSError as e:
+                print(f"    skandir error on {d}: {e}")
+    return found
+
+
 for source_tag, base_dir, base_dir_from_camchex in SOURCES:
     if not os.path.isdir(base_dir):
         print(f"[{source_tag}] Base dir missing: {base_dir} — skipping this source.")
         continue
 
     print(f"=== Source: {source_tag} (base: {base_dir}) ===")
+    existing_set = index_jpgs(base_dir)
+    print(f"  Indexed {len(existing_set)} jpg files under {base_dir}")
+
     for split in SPLITS:
         in_path = os.path.join(DATA_CAMCHEX_ROOT, f'02_{split}.csv')
         out_path = os.path.join(OUT_DIR, f'03_{source_tag}_{split}.csv')
@@ -78,7 +106,7 @@ for source_tag, base_dir, base_dir_from_camchex in SOURCES:
         df = pd.read_csv(in_path, low_memory=False)
 
         rels = df['path'].map(strip_images_prefix)
-        existing = rels.progress_map(lambda r: os.path.exists(os.path.join(base_dir, r)))
+        existing = rels.isin(existing_set)
         filtered_df = df[existing].copy()
         filtered_df['path'] = rels[existing].map(
             lambda r: os.path.join(base_dir_from_camchex, r)
