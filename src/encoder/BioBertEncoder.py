@@ -5,7 +5,7 @@ from transformers import AutoModel
 class BioBertEncoder(nn.Module):
     def __init__(self, text_model="dmis-lab/biobert-v1.1"):
         super().__init__()
-        self.text_encoder = AutoModel.from_pretrained(text_model)
+        self.text_encoder = AutoModel.from_pretrained(text_model, trust_remote_code=True)
 
     def forward(self, input_ids, attention_mask):
         return self.text_encoder(
