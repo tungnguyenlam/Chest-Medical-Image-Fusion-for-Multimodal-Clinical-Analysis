@@ -68,6 +68,17 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Max grad norm. Set to 0 or negative to disable.")
     parser.add_argument("--val-check-interval", type=float)
     parser.add_argument("--log-every-n-steps", type=int, default=1, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
+    parser.add_argument(
+        "--quick-val-every-steps",
+        type=int,
+        help="If set, run a partial validation every N optimizer steps (= N effective batches, where effective = batch_size * accumulate_grad_batches). Logged to val_quick.csv. Does not affect best-checkpoint tracking.",
+    )
+    parser.add_argument(
+        "--quick-val-frac",
+        type=float,
+        default=0.1,
+        help="Fraction of val loader batches to use for quick validation (default 0.1).",
+    )
     parser.add_argument("--backbone-name")
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--fast-dev-run", action="store_true")
@@ -443,6 +454,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     logs_dir = run_dir / "logs"
     train_csv = logs_dir / "train_steps.csv"
     val_csv = logs_dir / "val_epochs.csv"
+    quick_val_csv = logs_dir / "val_quick.csv"
 
     train_fields = [
         "epoch",
@@ -484,10 +496,21 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
     log_every_n_steps = max(1, int(getattr(args, "log_every_n_steps", 1) or 1))
 
+    quick_val_every_steps = getattr(args, "quick_val_every_steps", None)
+    quick_val_frac = float(getattr(args, "quick_val_frac", 0.1) or 0.1)
+    quick_val_max_batches = None
+    if quick_val_every_steps:
+        if quick_val_every_steps <= 0:
+            raise ValueError("--quick-val-every-steps must be positive")
+        if not (0.0 < quick_val_frac <= 1.0):
+            raise ValueError("--quick-val-frac must be in (0, 1]")
+        quick_val_max_batches = max(1, int(len(val_loader) * quick_val_frac))
+
     print(
         f"[train] device={device} precision={args.precision or '16-mixed'} scaler={use_scaler} "
         f"lr={lr:.2e} max_epochs={max_epochs} accumulate={accumulate_grad_batches} "
         f"grad_clip={args.grad_clip} val_every={val_every_batches} log_every={log_every_n_steps} "
+        f"quick_val_every={quick_val_every_steps} quick_val_batches={quick_val_max_batches} "
         f"run_dir={run_dir}"
     )
 
@@ -513,6 +536,53 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         append_metric_row(val_csv, row, fieldnames=val_fields)
         print_validation_summary(metrics, classes, header=f"epoch {epoch} | step {gstep} | {trigger}")
         return float(metrics["val_ap"])
+
+    quick_val_fields = [
+        "epoch",
+        "global_step",
+        "batch_idx",
+        "val_batches",
+        "train/loss_running",
+        "val/loss",
+        "val/ap",
+        "val/auroc",
+        "val/ap_head",
+        "val/ap_medium",
+        "val/ap_tail",
+        "val/auroc_head",
+        "val/auroc_medium",
+        "val/auroc_tail",
+    ]
+
+    def _run_quick_validation(epoch: int, gstep: int, batch_idx: int, train_loss_running: float) -> None:
+        metrics = validate_model(
+            model,
+            criterion,
+            val_loader,
+            classes,
+            device,
+            args.precision or "16-mixed",
+            max_batches=quick_val_max_batches,
+            desc=f"quick-val @ step {gstep}",
+        )
+        row = {
+            "epoch": epoch,
+            "global_step": gstep,
+            "batch_idx": batch_idx,
+            "val_batches": quick_val_max_batches,
+            "train/loss_running": train_loss_running,
+            **metrics,
+        }
+        append_metric_row(quick_val_csv, row, fieldnames=quick_val_fields)
+        tqdm.write(
+            f"[quick-val] epoch={epoch} step={gstep} "
+            f"val_loss={metrics.get('val_loss', float('nan')):.4f} "
+            f"val_ap={metrics.get('val_ap', float('nan')):.4f} "
+            f"AP h/m/t="
+            f"{metrics.get('val/ap_head', float('nan')):.4f}/"
+            f"{metrics.get('val/ap_medium', float('nan')):.4f}/"
+            f"{metrics.get('val/ap_tail', float('nan')):.4f}"
+        )
 
     for epoch in range(start_epoch, max_epochs):
         model.train()
@@ -592,6 +662,14 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             if val_every_batches is not None and (batch_idx + 1) % val_every_batches == 0:
                 avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
                 _run_validation(epoch, global_step, "interval", running_loss_avg, avg_grad_norm)
+
+            if (
+                stepped
+                and quick_val_every_steps is not None
+                and global_step > 0
+                and global_step % quick_val_every_steps == 0
+            ):
+                _run_quick_validation(epoch, global_step, batch_idx, running_loss_avg)
         pbar.close()
 
         train_loss = running_loss / max(1, train_batches)
