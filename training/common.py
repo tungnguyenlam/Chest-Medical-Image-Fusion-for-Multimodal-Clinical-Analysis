@@ -347,8 +347,38 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
     return loader, labels_available
 
 
-def precision_context(device: torch.device, precision: str | None):
+_PRECISION_FALLBACK_WARNED: set[tuple[str, str]] = set()
+
+
+def resolve_precision(device: torch.device, precision: str | None) -> str:
+    """Return the effective precision string, downgrading to '32-true' when the device can't support the request.
+
+    bf16 needs torch.cuda.is_bf16_supported() (Ampere+). fp16 autocast only buys
+    speed on Volta+ (sm_70+) Tensor Cores; older GPUs (e.g. Kepler K80, sm_37)
+    silently upcast and gain nothing, so we fall back to fp32 there too.
+    """
     precision = (precision or "32-true").lower()
+    if precision in {"32", "32-true"} or device.type != "cuda":
+        return precision
+    reason: str | None = None
+    if "bf16" in precision:
+        if not torch.cuda.is_bf16_supported():
+            reason = "bf16 not supported on this CUDA device"
+    else:
+        major, _ = torch.cuda.get_device_capability(device)
+        if major < 7:
+            reason = f"fp16 has no Tensor Core path on sm_{major}x (pre-Volta)"
+    if reason is None:
+        return precision
+    key = (precision, reason)
+    if key not in _PRECISION_FALLBACK_WARNED:
+        _PRECISION_FALLBACK_WARNED.add(key)
+        print(f"[precision] requested {precision!r} → falling back to '32-true' ({reason})")
+    return "32-true"
+
+
+def precision_context(device: torch.device, precision: str | None):
+    precision = resolve_precision(device, precision)
     enabled = precision not in {"32", "32-true"} and device.type == "cuda"
     if not enabled:
         return torch.amp.autocast(device_type=device.type, enabled=False)
@@ -482,6 +512,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     )
 
     precision = resolve_trainer_arg(args, cfg, "precision", "16-mixed")
+    precision = resolve_precision(device, precision)
     use_scaler = device.type == "cuda" and precision.startswith("16")
     scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
 

@@ -1,0 +1,103 @@
+model:
+  lr: 3.0e-5
+  classes: &classes
+    - Atelectasis
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fracture
+    - Hernia
+    - Infiltration
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - No Finding
+    - Nodule
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+  loss_init_args:
+    class_instance_nums:
+      - 67597
+      - 4361
+      - 76900
+      - 16038
+      - 38574
+      - 4255
+      - 30119
+      - 1158
+      - 11883
+      - 4049
+      - 10218
+      - 2533
+      - 79931
+      - 5529
+      - 41869
+      - 7663
+      - 69240
+      - 675
+      - 3369
+      - 788
+      - 48093
+      - 543
+      - 14983
+      - 2453
+      - 89140
+      - 3499
+    total_instance_num: 264849
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 26
+    model_name: convnext_tiny.fb_in22k_ft_in1k
+    pretrained: true
+    drop_path_rate: 0.0
+  model_init_args:
+    d_model: 768
+    transformer_layers: 2
+    nhead: 8
+    dropout: 0.1
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 8
+    num_workers: 2
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/prior_aware_train.parquet
+    devel_df_path: data/data-camchex/prior_aware_development.parquet
+    pred_df_path: data/data-camchex/prior_aware_test.parquet
+    size: 512
+    classes: *classes
+    label_dropout_p: 0.3
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 2
+  grad_clip: 1.0
+  precision: 16-mixed
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  quick_val_frac: 0.1
+  seed: null
+  accelerator: null
