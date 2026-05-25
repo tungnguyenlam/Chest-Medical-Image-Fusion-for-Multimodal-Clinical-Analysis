@@ -296,7 +296,7 @@ def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str |
 def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_dir: Path, lr: float, classes: list[str], loss_init_args: dict[str, Any]):
     device = select_device(args.accelerator)
     model.to(device)
-    criterion = AsymetricLoss(**loss_init_args)
+    criterion = AsymetricLoss(**loss_init_args).to(device)
     optimizer = build_adamw_optimizer(model.parameters(), lr=lr)
     max_epochs = args.max_epochs if args.max_epochs is not None else 1000
     accumulate_grad_batches = args.accumulate_grad_batches or 1
