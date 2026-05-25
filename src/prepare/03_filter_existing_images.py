@@ -2,7 +2,6 @@ import argparse
 import pandas as pd
 import os
 import sys
-import subprocess
 from tqdm import tqdm
 
 tqdm.pandas()
@@ -61,37 +60,12 @@ def strip_images_prefix(p: str) -> str:
     return p[len('images/'):] if p.startswith('images/') else p
 
 
-def index_jpgs(base_dir: str) -> set:
-    """Index .jpg paths under base_dir via `find`, returning paths relative to base_dir.
-
-    `find` in C is much faster than Python's scandir on networked storage because
-    it avoids per-entry stat round-trips that Python's is_dir() needs when the
-    filesystem doesn't return d_type from readdir.
-    """
-    base = base_dir.rstrip(os.sep)
-    base_prefix_len = len(base) + 1
-    cmd = ['find', base, '-name', '*.jpg', '-type', 'f']
-    found = set()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1 << 16)
-    with tqdm(desc=f"  Indexing {base_dir}", unit=" files") as pbar:
-        for line in proc.stdout:
-            found.add(line.rstrip('\n')[base_prefix_len:])
-            pbar.update(1)
-    proc.wait()
-    if proc.returncode != 0:
-        print(f"    find exited with code {proc.returncode}")
-    return found
-
-
 for source_tag, base_dir, base_dir_from_camchex in SOURCES:
     if not os.path.isdir(base_dir):
         print(f"[{source_tag}] Base dir missing: {base_dir} — skipping this source.")
         continue
 
     print(f"=== Source: {source_tag} (base: {base_dir}) ===")
-    existing_set = index_jpgs(base_dir)
-    print(f"  Indexed {len(existing_set)} jpg files under {base_dir}")
-
     for split in SPLITS:
         in_path = os.path.join(DATA_CAMCHEX_ROOT, f'02_{split}.csv')
         out_path = os.path.join(OUT_DIR, f'03_{source_tag}_{split}.csv')
@@ -104,7 +78,7 @@ for source_tag, base_dir, base_dir_from_camchex in SOURCES:
         df = pd.read_csv(in_path, low_memory=False)
 
         rels = df['path'].map(strip_images_prefix)
-        existing = rels.isin(existing_set)
+        existing = rels.progress_map(lambda r: os.path.exists(os.path.join(base_dir, r)))
         filtered_df = df[existing].copy()
         filtered_df['path'] = rels[existing].map(
             lambda r: os.path.join(base_dir_from_camchex, r)
