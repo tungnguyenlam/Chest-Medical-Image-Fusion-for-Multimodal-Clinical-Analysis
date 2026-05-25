@@ -2,6 +2,7 @@ import argparse
 import pandas as pd
 import os
 import sys
+import subprocess
 from tqdm import tqdm
 
 tqdm.pandas()
@@ -61,27 +62,24 @@ def strip_images_prefix(p: str) -> str:
 
 
 def index_jpgs(base_dir: str) -> set:
-    """Walk base_dir once and return the set of .jpg paths relative to base_dir.
+    """Index .jpg paths under base_dir via `find`, returning paths relative to base_dir.
 
-    Membership tests against this set are O(1) and avoid one stat() per CSV row,
-    which is the dominant cost on networked storage.
+    `find` in C is much faster than Python's scandir on networked storage because
+    it avoids per-entry stat round-trips that Python's is_dir() needs when the
+    filesystem doesn't return d_type from readdir.
     """
+    base = base_dir.rstrip(os.sep)
+    base_prefix_len = len(base) + 1
+    cmd = ['find', base, '-name', '*.jpg', '-type', 'f']
     found = set()
-    stack = [base_dir]
-    base_prefix_len = len(base_dir.rstrip(os.sep)) + 1
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1 << 16)
     with tqdm(desc=f"  Indexing {base_dir}", unit=" files") as pbar:
-        while stack:
-            d = stack.pop()
-            try:
-                with os.scandir(d) as it:
-                    for entry in it:
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-                        elif entry.name.endswith('.jpg'):
-                            found.add(entry.path[base_prefix_len:])
-                            pbar.update(1)
-            except OSError as e:
-                print(f"    skandir error on {d}: {e}")
+        for line in proc.stdout:
+            found.add(line.rstrip('\n')[base_prefix_len:])
+            pbar.update(1)
+    proc.wait()
+    if proc.returncode != 0:
+        print(f"    find exited with code {proc.returncode}")
     return found
 
 
