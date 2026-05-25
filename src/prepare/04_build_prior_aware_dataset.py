@@ -273,7 +273,7 @@ def main() -> None:
     args = parse_args()
     in_dir = (ROOT / args.in_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
 
     for split in args.splits:
         csv_path = in_dir / f"{args.in_prefix}{split}.csv"

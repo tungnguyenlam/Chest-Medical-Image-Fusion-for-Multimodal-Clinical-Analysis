@@ -218,7 +218,10 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
 
     data_cfg = data_cfg_from_config(cfg, args)
     transforms_train, transforms_val = get_transforms(data_cfg["size"])
-    tokenizer = AutoTokenizer.from_pretrained(data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1")
+    tokenizer = AutoTokenizer.from_pretrained(
+        data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1",
+        trust_remote_code=True,
+    )
     train_ds = CaMCheXDataset(data_cfg, read_dataframe(data_cfg["train_df_path"]), transforms_train, tokenizer)
     val_ds = CaMCheXDataset(data_cfg, read_dataframe(data_cfg["devel_df_path"]), transforms_val, tokenizer)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
@@ -287,7 +290,10 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
 
     data_cfg = data_cfg_from_config(cfg, args)
     _, transforms_val = get_transforms(data_cfg["size"])
-    tokenizer = AutoTokenizer.from_pretrained(data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1")
+    tokenizer = AutoTokenizer.from_pretrained(
+        data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1",
+        trust_remote_code=True,
+    )
     df = read_dataframe(data_cfg["pred_df_path"])
     ds = CaMCheXDataset(data_cfg, df, transforms_val, tokenizer)
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))

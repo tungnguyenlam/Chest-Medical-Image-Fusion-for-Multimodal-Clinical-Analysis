@@ -11,7 +11,7 @@ class CaMCheXDataModule():
     def __init__(self, datamodule_cfg, dataloader_init_args):
         super(CaMCheXDataModule, self).__init__()
         self.cfg = datamodule_cfg
-        self.tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-v1.1")
+        self.tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-v1.1", trust_remote_code=True)
         self.train_df = pd.read_csv(self.cfg["train_df_path"])
         self.devel_df = pd.read_csv(self.cfg["devel_df_path"])
         self.test_df = pd.read_csv(self.cfg["pred_df_path"])

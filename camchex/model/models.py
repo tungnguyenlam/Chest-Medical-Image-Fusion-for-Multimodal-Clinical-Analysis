@@ -28,7 +28,7 @@ class CaMCheXModel(nn.Module):
 
         self.frontal_model = timm.create_model(**timm_init_args)
         self.lateral_model = timm.create_model(**timm_init_args)
-        self.text_encoder = AutoModel.from_pretrained(text_model)
+        self.text_encoder = AutoModel.from_pretrained(text_model, trust_remote_code=True)
 
         self.frontal_model.head = nn.Identity()
         self.lateral_model.head = nn.Identity()
