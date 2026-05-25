@@ -16,7 +16,7 @@ from training.common import (
     loss_args_from_config,
     lr_from_config,
     make_camchex_loaders,
-    make_run_dir,
+    prepare_run_dir,
     resolve_path,
     timm_args_from_config,
     train_model,
@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
-    run_dir = make_run_dir(args.output_dir, args.run_name, args.run_id)
+    run_dir = prepare_run_dir(args)
     write_resolved_config(run_dir, args, cfg)
 
     train_loader, val_loader = make_camchex_loaders(cfg, args)

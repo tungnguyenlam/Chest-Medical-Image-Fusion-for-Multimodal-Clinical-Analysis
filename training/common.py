@@ -33,15 +33,23 @@ VIEW_ALIASES = {
 }
 
 
-def add_common_args(parser: argparse.ArgumentParser, model_name: str) -> None:
-    parser.add_argument("--config", default="configs/baseline.yaml")
+def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None) -> None:
+    parser.add_argument("--config", default=default_config or f"training/{model_name}/config.yaml")
     parser.add_argument("--train-df-path")
     parser.add_argument("--val-df-path")
     parser.add_argument("--test-df-path")
     parser.add_argument("--output-dir", default=f"output/{model_name}/runs")
     parser.add_argument("--run-name", default="baseline")
     parser.add_argument("--run-id")
-    parser.add_argument("--checkpoint-path")
+    parser.add_argument(
+        "--checkpoint-path",
+        help="Checkpoint path. In eval: weights to load. In train: weights-only init (fresh optimizer/scheduler/epoch).",
+    )
+    parser.add_argument(
+        "--resume-from",
+        help="Train only: full resume from checkpoint (model + optimizer + scheduler + epoch + global_step + best_val_ap). Run dir is inferred from the checkpoint path.",
+    )
+    parser.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--image-size", type=int)
@@ -84,6 +92,33 @@ def make_run_dir(base_dir: str | Path, run_name: str, run_id: str | None) -> Pat
     run_dir = run_dir / f"{run_id}-{run_name}"
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+def resume_run_dir(checkpoint_path: str | Path) -> Path:
+    resolved = resolve_path(checkpoint_path)
+    if resolved is None or not resolved.exists():
+        raise FileNotFoundError(f"--resume-from checkpoint not found: {checkpoint_path}")
+    # Expects layout: <run_dir>/checkpoints/<file>.pt
+    return resolved.resolve().parents[1]
+
+
+def prepare_run_dir(args: argparse.Namespace) -> Path:
+    if getattr(args, "resume_from", None):
+        return resume_run_dir(args.resume_from)
+    return make_run_dir(args.output_dir, args.run_name, args.run_id)
+
+
+def set_seed(seed: int | None) -> None:
+    if seed is None:
+        return
+    import random
+    import numpy as np
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def write_resolved_config(run_dir: Path, args: argparse.Namespace, cfg: dict[str, Any]) -> None:
@@ -294,6 +329,7 @@ def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str |
 
 
 def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_dir: Path, lr: float, classes: list[str], loss_init_args: dict[str, Any]):
+    set_seed(getattr(args, "seed", None))
     device = select_device(args.accelerator)
     model.to(device)
     criterion = AsymetricLoss(**loss_init_args).to(device)
@@ -313,8 +349,12 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     start_epoch = 0
     global_step = 0
     best_val_ap = float("-inf")
-    if args.checkpoint_path:
-        start_epoch, global_step, best_val_ap = load_training_checkpoint(model, optimizer, scheduler, args.checkpoint_path)
+    if args.resume_from:
+        start_epoch, global_step, best_val_ap = load_training_checkpoint(model, optimizer, scheduler, args.resume_from)
+        print(f"resumed from {args.resume_from} at epoch={start_epoch} global_step={global_step} best_val_ap={best_val_ap:.6f}")
+    elif args.checkpoint_path:
+        load_weights(model, args.checkpoint_path)
+        print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
 
     use_scaler = device.type == "cuda" and (args.precision or "16-mixed").startswith("16")
     scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
