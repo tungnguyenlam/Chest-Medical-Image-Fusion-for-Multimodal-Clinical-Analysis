@@ -14,6 +14,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 from torchmetrics import AveragePrecision, AUROC
+from tqdm.auto import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -259,18 +260,21 @@ def train_step(model, criterion, batch, device: torch.device, precision: str | N
 
 
 @torch.inference_mode()
-def validate_model(model, criterion, loader, classes: list[str], device: torch.device, precision: str | None, max_batches: int | None = None):
+def validate_model(model, criterion, loader, classes: list[str], device: torch.device, precision: str | None, max_batches: int | None = None, desc: str = "val"):
     model.eval()
     losses = []
     preds = []
     labels = []
-    for batch_idx, batch in enumerate(loader):
+    total = max_batches if max_batches is not None else len(loader)
+    pbar = tqdm(loader, total=total, desc=desc, leave=False, dynamic_ncols=True)
+    for batch_idx, batch in enumerate(pbar):
         if max_batches is not None and batch_idx >= max_batches:
             break
         loss, pred, label = train_step(model, criterion, batch, device, precision)
         losses.append(loss.detach().cpu())
         preds.append(torch.sigmoid(pred.detach()).cpu())
         labels.append(label.detach().cpu())
+    pbar.close()
 
     if not losses:
         raise RuntimeError("Validation loader produced no batches")
@@ -378,7 +382,13 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         running_loss = 0.0
         train_batches = 0
 
-        for batch_idx, batch in enumerate(train_loader):
+        pbar = tqdm(
+            train_loader,
+            desc=f"epoch {epoch}/{max_epochs - 1}",
+            leave=True,
+            dynamic_ncols=True,
+        )
+        for batch_idx, batch in enumerate(pbar):
             if args.fast_dev_run and batch_idx > 0:
                 break
             loss, _, _ = train_step(model, criterion, batch, device, args.precision or "16-mixed")
@@ -406,8 +416,11 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             running_loss += float(loss.detach().cpu())
             train_batches += 1
 
-            if global_step > 0 and global_step % 50 == 0 and should_step:
-                print(f"epoch={epoch} step={global_step} loss={running_loss / max(1, train_batches):.6f}")
+            pbar.set_postfix(
+                loss=f"{running_loss / max(1, train_batches):.4f}",
+                lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                step=global_step,
+            )
 
             if val_every_batches is not None and (batch_idx + 1) % val_every_batches == 0:
                 metrics = validate_model(
@@ -418,12 +431,14 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                     device,
                     args.precision or "16-mixed",
                     max_batches=1 if args.fast_dev_run else None,
+                    desc=f"val @ step {global_step}",
                 )
                 metrics.update({"epoch": epoch, "global_step": global_step, "train/loss": running_loss / max(1, train_batches)})
                 append_metric_row(metrics_path, metrics)
                 val_ap = float(metrics["val_ap"].detach().cpu())
-                print(f"epoch={epoch} step={global_step} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
+                pbar.write(f"epoch={epoch} step={global_step} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
                 model.train()
+        pbar.close()
 
         metrics = validate_model(
             model,
@@ -433,12 +448,13 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             device,
             args.precision or "16-mixed",
             max_batches=1 if args.fast_dev_run else None,
+            desc=f"val @ epoch {epoch}",
         )
         train_loss = running_loss / max(1, train_batches)
         metrics.update({"epoch": epoch, "global_step": global_step, "train/loss": train_loss})
         append_metric_row(metrics_path, metrics)
         val_ap = float(metrics["val_ap"].detach().cpu())
-        print(f"epoch={epoch} train_loss={train_loss:.6f} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
+        tqdm.write(f"epoch={epoch} train_loss={train_loss:.6f} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
 
         if val_ap > best_val_ap:
             best_val_ap = val_ap
@@ -549,7 +565,7 @@ def predict_dataframe(model, loader, classes: list[str], device: torch.device, i
     preds = []
     labels = []
     batch_ids = []
-    for batch in loader:
+    for batch in tqdm(loader, desc="predict", dynamic_ncols=True):
         data, label = batch
         if isinstance(data, (tuple, list)) and data and not torch.is_tensor(data[0]):
             batch_ids.extend(list(data[0]))
