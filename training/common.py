@@ -59,6 +59,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--devices", default=None)
     parser.add_argument("--precision", default=None)
     parser.add_argument("--accumulate-grad-batches", type=int)
+    parser.add_argument("--grad-clip", type=float, default=1.0, help="Max grad norm. Set to 0 or negative to disable.")
     parser.add_argument("--val-check-interval", type=float)
     parser.add_argument("--backbone-name")
     parser.add_argument("--no-pretrained", action="store_true")
@@ -283,7 +284,7 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
     return metrics
 
 
-def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_step: int, best_val_ap: float, classes: list[str]) -> None:
+def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_step: int, best_val_ap: float, classes: list[str], scaler=None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -294,6 +295,7 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+            "scaler_state_dict": scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
         },
         path,
     )
@@ -315,13 +317,15 @@ def append_metric_row(csv_path: Path, row: dict[str, Any]) -> None:
         writer.writerow(serializable)
 
 
-def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path) -> tuple[int, int, float]:
+def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path, scaler=None) -> tuple[int, int, float]:
     checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
     load_model_state(model, checkpoint)
     if isinstance(checkpoint, dict) and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     if isinstance(checkpoint, dict) and scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    if isinstance(checkpoint, dict) and scaler is not None and checkpoint.get("scaler_state_dict") is not None:
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
     start_epoch = int(checkpoint.get("epoch", -1)) + 1 if isinstance(checkpoint, dict) else 0
     global_step = int(checkpoint.get("global_step", 0)) if isinstance(checkpoint, dict) else 0
     best_val_ap = float(checkpoint.get("best_val_ap", float("-inf"))) if isinstance(checkpoint, dict) else float("-inf")
@@ -333,7 +337,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     device = select_device(args.accelerator)
     model.to(device)
     criterion = AsymetricLoss(**loss_init_args).to(device)
-    optimizer = build_adamw_optimizer(model.parameters(), lr=lr)
+    optimizer = build_adamw_optimizer(model, lr=lr)
     max_epochs = args.max_epochs if args.max_epochs is not None else 1000
     accumulate_grad_batches = args.accumulate_grad_batches or 1
     steps_per_epoch = max(1, math.ceil(len(train_loader) / accumulate_grad_batches))
@@ -346,18 +350,19 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         warmup_steps=warmup_steps,
     )
 
+    use_scaler = device.type == "cuda" and (args.precision or "16-mixed").startswith("16")
+    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
+
     start_epoch = 0
     global_step = 0
     best_val_ap = float("-inf")
     if args.resume_from:
-        start_epoch, global_step, best_val_ap = load_training_checkpoint(model, optimizer, scheduler, args.resume_from)
+        start_epoch, global_step, best_val_ap = load_training_checkpoint(model, optimizer, scheduler, args.resume_from, scaler=scaler)
         print(f"resumed from {args.resume_from} at epoch={start_epoch} global_step={global_step} best_val_ap={best_val_ap:.6f}")
     elif args.checkpoint_path:
         load_weights(model, args.checkpoint_path)
         print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
 
-    use_scaler = device.type == "cuda" and (args.precision or "16-mixed").startswith("16")
-    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
     checkpoint_dir = run_dir / "checkpoints"
     metrics_path = run_dir / "logs" / "metrics.csv"
     val_interval = args.val_check_interval
@@ -385,6 +390,10 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
             should_step = (batch_idx + 1) % accumulate_grad_batches == 0 or (batch_idx + 1) == len(train_loader)
             if should_step:
+                if scaler.is_enabled():
+                    scaler.unscale_(optimizer)
+                if args.grad_clip and args.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
                 if scaler.is_enabled():
                     scaler.step(optimizer)
                     scaler.update()
@@ -433,8 +442,8 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
         if val_ap > best_val_ap:
             best_val_ap = val_ap
-            save_checkpoint(checkpoint_dir / "best.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes)
-        save_checkpoint(checkpoint_dir / "last.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes)
+            save_checkpoint(checkpoint_dir / "best.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes, scaler=scaler)
+        save_checkpoint(checkpoint_dir / "last.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes, scaler=scaler)
 
         if args.fast_dev_run:
             break
