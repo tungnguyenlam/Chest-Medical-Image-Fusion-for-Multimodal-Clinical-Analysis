@@ -65,9 +65,9 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--devices", default=None)
     parser.add_argument("--precision", default=None)
     parser.add_argument("--accumulate-grad-batches", type=int)
-    parser.add_argument("--grad-clip", type=float, default=1.0, help="Max grad norm. Set to 0 or negative to disable.")
+    parser.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
     parser.add_argument("--val-check-interval", type=float)
-    parser.add_argument("--log-every-n-steps", type=int, default=1, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
+    parser.add_argument("--log-every-n-steps", type=int, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
     parser.add_argument(
         "--quick-val-every-steps",
         type=int,
@@ -76,9 +76,11 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument(
         "--quick-val-frac",
         type=float,
-        default=0.1,
         help="Fraction of val loader batches to use for quick validation (default 0.1).",
     )
+    parser.add_argument("--prefetch-factor", type=int, help="DataLoader prefetch_factor (requires num_workers > 0).")
+    parser.add_argument("--weight-decay", type=float)
+    parser.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
     parser.add_argument("--backbone-name")
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--fast-dev-run", action="store_true")
@@ -187,10 +189,43 @@ def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, s
         dl_args["batch_size"] = args.batch_size
     if args.num_workers is not None:
         dl_args["num_workers"] = args.num_workers
+    if getattr(args, "prefetch_factor", None) is not None:
+        dl_args["prefetch_factor"] = args.prefetch_factor
     if dl_args.get("num_workers", 0) == 0:
         dl_args["persistent_workers"] = False
+        dl_args.pop("prefetch_factor", None)
     dl_args["shuffle"] = shuffle
     return dl_args
+
+
+def trainer_cfg_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    return dict(cfg.get("trainer", {}) or {})
+
+
+def resolve_trainer_arg(args: argparse.Namespace, cfg: dict[str, Any] | None, key: str, default: Any) -> Any:
+    cli_val = getattr(args, key, None)
+    if cli_val is not None:
+        return cli_val
+    if cfg is not None:
+        tcfg = trainer_cfg_from_config(cfg)
+        if key in tcfg and tcfg[key] is not None:
+            return tcfg[key]
+    return default
+
+
+def optimizer_args_from_config(cfg: dict[str, Any] | None, args: argparse.Namespace | None = None) -> dict[str, Any]:
+    opt_args: dict[str, Any] = {}
+    if cfg is not None:
+        opt_args = dict((cfg.get("model", {}) or {}).get("optimizer_init_args", {}) or {})
+    if args is not None and getattr(args, "weight_decay", None) is not None:
+        opt_args["weight_decay"] = args.weight_decay
+    return opt_args
+
+
+def scheduler_args_from_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
+    if cfg is None:
+        return {}
+    return dict((cfg.get("model", {}) or {}).get("scheduler_init_args", {}) or {})
 
 
 def read_dataframe(path: str | Path) -> pd.DataFrame:
@@ -419,25 +454,35 @@ def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str |
     return start_epoch, global_step, best_val_ap
 
 
-def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_dir: Path, lr: float, classes: list[str], loss_init_args: dict[str, Any]):
-    set_seed(getattr(args, "seed", None))
-    device = select_device(args.accelerator)
+def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_dir: Path, lr: float, classes: list[str], loss_init_args: dict[str, Any], cfg: dict[str, Any] | None = None):
+    seed = resolve_trainer_arg(args, cfg, "seed", None)
+    set_seed(seed)
+    accelerator = resolve_trainer_arg(args, cfg, "accelerator", None)
+    device = select_device(accelerator)
     model.to(device)
     criterion = AsymetricLoss(**loss_init_args).to(device)
-    optimizer = build_adamw_optimizer(model, lr=lr)
-    max_epochs = args.max_epochs if args.max_epochs is not None else 1000
-    accumulate_grad_batches = args.accumulate_grad_batches or 1
+    optimizer = build_adamw_optimizer(model, lr=lr, **optimizer_args_from_config(cfg, args))
+    max_epochs = resolve_trainer_arg(args, cfg, "max_epochs", 1000)
+    accumulate_grad_batches = resolve_trainer_arg(args, cfg, "accumulate_grad_batches", None) or 1
     steps_per_epoch = max(1, math.ceil(len(train_loader) / accumulate_grad_batches))
     total_steps = max(1, steps_per_epoch * max_epochs)
-    warmup_steps = max(1, min(int(0.05 * steps_per_epoch), total_steps))
+    sched_kwargs = scheduler_args_from_config(cfg)
+    warmup_ratio = getattr(args, "warmup_ratio", None)
+    if warmup_ratio is None:
+        warmup_ratio = sched_kwargs.pop("warmup_ratio", 0.05)
+    else:
+        sched_kwargs.pop("warmup_ratio", None)
+    warmup_steps = max(1, min(int(warmup_ratio * steps_per_epoch), total_steps))
     scheduler = build_warmup_cosine_scheduler(
         optimizer,
         lr=lr,
         steps_per_epoch=steps_per_epoch,
         warmup_steps=warmup_steps,
+        **sched_kwargs,
     )
 
-    use_scaler = device.type == "cuda" and (args.precision or "16-mixed").startswith("16")
+    precision = resolve_trainer_arg(args, cfg, "precision", "16-mixed")
+    use_scaler = device.type == "cuda" and precision.startswith("16")
     scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
 
     start_epoch = 0
@@ -487,29 +532,30 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         + [f"val/auroc/{c}" for c in classes]
     )
 
-    val_interval = args.val_check_interval
+    grad_clip = resolve_trainer_arg(args, cfg, "grad_clip", 1.0)
+    val_interval = resolve_trainer_arg(args, cfg, "val_check_interval", None)
     val_every_batches = None
     if val_interval is not None:
         if val_interval <= 0:
-            raise ValueError("--val-check-interval must be positive")
+            raise ValueError("val_check_interval must be positive")
         val_every_batches = max(1, int(len(train_loader) * val_interval)) if val_interval <= 1 else int(val_interval)
 
-    log_every_n_steps = max(1, int(getattr(args, "log_every_n_steps", 1) or 1))
+    log_every_n_steps = max(1, int(resolve_trainer_arg(args, cfg, "log_every_n_steps", 1) or 1))
 
-    quick_val_every_steps = getattr(args, "quick_val_every_steps", None)
-    quick_val_frac = float(getattr(args, "quick_val_frac", 0.1) or 0.1)
+    quick_val_every_steps = resolve_trainer_arg(args, cfg, "quick_val_every_steps", None)
+    quick_val_frac = float(resolve_trainer_arg(args, cfg, "quick_val_frac", 0.1) or 0.1)
     quick_val_max_batches = None
     if quick_val_every_steps:
         if quick_val_every_steps <= 0:
-            raise ValueError("--quick-val-every-steps must be positive")
+            raise ValueError("quick_val_every_steps must be positive")
         if not (0.0 < quick_val_frac <= 1.0):
-            raise ValueError("--quick-val-frac must be in (0, 1]")
+            raise ValueError("quick_val_frac must be in (0, 1]")
         quick_val_max_batches = max(1, int(len(val_loader) * quick_val_frac))
 
     print(
-        f"[train] device={device} precision={args.precision or '16-mixed'} scaler={use_scaler} "
+        f"[train] device={device} precision={precision} scaler={use_scaler} "
         f"lr={lr:.2e} max_epochs={max_epochs} accumulate={accumulate_grad_batches} "
-        f"grad_clip={args.grad_clip} val_every={val_every_batches} log_every={log_every_n_steps} "
+        f"grad_clip={grad_clip} val_every={val_every_batches} log_every={log_every_n_steps} "
         f"quick_val_every={quick_val_every_steps} quick_val_batches={quick_val_max_batches} "
         f"run_dir={run_dir}"
     )
@@ -521,7 +567,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             val_loader,
             classes,
             device,
-            args.precision or "16-mixed",
+            precision,
             max_batches=1 if args.fast_dev_run else None,
             desc=f"val @ {trigger} step {gstep}",
         )
@@ -561,7 +607,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             val_loader,
             classes,
             device,
-            args.precision or "16-mixed",
+            precision,
             max_batches=quick_val_max_batches,
             desc=f"quick-val @ step {gstep}",
         )
@@ -602,7 +648,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         for batch_idx, batch in enumerate(pbar):
             if args.fast_dev_run and batch_idx > 0:
                 break
-            loss, _, _ = train_step(model, criterion, batch, device, args.precision or "16-mixed")
+            loss, _, _ = train_step(model, criterion, batch, device, precision)
             scaled_loss = loss / accumulate_grad_batches
             if scaler.is_enabled():
                 scaler.scale(scaled_loss).backward()
@@ -614,7 +660,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             if should_step:
                 if scaler.is_enabled():
                     scaler.unscale_(optimizer)
-                clip_norm = args.grad_clip if (args.grad_clip and args.grad_clip > 0) else float("inf")
+                clip_norm = grad_clip if (grad_clip and grad_clip > 0) else float("inf")
                 total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_norm)
                 last_grad_norm = float(total_norm)
                 if math.isfinite(last_grad_norm):

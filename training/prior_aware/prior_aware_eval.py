@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     add_common_args(parser, model_name="prior_aware")
     parser.add_argument("--frontal-pretrained-path")
     parser.add_argument("--lateral-pretrained-path")
-    parser.add_argument("--text-model", default="dmis-lab/biobert-v1.1")
+    parser.add_argument("--text-model", help="Override model.text_model from config.")
     parser.add_argument("--output-csv", default="predictions.csv")
     return parser.parse_args()
 
@@ -41,11 +41,14 @@ def main() -> None:
     write_resolved_config(run_dir, args, cfg)
 
     loader, _ = make_prior_aware_eval_loader(cfg, args)
+    text_model = args.text_model or cfg.get("model", {}).get("text_model") or "dmis-lab/biobert-v1.1"
+    model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
     model = PriorAwareCaMCheXModel(
         timm_init_args=timm_args_from_config(cfg, args),
         frontal_pretrained_path=str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None,
         lateral_pretrained_path=str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None,
-        text_model=args.text_model,
+        text_model=text_model,
+        **model_init_args,
     )
     if args.checkpoint_path:
         load_weights(model, args.checkpoint_path)

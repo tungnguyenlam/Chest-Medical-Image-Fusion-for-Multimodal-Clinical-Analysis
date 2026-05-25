@@ -57,6 +57,7 @@ def main() -> None:
         lr=lr_from_config(cfg, args),
         classes=classes_from_config(cfg),
         loss_init_args=loss_args_from_config(cfg),
+        cfg=cfg,
     )
 
     encoder_output_path = args.encoder_output_path

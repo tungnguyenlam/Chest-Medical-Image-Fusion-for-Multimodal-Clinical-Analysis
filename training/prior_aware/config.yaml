@@ -56,17 +56,32 @@ model:
       - 89140
       - 3499
     total_instance_num: 264849
+  text_model: dmis-lab/biobert-v1.1
   timm_init_args:
     num_classes: 26
     model_name: convnext_small.fb_in22k_ft_in1k
     pretrained: true
     drop_path_rate: 0.0
+  model_init_args:
+    d_model: 768
+    transformer_layers: 2
+    nhead: 8
+    dropout: 0.1
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
 data:
   dataloader_init_args:
     batch_size: 8
-    num_workers: 8
+    num_workers: 2
     pin_memory: true
     persistent_workers: true
+    prefetch_factor: 2
   datamodule_cfg:
     tokenizer: dmis-lab/biobert-v1.1
     train_df_path: data/data-camchex/prior_aware_train.parquet
@@ -75,3 +90,14 @@ data:
     size: 512
     classes: *classes
     label_dropout_p: 0.3
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 2
+  grad_clip: 1.0
+  precision: 16-mixed
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  quick_val_frac: 0.1
+  seed: null
+  accelerator: null

@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     add_common_args(parser, model_name="camchex")
     parser.add_argument("--frontal-pretrained-path", help="Stage-1 frontal timm backbone state_dict.")
     parser.add_argument("--lateral-pretrained-path", help="Stage-1 lateral timm backbone state_dict.")
-    parser.add_argument("--text-model", default="dmis-lab/biobert-v1.1")
+    parser.add_argument("--text-model", help="Override model.text_model from config.")
     return parser.parse_args()
 
 
@@ -42,11 +42,12 @@ def main() -> None:
     train_loader, val_loader = make_camchex_loaders(cfg, args)
     frontal_pretrained_path = str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None
     lateral_pretrained_path = str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None
+    text_model = args.text_model or cfg.get("model", {}).get("text_model") or "dmis-lab/biobert-v1.1"
     model = CaMCheXModel(
         timm_init_args=timm_args_from_config(cfg, args),
         frontal_pretrained_path=frontal_pretrained_path,
         lateral_pretrained_path=lateral_pretrained_path,
-        text_model=args.text_model,
+        text_model=text_model,
     )
     train_model(
         model=model,
@@ -57,6 +58,7 @@ def main() -> None:
         lr=lr_from_config(cfg, args),
         classes=classes_from_config(cfg),
         loss_init_args=loss_args_from_config(cfg),
+        cfg=cfg,
     )
 
 
