@@ -13,8 +13,12 @@ import pandas as pd
 import torch
 import yaml
 from torch.utils.data import DataLoader
-from torchmetrics import AveragePrecision, AUROC
+from torchmetrics.functional import average_precision, auroc
 from tqdm.auto import tqdm
+
+HEAD_IDX = [0, 2, 4, 12, 14, 16, 20, 24]
+MEDIUM_IDX = [1, 3, 5, 6, 8, 9, 10, 13, 15, 22]
+TAIL_IDX = [7, 11, 17, 18, 19, 21, 23, 25]
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -63,6 +67,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--accumulate-grad-batches", type=int)
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Max grad norm. Set to 0 or negative to disable.")
     parser.add_argument("--val-check-interval", type=float)
+    parser.add_argument("--log-every-n-steps", type=int, default=1, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
     parser.add_argument("--backbone-name")
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--fast-dev-run", action="store_true")
@@ -311,31 +316,41 @@ def train_step(model, criterion, batch, device: torch.device, precision: str | N
 
 @torch.inference_mode()
 def validate_model(model, criterion, loader, classes: list[str], device: torch.device, precision: str | None, max_batches: int | None = None, desc: str = "val"):
+    was_training = model.training
     model.eval()
-    losses = []
-    preds = []
-    labels = []
-    total = max_batches if max_batches is not None else len(loader)
-    pbar = tqdm(loader, total=total, desc=desc, leave=False, dynamic_ncols=True)
-    for batch_idx, batch in enumerate(pbar):
-        if max_batches is not None and batch_idx >= max_batches:
-            break
-        loss, pred, label = train_step(model, criterion, batch, device, precision)
-        losses.append(loss.detach().cpu())
-        preds.append(torch.sigmoid(pred.detach()).cpu())
-        labels.append(label.detach().cpu())
-    pbar.close()
+    try:
+        losses: list[float] = []
+        preds: list[torch.Tensor] = []
+        labels: list[torch.Tensor] = []
+        total = max_batches if max_batches is not None else len(loader)
+        pbar = tqdm(loader, total=total, desc=desc, leave=False, dynamic_ncols=True)
+        try:
+            for batch_idx, batch in enumerate(pbar):
+                if max_batches is not None and batch_idx >= max_batches:
+                    break
+                loss, pred, label = train_step(model, criterion, batch, device, precision)
+                losses.append(float(loss.detach().cpu()))
+                preds.append(torch.sigmoid(pred.detach()).cpu())
+                labels.append(label.detach().cpu())
+        finally:
+            pbar.close()
 
-    if not losses:
-        raise RuntimeError("Validation loader produced no batches")
+        if not losses:
+            raise RuntimeError("Validation loader produced no batches")
 
-    pred_tensor = torch.cat(preds)
-    label_tensor = torch.cat(labels)
-    metrics = compute_metrics(pred_tensor, label_tensor, classes)
-    val_loss = torch.stack(losses).mean()
-    metrics["val/loss"] = val_loss
-    metrics["val_loss"] = val_loss
-    return metrics
+        pred_tensor = torch.cat(preds)
+        label_tensor = torch.cat(labels)
+        metrics = compute_metrics(pred_tensor, label_tensor, classes)
+        val_loss = sum(losses) / len(losses)
+        metrics["val/loss"] = val_loss
+        metrics["val_loss"] = val_loss
+        del pred_tensor, label_tensor, preds, labels, losses
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        return metrics
+    finally:
+        if was_training:
+            model.train()
 
 
 def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_step: int, best_val_ap: float, classes: list[str], scaler=None) -> None:
@@ -355,7 +370,7 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_
     )
 
 
-def append_metric_row(csv_path: Path, row: dict[str, Any]) -> None:
+def append_metric_row(csv_path: Path, row: dict[str, Any], fieldnames: list[str] | None = None) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     serializable = {}
     for key, value in row.items():
@@ -363,12 +378,13 @@ def append_metric_row(csv_path: Path, row: dict[str, Any]) -> None:
             serializable[key] = float(value.detach().cpu())
         else:
             serializable[key] = value
+    fields = fieldnames if fieldnames is not None else list(serializable.keys())
     write_header = not csv_path.exists()
     with open(csv_path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(serializable.keys()))
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         if write_header:
             writer.writeheader()
-        writer.writerow(serializable)
+        writer.writerow({k: serializable.get(k, "") for k in fields})
 
 
 def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path, scaler=None) -> tuple[int, int, float]:
@@ -418,7 +434,41 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
 
     checkpoint_dir = run_dir / "checkpoints"
-    metrics_path = run_dir / "logs" / "metrics.csv"
+    logs_dir = run_dir / "logs"
+    train_csv = logs_dir / "train_steps.csv"
+    val_csv = logs_dir / "val_epochs.csv"
+
+    train_fields = [
+        "epoch",
+        "global_step",
+        "batch_idx",
+        "train/loss_step",
+        "train/loss_running",
+        "train/lr",
+        "train/grad_norm",
+        "train/scaler_scale",
+    ]
+    val_fields = (
+        [
+            "epoch",
+            "global_step",
+            "trigger",
+            "train/loss_epoch",
+            "train/grad_norm_epoch",
+            "val/loss",
+            "val/ap",
+            "val/auroc",
+            "val/ap_head",
+            "val/ap_medium",
+            "val/ap_tail",
+            "val/auroc_head",
+            "val/auroc_medium",
+            "val/auroc_tail",
+        ]
+        + [f"val/ap/{c}" for c in classes]
+        + [f"val/auroc/{c}" for c in classes]
+    )
+
     val_interval = args.val_check_interval
     val_every_batches = None
     if val_interval is not None:
@@ -426,17 +476,46 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             raise ValueError("--val-check-interval must be positive")
         val_every_batches = max(1, int(len(train_loader) * val_interval)) if val_interval <= 1 else int(val_interval)
 
+    log_every_n_steps = max(1, int(getattr(args, "log_every_n_steps", 1) or 1))
+
     print(
         f"[train] device={device} precision={args.precision or '16-mixed'} scaler={use_scaler} "
         f"lr={lr:.2e} max_epochs={max_epochs} accumulate={accumulate_grad_batches} "
-        f"grad_clip={args.grad_clip} val_every={val_every_batches} run_dir={run_dir}"
+        f"grad_clip={args.grad_clip} val_every={val_every_batches} log_every={log_every_n_steps} "
+        f"run_dir={run_dir}"
     )
+
+    def _run_validation(epoch: int, gstep: int, trigger: str, train_loss_running: float, avg_grad_norm: float) -> float:
+        metrics = validate_model(
+            model,
+            criterion,
+            val_loader,
+            classes,
+            device,
+            args.precision or "16-mixed",
+            max_batches=1 if args.fast_dev_run else None,
+            desc=f"val @ {trigger} step {gstep}",
+        )
+        row = {
+            "epoch": epoch,
+            "global_step": gstep,
+            "trigger": trigger,
+            "train/loss_epoch": train_loss_running,
+            "train/grad_norm_epoch": avg_grad_norm,
+            **metrics,
+        }
+        append_metric_row(val_csv, row, fieldnames=val_fields)
+        print_validation_summary(metrics, classes, header=f"epoch {epoch} | step {gstep} | {trigger}")
+        return float(metrics["val_ap"])
 
     for epoch in range(start_epoch, max_epochs):
         model.train()
         optimizer.zero_grad(set_to_none=True)
         running_loss = 0.0
         train_batches = 0
+        running_grad_norm = 0.0
+        grad_norm_count = 0
+        last_grad_norm = float("nan")
 
         pbar = tqdm(
             train_loader,
@@ -455,11 +534,16 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 scaled_loss.backward()
 
             should_step = (batch_idx + 1) % accumulate_grad_batches == 0 or (batch_idx + 1) == len(train_loader)
+            stepped = False
             if should_step:
                 if scaler.is_enabled():
                     scaler.unscale_(optimizer)
-                if args.grad_clip and args.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
+                clip_norm = args.grad_clip if (args.grad_clip and args.grad_clip > 0) else float("inf")
+                total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_norm)
+                last_grad_norm = float(total_norm)
+                if math.isfinite(last_grad_norm):
+                    running_grad_norm += last_grad_norm
+                    grad_norm_count += 1
                 if scaler.is_enabled():
                     scaler.step(optimizer)
                     scaler.update()
@@ -468,49 +552,48 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
+                stepped = True
 
-            running_loss += float(loss.detach().cpu())
+            loss_value = float(loss.detach().cpu())
+            running_loss += loss_value
             train_batches += 1
+            current_lr = float(optimizer.param_groups[0]["lr"])
+            running_loss_avg = running_loss / max(1, train_batches)
 
             pbar.set_postfix(
-                loss=f"{running_loss / max(1, train_batches):.4f}",
-                lr=f"{optimizer.param_groups[0]['lr']:.2e}",
+                loss=f"{running_loss_avg:.4f}",
+                lr=f"{current_lr:.2e}",
+                grad_norm=f"{last_grad_norm:.3f}",
                 step=global_step,
             )
 
-            if val_every_batches is not None and (batch_idx + 1) % val_every_batches == 0:
-                metrics = validate_model(
-                    model,
-                    criterion,
-                    val_loader,
-                    classes,
-                    device,
-                    args.precision or "16-mixed",
-                    max_batches=1 if args.fast_dev_run else None,
-                    desc=f"val @ step {global_step}",
+            if stepped and (global_step % log_every_n_steps == 0):
+                append_metric_row(
+                    train_csv,
+                    {
+                        "epoch": epoch,
+                        "global_step": global_step,
+                        "batch_idx": batch_idx,
+                        "train/loss_step": loss_value,
+                        "train/loss_running": running_loss_avg,
+                        "train/lr": current_lr,
+                        "train/grad_norm": last_grad_norm,
+                        "train/scaler_scale": float(scaler.get_scale()) if scaler.is_enabled() else float("nan"),
+                    },
+                    fieldnames=train_fields,
                 )
-                metrics.update({"epoch": epoch, "global_step": global_step, "train/loss": running_loss / max(1, train_batches)})
-                append_metric_row(metrics_path, metrics)
-                val_ap = float(metrics["val_ap"].detach().cpu())
-                pbar.write(f"epoch={epoch} step={global_step} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
-                model.train()
+
+            if val_every_batches is not None and (batch_idx + 1) % val_every_batches == 0:
+                avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
+                _run_validation(epoch, global_step, "interval", running_loss_avg, avg_grad_norm)
         pbar.close()
 
-        metrics = validate_model(
-            model,
-            criterion,
-            val_loader,
-            classes,
-            device,
-            args.precision or "16-mixed",
-            max_batches=1 if args.fast_dev_run else None,
-            desc=f"val @ epoch {epoch}",
-        )
         train_loss = running_loss / max(1, train_batches)
-        metrics.update({"epoch": epoch, "global_step": global_step, "train/loss": train_loss})
-        append_metric_row(metrics_path, metrics)
-        val_ap = float(metrics["val_ap"].detach().cpu())
-        tqdm.write(f"epoch={epoch} train_loss={train_loss:.6f} val_ap={val_ap:.6f} val_loss={float(metrics['val_loss']):.6f}")
+        avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
+        val_ap = _run_validation(epoch, global_step, "epoch", train_loss, avg_grad_norm)
+        tqdm.write(
+            f"epoch={epoch} train_loss={train_loss:.6f} val_ap={val_ap:.6f} grad_norm={avg_grad_norm:.4f}"
+        )
 
         if val_ap > best_val_ap:
             best_val_ap = val_ap
@@ -523,33 +606,62 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     return model
 
 
-def compute_metrics(preds: torch.Tensor, labels: torch.Tensor, classes: list[str]) -> dict[str, torch.Tensor]:
-    val_ap = []
-    val_auc = []
-    metrics = {}
+def compute_metrics(preds: torch.Tensor, labels: torch.Tensor, classes: list[str]) -> dict[str, float]:
+    per_ap: list[float] = []
+    per_auc: list[float] = []
+    metrics: dict[str, float] = {}
+    labels_long = labels.long()
     for idx, name in enumerate(classes):
-        ap = AveragePrecision(task="binary").to(preds.device)(preds[:, idx], labels[:, idx].long())
-        auc = AUROC(task="binary").to(preds.device)(preds[:, idx], labels[:, idx].long())
-        val_ap.append(ap)
-        val_auc.append(auc)
+        ap = float(average_precision(preds[:, idx], labels_long[:, idx], task="binary"))
+        au = float(auroc(preds[:, idx], labels_long[:, idx], task="binary"))
+        per_ap.append(ap)
+        per_auc.append(au)
         metrics[f"val/ap/{name}"] = ap
-        metrics[f"val/auroc/{name}"] = auc
+        metrics[f"val/auroc/{name}"] = au
 
-    head_idx = [0, 2, 4, 12, 14, 16, 20, 24]
-    medium_idx = [1, 3, 5, 6, 8, 9, 10, 13, 15, 22]
-    tail_idx = [7, 11, 17, 18, 19, 21, 23, 25]
+    mean_ap = sum(per_ap) / len(per_ap)
+    mean_au = sum(per_auc) / len(per_auc)
     metrics.update(
         {
-            "val_ap": sum(val_ap) / len(val_ap),
-            "val_auroc": sum(val_auc) / len(val_auc),
-            "val/ap": sum(val_ap) / len(val_ap),
-            "val/auroc": sum(val_auc) / len(val_auc),
-            "val/ap_head": sum(val_ap[i] for i in head_idx) / len(head_idx),
-            "val/ap_medium": sum(val_ap[i] for i in medium_idx) / len(medium_idx),
-            "val/ap_tail": sum(val_ap[i] for i in tail_idx) / len(tail_idx),
+            "val_ap": mean_ap,
+            "val_auroc": mean_au,
+            "val/ap": mean_ap,
+            "val/auroc": mean_au,
+            "val/ap_head": sum(per_ap[i] for i in HEAD_IDX) / len(HEAD_IDX),
+            "val/ap_medium": sum(per_ap[i] for i in MEDIUM_IDX) / len(MEDIUM_IDX),
+            "val/ap_tail": sum(per_ap[i] for i in TAIL_IDX) / len(TAIL_IDX),
+            "val/auroc_head": sum(per_auc[i] for i in HEAD_IDX) / len(HEAD_IDX),
+            "val/auroc_medium": sum(per_auc[i] for i in MEDIUM_IDX) / len(MEDIUM_IDX),
+            "val/auroc_tail": sum(per_auc[i] for i in TAIL_IDX) / len(TAIL_IDX),
         }
     )
     return metrics
+
+
+def print_validation_summary(metrics: dict[str, float], classes: list[str], header: str | None = None) -> None:
+    if header:
+        tqdm.write(f"\n=== {header} ===")
+    name_w = max(len(c) for c in classes)
+    tqdm.write(f"{'class':<{name_w}}  {'AP':>8}  {'AUROC':>8}")
+    for name in classes:
+        ap = metrics.get(f"val/ap/{name}", float("nan"))
+        au = metrics.get(f"val/auroc/{name}", float("nan"))
+        tqdm.write(f"{name:<{name_w}}  {ap:>8.4f}  {au:>8.4f}")
+    tqdm.write("--- summary ---")
+    tqdm.write(f"mean AP    : {metrics.get('val_ap', float('nan')):.4f}")
+    tqdm.write(f"mean AUROC : {metrics.get('val_auroc', float('nan')):.4f}")
+    tqdm.write(
+        f"AP    head/medium/tail: "
+        f"{metrics.get('val/ap_head', float('nan')):.4f} / "
+        f"{metrics.get('val/ap_medium', float('nan')):.4f} / "
+        f"{metrics.get('val/ap_tail', float('nan')):.4f}"
+    )
+    tqdm.write(
+        f"AUROC head/medium/tail: "
+        f"{metrics.get('val/auroc_head', float('nan')):.4f} / "
+        f"{metrics.get('val/auroc_medium', float('nan')):.4f} / "
+        f"{metrics.get('val/auroc_tail', float('nan')):.4f}"
+    )
 
 
 def load_model_state(model: torch.nn.Module, checkpoint: Any) -> None:

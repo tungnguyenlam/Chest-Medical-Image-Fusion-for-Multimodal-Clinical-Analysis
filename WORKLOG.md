@@ -944,3 +944,41 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** New training checkpoints are `checkpoints/last.pt` and `checkpoints/best.pt`, not Lightning `.ckpt` files. Eval loading can read either the new `model_state_dict` format or older Lightning-style `state_dict` format, but optimizer/scheduler resume state is only available from the new plain torch checkpoints. Import-time `--help` checks emitted environment warnings from matplotlib cache permissions and albumentations' online version check, but both entrypoints loaded and printed help successfully.
 
 **Follow-ups.** Run a short `--fast-dev-run` on a server with real labels/images to validate the full forward/backward path and checkpoint write path on the target accelerator.
+
+## 2026-05-25 - Merge CXR-LT notebooks with global statistics and annotated bars
+
+**Goal.** Merge the CXR-LT 2023 examination notebook and its continuation into one notebook, add global dataset statistics that disregard train/development/test split, and label bar plots with both counts and percentages.
+
+**Changes.**
+- `data/00-examine-data/cxr-lt-2023.ipynb:101` - added `global_df`/`global_frames` so split-level analyses can be paired with all-splits-combined summaries.
+- `data/00-examine-data/cxr-lt-2023.ipynb:137` - added count/percentage formatting and bar annotation helpers; horizontal bars place labels at the bar end, vertical bars place labels above the bar.
+- `data/00-examine-data/cxr-lt-2023.ipynb:305` - updated label prevalence plotting to order by global prevalence and annotate every split bar with positive count plus positive-rate percentage.
+- `data/00-examine-data/cxr-lt-2023.ipynb:863` - added a dedicated global statistics section covering global overview, label prevalence, view-position distribution, and No Finding conflicts.
+- `data/00-examine-data/cxr-lt-2023.ipynb:1000` - merged the continuation notebook's study-level aggregation and added global study-view summaries and global view-combo plots.
+- `data/00-examine-data/cxr-lt-2023.ipynb:1171` - changed the co-occurrence/correlation section to use the global dataset instead of train-only statistics.
+- `data/00-examine-data/cxr-lt-2023.ipynb:1247` - merged view-conditioned prevalence with global AP/PA/LATERAL rates and annotated count/rate labels.
+- `data/00-examine-data/cxr-lt-2023.ipynb:1285` - added global image-path availability summaries.
+- `data/00-examine-data/cxr-lt-2023.ipynb:1304` - merged text linkage readiness and added global report-linkage summaries.
+
+**Reasoning.** I made `cxr-lt-2023.ipynb` the single unified notebook and left `cxr-lt-2023-continue.ipynb` as a reference rather than deleting it. The unified notebook keeps split-level diagnostics where leakage or distribution shift matters, but uses global tables/plots for prevalence, study behavior, correlations, view-conditioned rates, image availability, and report linkage so the user can reason about the complete CXR-LT 2023 dataset without split boundaries. I used shared annotation helpers instead of one-off `ax.text` calls so every current bar plot can consistently show `count` and `percentage`.
+
+**Assumptions.**
+- "Merge into 1 notebook" means `cxr-lt-2023.ipynb` should become the canonical combined notebook; the continuation notebook was not removed.
+- Percentages are scoped to the plotted unit: image rows for label/view/image-path plots, studies for study-view-combo plots, and view-specific row counts for view-conditioned prevalence.
+
+**Gotchas.** The local environment does not have the `jupyter` CLI or `IPython` installed for direct notebook execution, so validation used a headless Python runner with a tiny `IPython.display` stub and `MPLBACKEND=Agg`. The first validation pass exposed a seaborn placeholder-bar edge case; annotations now skip missing bars and manually place text, which is more robust across seaborn versions.
+
+**Follow-ups.** Open the notebook in the user's preferred Jupyter environment and execute/save outputs if committed rendered outputs are desired. The working tree already had a metadata-only change in `data/00-examine-data/cxr-lt-2023-continue.ipynb`; this task did not rely on editing that file.
+
+## 2026-05-25 - Fix notebook bar annotation crash
+
+**Goal.** Fix the `plot_view_positions()` traceback where matplotlib `bar_label()` crashed on seaborn bar containers containing `None` placeholder bars.
+
+**Changes.**
+- `data/00-examine-data/cxr-lt-2023.ipynb:200` - changed `annotate_bar_containers()` to place annotations manually from each real bar patch and skip missing placeholders/empty labels.
+
+**Reasoning.** Seaborn can include placeholder entries when an ordered category/hue combination has no data. Passing that container straight to `Axes.bar_label()` lets matplotlib call `get_bbox()` on `None`. Manual annotation keeps the existing count/percentage labels while making the shared helper robust for split-by-hue plots with missing combinations.
+
+**Gotchas.** The notebook worktree already contains executed outputs and other large notebook changes; this fix only targets the shared annotation helper. Headless smoke tests emitted matplotlib cache and non-interactive canvas warnings, but the plotting calls completed.
+
+**Follow-ups.** Re-run the affected notebook cell in Jupyter; `plot_view_positions(analysis_splits, reference_df=global_df, top_n=6)` should now render instead of raising `AttributeError`.

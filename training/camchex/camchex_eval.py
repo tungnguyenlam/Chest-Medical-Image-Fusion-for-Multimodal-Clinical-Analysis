@@ -18,6 +18,7 @@ from training.common import (
     load_weights,
     make_camchex_eval_loader,
     predict_dataframe,
+    print_validation_summary,
     resolve_path,
     select_device,
     timm_args_from_config,
@@ -61,12 +62,11 @@ def main() -> None:
 
     if labels_available:
         metrics = compute_metrics(preds, labels, classes)
-        serializable = {key: float(value.detach().cpu()) for key, value in metrics.items()}
         metrics_path = Path(args.metrics_path)
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         with open(metrics_path, "w") as f:
-            json.dump(serializable, f, indent=2)
-        print(f"val_ap={serializable['val_ap']:.6f}")
+            json.dump(metrics, f, indent=2)
+        print_validation_summary(metrics, classes, header=f"eval | {args.checkpoint_path}")
 
 
 if __name__ == "__main__":
