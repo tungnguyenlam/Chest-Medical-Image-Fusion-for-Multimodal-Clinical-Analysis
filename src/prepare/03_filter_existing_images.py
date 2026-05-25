@@ -2,6 +2,9 @@ import argparse
 import pandas as pd
 import os
 import sys
+from tqdm import tqdm
+
+tqdm.pandas()
 
 if not os.path.isdir('data') or not os.path.isdir('src'):
     sys.exit("Run from project root: python src/prepare/03_filter_existing_images.py")
@@ -75,7 +78,7 @@ for source_tag, base_dir, base_dir_from_camchex in SOURCES:
         df = pd.read_csv(in_path, low_memory=False)
 
         rels = df['path'].map(strip_images_prefix)
-        existing = rels.map(lambda r: os.path.exists(os.path.join(base_dir, r)))
+        existing = rels.progress_map(lambda r: os.path.exists(os.path.join(base_dir, r)))
         filtered_df = df[existing].copy()
         filtered_df['path'] = rels[existing].map(
             lambda r: os.path.join(base_dir_from_camchex, r)
