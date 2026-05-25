@@ -2,8 +2,8 @@ import pandas as pd
 import os
 import sys
 
-if not os.path.isdir('data') or not os.path.isdir('camchex'):
-    sys.exit("Run from project root: python camchex/data/02_split_dataset.py")
+if not os.path.isdir('data') or not os.path.isdir('src'):
+    sys.exit("Run from project root: python src/prepare/02_split_dataset.py")
 
 DATA_CAMCHEX_ROOT = 'data/data-camchex'
 _CXRLT_2023 = 'data/CXR-LT/cxr-lt-multi-label-long-tailed-classification-on-chest-x-rays-2.0.0/cxr-lt-2023'

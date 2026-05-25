@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dataloader.CaMCheXDataset import CaMCheXDataset
+from src.dataloader.PriorAwareDataset import PriorAwareDataset
 from src.dataloader.SingleViewDataset import SingleViewDataset
 from src.dataloader.utils import get_transforms
 from src.loss.AsymetricLoss import AsymetricLoss
@@ -180,7 +181,7 @@ def read_dataframe(path: str | Path) -> pd.DataFrame:
     resolved = resolve_path(path)
     if resolved is None:
         raise FileNotFoundError(path)
-    return pd.read_csv(resolved)
+    return pd.read_csv(resolved, low_memory=False)
 
 
 def filter_single_view(df: pd.DataFrame, view_position: str) -> pd.DataFrame:
@@ -198,8 +199,12 @@ def make_single_view_loaders(cfg: dict[str, Any], args: argparse.Namespace, view
     val_df = filter_single_view(read_dataframe(data_cfg["devel_df_path"]), view_position)
     train_ds = SingleViewDataset(data_cfg, train_df, transforms_train)
     val_ds = SingleViewDataset(data_cfg, val_df, transforms_val)
-    train_loader = DataLoader(train_ds, **dataloader_args_from_config(cfg, args, shuffle=True))
-    val_loader = DataLoader(val_ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    print(f"[dataloader] train: {train_dl_args}")
+    print(f"[dataloader] val:   {val_dl_args}")
+    train_loader = DataLoader(train_ds, **train_dl_args)
+    val_loader = DataLoader(val_ds, **val_dl_args)
     return train_loader, val_loader
 
 
@@ -211,9 +216,54 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     tokenizer = AutoTokenizer.from_pretrained(data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1")
     train_ds = CaMCheXDataset(data_cfg, read_dataframe(data_cfg["train_df_path"]), transforms_train, tokenizer)
     val_ds = CaMCheXDataset(data_cfg, read_dataframe(data_cfg["devel_df_path"]), transforms_val, tokenizer)
-    train_loader = DataLoader(train_ds, **dataloader_args_from_config(cfg, args, shuffle=True))
-    val_loader = DataLoader(val_ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    print(f"[dataloader] train: {train_dl_args}")
+    print(f"[dataloader] val:   {val_dl_args}")
+    train_loader = DataLoader(train_ds, **train_dl_args)
+    val_loader = DataLoader(val_ds, **val_dl_args)
     return train_loader, val_loader
+
+
+def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
+    """Build train/val loaders backed by the pre-generated prior-aware parquet."""
+    data_cfg = data_cfg_from_config(cfg, args)
+    transforms_train, transforms_val = get_transforms(data_cfg["size"])
+    label_dropout_p = float(data_cfg.get("label_dropout_p", 0.3))
+
+    train_ds = PriorAwareDataset(
+        parquet_path=str(resolve_path(data_cfg["train_df_path"])),
+        image_size=data_cfg["size"],
+        transform=transforms_train,
+        label_dropout_p=label_dropout_p,
+    )
+    val_ds = PriorAwareDataset(
+        parquet_path=str(resolve_path(data_cfg["devel_df_path"])),
+        image_size=data_cfg["size"],
+        transform=transforms_val,
+        label_dropout_p=0.0,
+    )
+    train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    print(f"[dataloader] train: {train_dl_args} (label_dropout_p={label_dropout_p})")
+    print(f"[dataloader] val:   {val_dl_args}")
+    train_loader = DataLoader(train_ds, **train_dl_args)
+    val_loader = DataLoader(val_ds, **val_dl_args)
+    return train_loader, val_loader
+
+
+def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
+    data_cfg = data_cfg_from_config(cfg, args)
+    _, transforms_val = get_transforms(data_cfg["size"])
+    ds = PriorAwareDataset(
+        parquet_path=str(resolve_path(data_cfg["pred_df_path"])),
+        image_size=data_cfg["size"],
+        transform=transforms_val,
+        label_dropout_p=0.0,
+    )
+    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    labels_available = True  # label column is always present in the pregenerated parquet
+    return loader, labels_available
 
 
 def make_single_view_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, view_position: str):
@@ -375,6 +425,12 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         if val_interval <= 0:
             raise ValueError("--val-check-interval must be positive")
         val_every_batches = max(1, int(len(train_loader) * val_interval)) if val_interval <= 1 else int(val_interval)
+
+    print(
+        f"[train] device={device} precision={args.precision or '16-mixed'} scaler={use_scaler} "
+        f"lr={lr:.2e} max_epochs={max_epochs} accumulate={accumulate_grad_batches} "
+        f"grad_clip={args.grad_clip} val_every={val_every_batches} run_dir={run_dir}"
+    )
 
     for epoch in range(start_epoch, max_epochs):
         model.train()
@@ -567,7 +623,10 @@ def predict_dataframe(model, loader, classes: list[str], device: torch.device, i
     batch_ids = []
     for batch in tqdm(loader, desc="predict", dynamic_ncols=True):
         data, label = batch
-        if isinstance(data, (tuple, list)) and data and not torch.is_tensor(data[0]):
+        if isinstance(data, dict) and "study_id" in data:
+            sid = data["study_id"]
+            batch_ids.extend(sid.tolist() if torch.is_tensor(sid) else list(sid))
+        elif isinstance(data, (tuple, list)) and data and not torch.is_tensor(data[0]):
             batch_ids.extend(list(data[0]))
         data = move_to_device(data, device)
         pred = torch.sigmoid(model(data)).cpu()

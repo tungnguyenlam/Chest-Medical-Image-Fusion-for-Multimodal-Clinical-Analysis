@@ -145,9 +145,10 @@ fall back to `--precision 32` there.
 ## Legacy
 
 The `camchex/` directory contains the original paper code: a LightningCLI
-+ YAML config layout with its own data pipeline (`camchex/data/01,02,03_*.py`)
-against the full MIMIC tree. It is no longer used by the new training
-entry but kept for reference and comparison.
++ YAML config layout. The data pipeline that used to live alongside it
+now lives at `src/prepare/0{1,2,3,4}_*.py` and is shared with the refactored
+training path. The legacy `camchex/` training entry is no longer used but
+is kept for reference and comparison.
 
 ## TCIA download helper
 

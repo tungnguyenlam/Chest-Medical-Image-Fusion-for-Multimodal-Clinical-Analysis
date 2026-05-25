@@ -7,8 +7,8 @@ import pandas as pd
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
-if not os.path.isdir('data') or not os.path.isdir('camchex'):
-    sys.exit("Run from project root: python camchex/data/01_make_dataset.py")
+if not os.path.isdir('data') or not os.path.isdir('src'):
+    sys.exit("Run from project root: python src/prepare/01_make_dataset.py")
 
 sys.path.append('mimic-cxr/txt')
 import section_parser as sp

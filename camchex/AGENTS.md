@@ -29,17 +29,21 @@ this folder reflects the original LightningCLI/YAML-style implementation.
 
 ## Data pipeline (run from project root)
 
-Three steps must be run in order. All scripts enforce project root via a `sys.exit()` guard.
+The data-prep pipeline moved out of `camchex/data/` to `src/prepare/`. All
+scripts enforce project root via a `sys.exit()` guard.
 
 ```bash
 # Step 1 — merge all sources into 01_merged.csv and produce initial splits
-python camchex/data/01_make_dataset.py
+python src/prepare/01_make_dataset.py
 
 # Step 2 — re-split from 01_merged.csv (skip if step 1 already produced 02_*.csv)
-python camchex/data/02_split_dataset.py
+python src/prepare/02_split_dataset.py
 
 # Step 3 — filter rows to only images that exist on disk; writes to data/data-camchex/03_*.csv
-python camchex/data/03_filter_existing_images.py
+python src/prepare/03_filter_existing_images.py
+
+# Step 4 — (optional, prior-aware only) pre-generate per-study parquet
+python src/prepare/04_build_prior_aware_dataset.py
 ```
 
 Intermediate files live in `data/data-camchex/` with step-number prefixes:

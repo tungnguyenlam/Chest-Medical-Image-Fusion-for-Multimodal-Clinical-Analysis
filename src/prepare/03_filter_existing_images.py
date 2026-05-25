@@ -3,8 +3,8 @@ import pandas as pd
 import os
 import sys
 
-if not os.path.isdir('data') or not os.path.isdir('camchex'):
-    sys.exit("Run from project root: python camchex/data/03_filter_existing_images.py")
+if not os.path.isdir('data') or not os.path.isdir('src'):
+    sys.exit("Run from project root: python src/prepare/03_filter_existing_images.py")
 
 _parser = argparse.ArgumentParser(description="Filter merged CSVs to images that exist on disk.")
 _parser.add_argument(

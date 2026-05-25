@@ -87,7 +87,7 @@ python scripts/analyze_subset_dataset.py --subset-name subset
 can optionally bundle into split 7z volumes and upload to a private HF
 dataset repo.
 
-`prepare_subset_labels.py` ports the legacy `camchex/data/01,02,03_*.py`
+`prepare_subset_labels.py` ports the four-stage `src/prepare/0{1,2,3,4}_*.py`
 pipeline into one subset-targeted script. It writes CSVs under
 `data/<subset>/labels/`.
 
@@ -152,9 +152,10 @@ committed. Build artifacts under `output/` are also gitignored.
 ## Legacy `camchex/`
 
 The original paper code is preserved for reference. It uses LightningCLI +
-`camchex/config.yaml` + the three-step `camchex/data/` pipeline against the
-full MIMIC tree. **Do not modify `camchex/`** unless explicitly asked. New
-refactor work goes in root `src/`.
+`camchex/config.yaml`. The data-prep pipeline previously under
+`camchex/data/` now lives at `src/prepare/0{1,2,3,4}_*.py` and is shared by
+both the legacy and the refactored training paths. **Do not modify
+`camchex/`** unless explicitly asked. New refactor work goes in root `src/`.
 
 ## Worklog
 

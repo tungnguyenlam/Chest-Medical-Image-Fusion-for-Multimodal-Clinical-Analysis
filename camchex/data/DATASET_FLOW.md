@@ -44,7 +44,7 @@ flowchart TD
     end
 
     %% Step 1
-    subgraph step1["Step 1: python camchex/data/01_make_dataset.py"]
+    subgraph step1["Step 1: python src/prepare/01_make_dataset.py"]
         study_base["Study-level CXR table<br/>drop duplicate study_id rows<br/>sort by subject_id, StudyDate<br/>compute PreviousStudy and StudyDateTime"]
         ed_join["ED context table<br/>triage merge edstays on subject_id, stay_id<br/>left-join to CXR studies by subject_id<br/>keep closest ED stay by time to StudyDateTime"]
         vital_join["Vitals fallback<br/>join vitalsign rows by subject_id, stay_id<br/>select nearest charttime row<br/>fill temperature, heartrate, resprate, o2sat, sbp, dbp, pain"]
@@ -86,7 +86,7 @@ flowchart TD
     path02 -->|"split == test"| test02_from_step1
 
     %% Optional Step 2
-    subgraph step2["Optional Step 2: python camchex/data/02_split_dataset.py"]
+    subgraph step2["Optional Step 2: python src/prepare/02_split_dataset.py"]
         split_ids["Reload CXR-LT dicom_id split sets<br/>train.csv, development.csv, test.csv"]
         resplit["Filter 01_merged.csv by dicom_id membership<br/>recompute images/pXX/.../DICOM.jpg path"]
         train02["data/data-camchex/02_train.csv"]
@@ -112,7 +112,7 @@ flowchart TD
         kaggle_images["Kaggle image source<br/>data/data-kaggle/official_data_iccv_final/files<br/>alternate subset if present"]
     end
 
-    subgraph step3["Step 3: python camchex/data/03_filter_existing_images.py"]
+    subgraph step3["Step 3: python src/prepare/03_filter_existing_images.py"]
         strip_prefix["For each 02 split<br/>strip leading images/ from path"]
         filter_mimic["Check file exists under MIMIC source<br/>rewrite path for camchex cwd:<br/>../data/MIMIC-CXR-JPG/files/pXX/.../DICOM.jpg"]
         filter_kaggle["Check file exists under Kaggle source<br/>rewrite path for camchex cwd:<br/>../data/data-kaggle/official_data_iccv_final/files/pXX/.../DICOM.jpg"]
@@ -175,9 +175,11 @@ flowchart TD
 
 ## Read This Diagram
 
+- The pipeline scripts moved out of `camchex/data/` and now live at `src/prepare/0{1,2,3,4}_*.py`. They are shared by the legacy `camchex/` and the refactored `training/` paths; the diagram labels above use the current paths.
 - `01_make_dataset.py` is the expensive step because it parses every report. Its `01_progress.csv` checkpoint is saved after report parsing so a late crash does not force the slow part to be re-derived manually.
 - `02_split_dataset.py` is optional when step 1 finishes normally because step 1 already writes `02_train.csv`, `02_development.csv`, and `02_test.csv`. Run step 2 when you want to rebuild splits from `01_merged.csv` without reparsing reports.
 - `03_filter_existing_images.py` is what makes the CSVs machine-aware. It drops rows whose image file is absent on the selected image source and rewrites `path` values so training can open them from the `camchex/` working directory.
+- `04_build_prior_aware_dataset.py` is optional, used only by the prior-aware model. It collapses the 03 CSV to one row per `study_id`, joins each study with its `PreviousStudy`, pre-tokenizes BioBERT inputs for both, and writes `prior_aware_{train,development,test}.parquet`. The runtime `PriorAwareDataset` only has to decode JPEGs.
 - The active default training files are `03_mimic_train.csv`, `03_mimic_development.csv`, and `03_mimic_test.csv`, because those are the paths in `camchex/config.yaml`. The Kaggle `03_kaggle_*` files are alternate outputs if that source directory exists and the config is changed to point at them.
 - `CaMCheXDataset` groups the final CSV rows by `study_id`, so the dataloader returns one study sample with up to four image views, view-position IDs, clinical indication tokens, vitals/gender tokens, and the 26-label target vector.
 - The merged CSVs retain a cleaned `report` column, but the current `CaMCheXDataset` returns `clinical_indication` and vitals/gender text, not the full `report` text.
