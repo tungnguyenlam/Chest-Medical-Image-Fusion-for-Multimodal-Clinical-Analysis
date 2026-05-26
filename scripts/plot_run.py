@@ -7,6 +7,7 @@ Usage:
     python scripts/plot_run.py <run_dir> [<run_dir> ...]
     python scripts/plot_run.py <run_dir> --output-dir <other_dir>
     python scripts/plot_run.py <run_dir> --smooth 200
+    python scripts/plot_run.py <run_dir> --smooth 0  # raw train loss only
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dirs", nargs="+", type=Path)
     parser.add_argument("--output-dir", type=Path, help="Write plots here instead of <run_dir>/plots.")
-    parser.add_argument("--smooth", type=int, default=0, help="Rolling-mean window (in steps) for the train loss curve. 0 disables.")
+    parser.add_argument("--smooth", type=int, default=50, help="Rolling-mean window (in steps) for the train loss curve. 0 disables.")
     parser.add_argument("--dpi", type=int, default=120)
     return parser.parse_args()
 
@@ -68,12 +69,9 @@ def plot_loss(train_df: pd.DataFrame | None, val_df: pd.DataFrame | None, smooth
     if train_df is not None and "train/loss_step" in train_df.columns:
         loss_step = train_df["train/loss_step"].astype(float)
         ax.plot(train_df["global_step"], loss_step, color="tab:blue", alpha=0.25, linewidth=0.6, label="train loss (step)")
-        if smooth and smooth > 1 and len(train_df) >= smooth:
+        if smooth and smooth > 1:
             smoothed = loss_step.rolling(smooth, min_periods=1).mean()
             ax.plot(train_df["global_step"], smoothed, color="tab:blue", linewidth=1.4, label=f"train loss (rolling {smooth})")
-        else:
-            running = loss_step.expanding(min_periods=1).mean()
-            ax.plot(train_df["global_step"], running, color="tab:blue", linewidth=1.2, label="train loss (running mean)")
     if val_df is not None and "val/loss" in val_df.columns:
         ax.plot(val_df["global_step"], val_df["val/loss"], "o-", color="tab:red", markersize=4, label="val loss")
     ax.set_xlabel("global step")

@@ -1023,3 +1023,16 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** Updating `training/common.py` only fixes future logs. Existing `train_steps.csv` files preserve the old epoch-reset running means, so plotting that column reproduces the visual cliff. Recomputing the running mean in the plotting script gives old and new runs the same continuous curve while keeping `--smooth` as the optional rolling-window view.
 
 **Gotchas.** If `log_every_n_steps > 1`, the reconstructed running mean is over logged step losses, not every batch loss. That is still preferable to plotting a known reset artifact and matches the data available in the CSV.
+
+## 2026-05-26 - Default loss plots to rolling window
+
+**Goal.** Replace the default expanding/running training-loss curve with a local rolling-window curve, since step-level visualization should show recent optimization behavior instead of an all-history cumulative average.
+
+**Changes.**
+- `scripts/plot_run.py:10` - documented `--smooth 0` as the way to show raw train loss only.
+- `scripts/plot_run.py:38` - changed the default `--smooth` window from `0` to `50` steps.
+- `scripts/plot_run.py:72` - always plot the rolling curve when `smooth > 1`, even for short runs via `min_periods=1`, and removed the expanding running-mean fallback from the default loss figure.
+
+**Reasoning.** The continuous running mean removed epoch-boundary cliffs but still lagged heavily because each point averaged all previous logged steps. A 50-step rolling mean is a better default for diagnosing training dynamics while preserving `--smooth 0` for users who only want raw step-loss points.
+
+**Gotchas.** For very short smoke-test runs, the rolling-50 label still appears even though early points average fewer than 50 observations because `min_periods=1` is used. That is intentional and avoids silently switching plot semantics based on run length.
