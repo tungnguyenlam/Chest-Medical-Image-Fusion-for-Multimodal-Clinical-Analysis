@@ -12,7 +12,7 @@ Run from the project root:
     python scripts/build_mimic_subset.py --skip-copy --volume-size 10g
     python scripts/build_mimic_subset.py --upload-existing
 
-Reads HF_TOKEN and DATA_PASSWORD from .env (see .env.example).
+Reads HF_TOKEN, HF_USERNAME, and DATA_PASSWORD from .env (see .env.example).
 """
 from __future__ import annotations
 
@@ -50,8 +50,9 @@ def parse_args() -> argparse.Namespace:
                    help="Output archive filename (default: bundle-a3f9.7z)")
     p.add_argument("--archive-dir", default="data/_bundles",
                    help="Directory to write the archive to (default: data/_bundles)")
-    p.add_argument("--hf-repo", default="tungnguyenlam/tung-thesis",
-                   help="HuggingFace dataset repo (default: tungnguyenlam/tung-thesis)")
+    p.add_argument("--hf-repo", default="tung-thesis",
+                   help="HuggingFace dataset repo. Bare names use HF_USERNAME from .env "
+                        "(default: tung-thesis)")
     p.add_argument("--public", action="store_true",
                    help="Create the HF repo as public. DEFAULT is private. "
                         "Public re-hosting of MIMIC violates the PhysioNet DUA — "
@@ -232,10 +233,12 @@ def remove_archive_outputs(archive: Path) -> None:
         part.unlink()
 
 
-def resolve_hf_repo_id(api, repo_id: str, token: str) -> str:
+def resolve_hf_repo_id(repo_id: str) -> str:
     if "/" in repo_id:
         return repo_id
-    username = api.whoami(token=token)["name"]
+    username = os.environ.get("HF_USERNAME", "").strip()
+    if not username:
+        sys.exit("HF_USERNAME not set in .env; set it or pass --hf-repo owner/name")
     resolved = f"{username}/{repo_id}"
     print(f"Resolved HuggingFace repo: {repo_id} -> {resolved}")
     return resolved
@@ -297,7 +300,7 @@ def upload_to_hf(
 
     from huggingface_hub import HfApi, create_repo
     api = HfApi(token=token)
-    repo_id = resolve_hf_repo_id(api, repo_id, token)
+    repo_id = resolve_hf_repo_id(repo_id)
     if preserve_history:
         print(f"Preserving existing HuggingFace dataset repo history for {repo_id}.")
     else:

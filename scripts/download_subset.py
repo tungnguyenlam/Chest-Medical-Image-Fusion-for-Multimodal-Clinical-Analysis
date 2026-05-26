@@ -6,7 +6,7 @@ extract it into data/. Mirror of scripts/build_mimic_subset.py.
 Run from the project root:
     python scripts/download_subset.py
 
-Reads HF_TOKEN and DATA_PASSWORD from .env (see .env.example).
+Reads HF_TOKEN, HF_USERNAME, and DATA_PASSWORD from .env (see .env.example).
 """
 from __future__ import annotations
 
@@ -29,8 +29,9 @@ def _workers_from_cpu_fraction(fraction: float) -> int:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--hf-repo", default="tungnguyenlam/tung-thesis",
-                   help="HuggingFace dataset repo (default: tungnguyenlam/tung-thesis)")
+    p.add_argument("--hf-repo", default="tung-thesis",
+                   help="HuggingFace dataset repo. Bare names use HF_USERNAME from .env "
+                        "(default: tung-thesis)")
     p.add_argument("--archive-name", default="bundle-a3f9.7z",
                    help="Archive base name in the repo (default: bundle-a3f9.7z)")
     p.add_argument("--data-dir", default="data", help="Extraction target (default: data)")
@@ -70,10 +71,12 @@ def repo_archive_names(repo_files: list[str], archive_name: str) -> list[str]:
     return []
 
 
-def resolve_hf_repo_id(api, repo_id: str, token: str) -> str:
+def resolve_hf_repo_id(repo_id: str) -> str:
     if "/" in repo_id:
         return repo_id
-    username = api.whoami(token=token)["name"]
+    username = os.environ.get("HF_USERNAME", "").strip()
+    if not username:
+        sys.exit("HF_USERNAME not set in .env; set it or pass --hf-repo owner/name")
     resolved = f"{username}/{repo_id}"
     print(f"Resolved HuggingFace repo: {repo_id} -> {resolved}")
     return resolved
@@ -175,7 +178,7 @@ def main() -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
 
     api = HfApi(token=token)
-    args.hf_repo = resolve_hf_repo_id(api, args.hf_repo, token)
+    args.hf_repo = resolve_hf_repo_id(args.hf_repo)
     repo_files = api.list_repo_files(repo_id=args.hf_repo, repo_type="dataset", token=token)
     archive_names = repo_archive_names(repo_files, args.archive_name)
     if not archive_names:

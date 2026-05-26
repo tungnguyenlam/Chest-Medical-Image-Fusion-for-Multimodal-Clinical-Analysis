@@ -1036,3 +1036,24 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** The continuous running mean removed epoch-boundary cliffs but still lagged heavily because each point averaged all previous logged steps. A 50-step rolling mean is a better default for diagnosing training dynamics while preserving `--smooth 0` for users who only want raw step-loss points.
 
 **Gotchas.** For very short smoke-test runs, the rolling-50 label still appears even though early points average fewer than 50 observations because `min_periods=1` is used. That is intentional and avoids silently switching plot semantics based on run length.
+
+## 2026-05-27 - Read HuggingFace username from env
+
+**Goal.** Remove the hard-coded HuggingFace username from the subset upload/download scripts so the repo owner comes from `.env` instead.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:53` - changed the default `--hf-repo` from a fixed `owner/repo` to the bare repo name `tung-thesis`.
+- `scripts/build_mimic_subset.py:236` - changed repo resolution to read `HF_USERNAME` from `.env` and combine it with bare repo names.
+- `scripts/download_subset.py:32` - changed the default `--hf-repo` to the same bare repo name used by the build script.
+- `scripts/download_subset.py:74` - mirrored the `HF_USERNAME` repo resolution for downloads.
+- `.env.example:7` - documented the new `HF_USERNAME` variable.
+
+**Reasoning.** Keeping `--hf-repo owner/name` supported preserves explicit overrides for other accounts or org repos, while bare repo names now avoid baking a personal username into the scripts. I used a small local resolver in each script rather than introducing a shared helper because these scripts are standalone and already mirror each other.
+
+**Assumptions.**
+- `HF_USERNAME` can be either a HuggingFace user or organization name.
+- The default dataset repo name remains `tung-thesis`; only the owner should come from `.env`.
+
+**Gotchas.** Bare repo names now fail early with a clear message if `HF_USERNAME` is missing. Full `owner/name` values do not require `HF_USERNAME`.
+
+**Follow-ups.** If more scripts start resolving HuggingFace repos, consider moving this tiny resolver into a shared script utility.
