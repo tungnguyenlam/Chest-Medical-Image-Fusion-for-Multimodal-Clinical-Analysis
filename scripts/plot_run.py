@@ -26,6 +26,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+CLASS_GROUP_IDXS = {
+    "head": [0, 2, 4, 12, 14, 16, 20, 24],
+    "medium": [1, 3, 5, 6, 8, 9, 10, 13, 15, 22],
+    "tail": [7, 11, 17, 18, 19, 21, 23, 25],
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -170,6 +176,39 @@ def plot_per_class(val_df: pd.DataFrame | None, metric: str, out: Path, dpi: int
     _save(fig, out / f"per_class_{metric}.png")
 
 
+def plot_per_group_classes(val_df: pd.DataFrame | None, metric: str, out: Path, dpi: int) -> None:
+    if val_df is None:
+        return
+    prefix = f"val/{metric}/"
+    cols = [c for c in val_df.columns if c.startswith(prefix)]
+    if not cols:
+        return
+    classes = [c[len(prefix):] for c in cols]
+    x = val_df["global_step"]
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 11), dpi=dpi, sharex=True, sharey=True)
+    for ax, (group_name, idxs) in zip(axes, CLASS_GROUP_IDXS.items()):
+        plotted = False
+        for idx in idxs:
+            if idx >= len(classes):
+                continue
+            name = classes[idx]
+            col = f"{prefix}{name}"
+            if col not in val_df.columns:
+                continue
+            ax.plot(x, val_df[col], marker="o", markersize=3, linewidth=1.2, label=name)
+            plotted = True
+        ax.set_title(f"{group_name} classes - validation {metric.upper()}")
+        ax.set_ylabel(metric.upper())
+        ax.set_ylim(0.0, 1.0)
+        ax.grid(alpha=0.3)
+        ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8)
+        if not plotted:
+            ax.text(0.5, 0.5, "no class columns found", transform=ax.transAxes, ha="center", va="center")
+    axes[-1].set_xlabel("global step")
+    _save(fig, out / f"per_group_{metric}.png")
+
+
 def plot_run(run_dir: Path, output_dir: Path | None, smooth: int, dpi: int) -> None:
     logs_dir = run_dir / "logs"
     out = output_dir if output_dir is not None else run_dir / "plots"
@@ -185,6 +224,8 @@ def plot_run(run_dir: Path, output_dir: Path | None, smooth: int, dpi: int) -> N
     plot_val_summary(val_df, "auroc", out, dpi)
     plot_per_class(val_df, "ap", out, dpi)
     plot_per_class(val_df, "auroc", out, dpi)
+    plot_per_group_classes(val_df, "ap", out, dpi)
+    plot_per_group_classes(val_df, "auroc", out, dpi)
 
 
 def main() -> None:

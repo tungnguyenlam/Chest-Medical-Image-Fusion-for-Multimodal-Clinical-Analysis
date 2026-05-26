@@ -982,3 +982,32 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The notebook worktree already contains executed outputs and other large notebook changes; this fix only targets the shared annotation helper. Headless smoke tests emitted matplotlib cache and non-interactive canvas warnings, but the plotting calls completed.
 
 **Follow-ups.** Re-run the affected notebook cell in Jupyter; `plot_view_positions(analysis_splits, reference_df=global_df, top_n=6)` should now render instead of raising `AttributeError`.
+
+## 2026-05-26 - Make train loss running mean continuous across epochs
+
+**Goal.** Fix the misleading jumps in plotted training loss caused by `train/loss_running` resetting at every epoch boundary.
+
+**Changes.**
+- `training/common.py:664` - added run-level loss counters outside the epoch loop so `train/loss_running` is continuous for the lifetime of the training process.
+- `training/common.py:670` - renamed the per-epoch counters to `epoch_loss` / `epoch_batches` and kept them reset inside each epoch.
+- `training/common.py:719` - compute both `epoch_loss_avg` for the progress bar and `running_loss_avg` for CSV logging, interval validation context, and quick validation context.
+- `training/common.py:759` - keep `train/loss_epoch` based on the epoch-local mean at end-of-epoch validation.
+
+**Reasoning.** `train/loss_running` was being used by `scripts/plot_run.py` as the default smoothed-looking training loss curve, so resetting it each epoch made a correct training run look unstable. Moving the running accumulator outside the epoch loop fixes the plotted metric without changing the raw step loss or the epoch-level validation summary. I kept the progress bar's primary `loss` display epoch-local because an all-run average becomes slow to move late in training; `run_loss` is shown alongside it for consistency with the logged metric.
+
+**Gotchas.** The continuous mean is continuous within one training process. If training is resumed into an existing run directory, old CSV rows cannot reconstruct the exact prior all-batch mean when `log_every_n_steps > 1`, so the first resumed process may still start a new in-process running mean. Fixing that perfectly would require checkpointing loss accumulator state or changing the metric to a rolling/EMA curve.
+
+## 2026-05-26 - Add grouped per-class AP/AUROC plots
+
+**Goal.** Make validation plots easier to inspect by showing per-class AP and AUROC curves grouped into head, medium, and tail panels, instead of requiring the user to cross-reference a printed table.
+
+**Changes.**
+- `scripts/plot_run.py:29` - added the same fixed head/medium/tail class index groups used by `training/common.py` metric aggregation.
+- `scripts/plot_run.py:179` - added `plot_per_group_classes()`, which writes a three-panel plot with one panel per class-frequency group and per-class lines inside each panel.
+- `scripts/plot_run.py:227` - call the grouped plotter for both AP and AUROC, producing `per_group_ap.png` and `per_group_auroc.png` alongside the existing per-class grids.
+
+**Reasoning.** The existing `val_ap.png` / `val_auroc.png` files only show aggregate head/medium/tail means, while `per_class_ap.png` / `per_class_auroc.png` show every class without group context. A three-panel grouped plot preserves class-level detail and makes the group membership visible in the figure title and legend. I kept the existing plots unchanged so old workflows and filenames still work.
+
+**Gotchas.** The plot script duplicates the group indices from `training/common.py` instead of importing them, because importing `training/common.py` would pull in torch/torchmetrics/dataloader dependencies just to render CSV plots. If class order changes in configs, both places must be updated together or the group labels will be wrong.
+
+**Follow-ups.** Consider moving class names and group definitions into a lightweight shared metadata module if this grouping is needed in more scripts.

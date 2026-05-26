@@ -661,11 +661,14 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             f"{metrics.get('val/ap_tail', float('nan')):.4f}"
         )
 
+    running_loss_total = 0.0
+    running_batches_total = 0
+
     for epoch in range(start_epoch, max_epochs):
         model.train()
         optimizer.zero_grad(set_to_none=True)
-        running_loss = 0.0
-        train_batches = 0
+        epoch_loss = 0.0
+        epoch_batches = 0
         running_grad_norm = 0.0
         grad_norm_count = 0
         last_grad_norm = float("nan")
@@ -708,13 +711,17 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 stepped = True
 
             loss_value = float(loss.detach().cpu())
-            running_loss += loss_value
-            train_batches += 1
+            epoch_loss += loss_value
+            epoch_batches += 1
+            running_loss_total += loss_value
+            running_batches_total += 1
             current_lr = float(optimizer.param_groups[0]["lr"])
-            running_loss_avg = running_loss / max(1, train_batches)
+            epoch_loss_avg = epoch_loss / max(1, epoch_batches)
+            running_loss_avg = running_loss_total / max(1, running_batches_total)
 
             pbar.set_postfix(
-                loss=f"{running_loss_avg:.4f}",
+                loss=f"{epoch_loss_avg:.4f}",
+                run_loss=f"{running_loss_avg:.4f}",
                 lr=f"{current_lr:.2e}",
                 grad_norm=f"{last_grad_norm:.3f}",
                 step=global_step,
@@ -749,7 +756,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 _run_quick_validation(epoch, global_step, batch_idx, running_loss_avg)
         pbar.close()
 
-        train_loss = running_loss / max(1, train_batches)
+        train_loss = epoch_loss / max(1, epoch_batches)
         avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
         val_ap = _run_validation(epoch, global_step, "epoch", train_loss, avg_grad_norm)
         tqdm.write(
