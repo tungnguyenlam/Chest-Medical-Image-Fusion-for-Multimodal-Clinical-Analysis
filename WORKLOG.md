@@ -1011,3 +1011,15 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The plot script duplicates the group indices from `training/common.py` instead of importing them, because importing `training/common.py` would pull in torch/torchmetrics/dataloader dependencies just to render CSV plots. If class order changes in configs, both places must be updated together or the group labels will be wrong.
 
 **Follow-ups.** Consider moving class names and group definitions into a lightweight shared metadata module if this grouping is needed in more scripts.
+
+## 2026-05-26 - Recompute plotted running loss from step loss
+
+**Goal.** Fix old run plots that still showed epoch-boundary jumps because their CSVs already contained reset `train/loss_running` values from before the training logger fix.
+
+**Changes.**
+- `scripts/plot_run.py:69` - cast `train/loss_step` once and use it as the source for both rolling and running training-loss curves.
+- `scripts/plot_run.py:74` - replace the CSV `train/loss_running` fallback with `loss_step.expanding().mean()`, so the default running-loss plot is reconstructed continuously from raw step losses.
+
+**Reasoning.** Updating `training/common.py` only fixes future logs. Existing `train_steps.csv` files preserve the old epoch-reset running means, so plotting that column reproduces the visual cliff. Recomputing the running mean in the plotting script gives old and new runs the same continuous curve while keeping `--smooth` as the optional rolling-window view.
+
+**Gotchas.** If `log_every_n_steps > 1`, the reconstructed running mean is over logged step losses, not every batch loss. That is still preferable to plotting a known reset artifact and matches the data available in the CSV.

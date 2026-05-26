@@ -66,12 +66,14 @@ def plot_loss(train_df: pd.DataFrame | None, val_df: pd.DataFrame | None, smooth
         return
     fig, ax = plt.subplots(figsize=(9, 5), dpi=dpi)
     if train_df is not None and "train/loss_step" in train_df.columns:
-        ax.plot(train_df["global_step"], train_df["train/loss_step"], color="tab:blue", alpha=0.25, linewidth=0.6, label="train loss (step)")
+        loss_step = train_df["train/loss_step"].astype(float)
+        ax.plot(train_df["global_step"], loss_step, color="tab:blue", alpha=0.25, linewidth=0.6, label="train loss (step)")
         if smooth and smooth > 1 and len(train_df) >= smooth:
-            smoothed = train_df["train/loss_step"].rolling(smooth, min_periods=1).mean()
+            smoothed = loss_step.rolling(smooth, min_periods=1).mean()
             ax.plot(train_df["global_step"], smoothed, color="tab:blue", linewidth=1.4, label=f"train loss (rolling {smooth})")
-        elif "train/loss_running" in train_df.columns:
-            ax.plot(train_df["global_step"], train_df["train/loss_running"], color="tab:blue", linewidth=1.2, label="train loss (running mean)")
+        else:
+            running = loss_step.expanding(min_periods=1).mean()
+            ax.plot(train_df["global_step"], running, color="tab:blue", linewidth=1.2, label="train loss (running mean)")
     if val_df is not None and "val/loss" in val_df.columns:
         ax.plot(val_df["global_step"], val_df["val/loss"], "o-", color="tab:red", markersize=4, label="val loss")
     ax.set_xlabel("global step")
