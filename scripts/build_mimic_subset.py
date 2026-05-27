@@ -8,6 +8,7 @@ Run from the project root:
     python scripts/build_mimic_subset.py
     python scripts/build_mimic_subset.py --fraction 0.05 --skip-upload
     python scripts/build_mimic_subset.py --skip-copy --compression-level 0 --archive-threads 8
+    python scripts/build_mimic_subset.py --stage-mode symlink
     python scripts/build_mimic_subset.py --cpu-fraction 0.7
     python scripts/build_mimic_subset.py --skip-copy --volume-size 10g
     python scripts/build_mimic_subset.py --upload-existing
@@ -78,6 +79,11 @@ def parse_args() -> argparse.Namespace:
                         "large WSL/server uploads have been observed getting killed mid-transfer.")
     p.add_argument("--upload-existing", action="store_true",
                    help="Skip copy/archive and upload existing archive file(s) from --archive-dir")
+    p.add_argument("--stage-mode", choices=["copy", "symlink"], default="copy",
+                   help="How to stage selected files under data/<subset>/ before archiving. "
+                        "'copy' preserves the historical behavior. 'symlink' creates relative "
+                        "symlinks locally; 7z dereferences them by default so downloaded bundles "
+                        "still extract as regular files (default: copy)")
     p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree")
     p.add_argument("--skip-archive", action="store_true", help="Skip 7z step")
     p.add_argument("--skip-upload", action="store_true", help="Skip HuggingFace upload")
@@ -144,10 +150,36 @@ def copy_file(src: Path, dst: Path) -> tuple[bool, int]:
     return True, dst.stat().st_size
 
 
-def parallel_copy(pairs: list[tuple[Path, Path]], workers: int, desc: str) -> tuple[int, int, int]:
+def symlink_file(src: Path, dst: Path) -> tuple[bool, int]:
+    if not src.exists():
+        return False, 0
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        return True, dst.stat().st_size
+    if dst.is_symlink():
+        dst.unlink()
+    target = os.path.relpath(src.resolve(), start=dst.parent.resolve())
+    dst.symlink_to(target)
+    return True, src.stat().st_size
+
+
+def stage_file(src: Path, dst: Path, mode: str) -> tuple[bool, int]:
+    if mode == "copy":
+        return copy_file(src, dst)
+    if mode == "symlink":
+        return symlink_file(src, dst)
+    raise ValueError(f"Unsupported stage mode: {mode}")
+
+
+def parallel_stage(
+    pairs: list[tuple[Path, Path]],
+    workers: int,
+    desc: str,
+    mode: str,
+) -> tuple[int, int, int]:
     ok = missing = total_bytes = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = [ex.submit(copy_file, s, d) for s, d in pairs]
+        futs = [ex.submit(stage_file, s, d, mode) for s, d in pairs]
         for f in tqdm(as_completed(futs), total=len(futs), desc=desc):
             success, nbytes = f.result()
             if success:
@@ -199,6 +231,7 @@ def run_7z(
         f"-mx={compression_level} -mmt={archive_threads}{volume_display} "
         f"{archive.name} {' '.join(rels)}"
     )
+    print("  note: no -snl flag is used, so 7z stores symlink targets as regular files.")
     subprocess.run(cmd, cwd=str(workdir), check=True)
 
 
@@ -340,8 +373,8 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
              jpg_dst_path(jpg_dst_root, r.subject_id, r.study_id, r.dicom_id))
             for r in sub_split.itertuples(index=False)
         ]
-        ok_j, miss_j, bytes_j = parallel_copy(jpg_pairs, args.workers, "JPG")
-        print(f"  jpg copied: {ok_j} (missing {miss_j}) {bytes_j / 1e9:.2f} GB")
+        ok_j, miss_j, bytes_j = parallel_stage(jpg_pairs, args.workers, "JPG", args.stage_mode)
+        print(f"  jpg staged ({args.stage_mode}): {ok_j} (missing {miss_j}) {bytes_j / 1e9:.2f} GB")
 
         studies = sub_split[["subject_id", "study_id"]].drop_duplicates()
         txt_pairs = [
@@ -349,10 +382,10 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
              txt_dst_path(txt_dst_root, r.subject_id, r.study_id))
             for r in studies.itertuples(index=False)
         ]
-        ok_t, miss_t, bytes_t = parallel_copy(txt_pairs, args.workers, "TXT")
-        print(f"  txt copied: {ok_t} (missing {miss_t}) {bytes_t / 1e6:.1f} MB")
+        ok_t, miss_t, bytes_t = parallel_stage(txt_pairs, args.workers, "TXT", args.stage_mode)
+        print(f"  txt staged ({args.stage_mode}): {ok_t} (missing {miss_t}) {bytes_t / 1e6:.1f} MB")
 
-        # Mirror small JPG-side metadata CSVs (full copies; they're small and harmless).
+        # Mirror JPG-side metadata so the subset remains self-contained after extraction.
         for fname in [
             "mimic-cxr-2.0.0-metadata.csv",
             "mimic-cxr-2.0.0-metadata.csv.gz",
@@ -368,15 +401,13 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
             src = jpg_root / fname
             if src.exists():
                 dst = subset_root / "MIMIC-CXR-JPG" / fname
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst, follow_symlinks=True)
+                stage_file(src, dst, args.stage_mode)
 
         for fname in ["cxr-record-list.csv.gz", "cxr-study-list.csv.gz", "cxr-provider-list.csv.gz"]:
             src = txt_root / fname
             if src.exists():
                 dst = subset_root / "MIMIC-CXR" / fname
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst, follow_symlinks=True)
+                stage_file(src, dst, args.stage_mode)
 
         manifest = {
             "seed": args.seed,

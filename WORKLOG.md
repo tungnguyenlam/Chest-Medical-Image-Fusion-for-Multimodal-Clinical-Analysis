@@ -1057,3 +1057,26 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** Bare repo names now fail early with a clear message if `HF_USERNAME` is missing. Full `owner/name` values do not require `HF_USERNAME`.
 
 **Follow-ups.** If more scripts start resolving HuggingFace repos, consider moving this tiny resolver into a shared script utility.
+
+## 2026-05-27 - Add symlink staging for subset bundle builds
+
+**Goal.** Reduce temporary disk usage on the machine hosting the full MIMIC dataset when running `scripts/build_mimic_subset.py`, without changing the HuggingFace archive contract or the normal `download_subset.py` extraction behavior on rented training servers.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:82` - added `--stage-mode {copy,symlink}` with `copy` as the default so existing builds behave the same unless the lighter mode is requested.
+- `scripts/build_mimic_subset.py:153` - added relative symlink staging for source files; broken existing symlinks at the destination are replaced, while existing valid staged files are reused like the previous copy path.
+- `scripts/build_mimic_subset.py:166` - routed staging through `stage_file()` / `parallel_stage()` so JPGs, reports, and mirrored metadata can use either copies or symlinks.
+- `scripts/build_mimic_subset.py:234` - documented in the runtime archive log that the 7z command intentionally does not pass `-snl`, because default 7z behavior dereferences symlinks into regular files.
+- `scripts/build_mimic_subset.py:376` - changed JPG/report staging progress messages to report the selected staging mode.
+- `scripts/build_mimic_subset.py:388` - applied the selected staging mode to the copied MIMIC metadata/list files too, avoiding unnecessary duplicate local metadata files in symlink mode.
+
+**Reasoning.** `7z` supports `-snl` to store symbolic links as links, and local tests with 7-Zip 25.01 confirmed that omitting `-snl` stores symlink targets as regular files. This lets the dataset host keep `data/<subset>/` as a lightweight symlink tree while preserving the exact archive/extract shape expected by `download_subset.py`. I kept `copy` as the default instead of changing behavior globally, because existing scripts or partially staged subsets may rely on regular local files.
+
+**Assumptions.**
+- The source MIMIC/CXR files are immutable while the archive is being created; symlink mode reads the live target bytes at archive time.
+- The builder should still produce a normal 7z bundle for HF, not a symlink-dependent artifact.
+- Existing destination files under `data/<subset>/` should continue to be reused unless they are broken symlinks, matching the old non-overwriting copy behavior.
+
+**Gotchas.** If anyone later adds `-snl` to the 7z command, symlink-mode bundles would extract as symlinks and could be dangling on a rented server. The archive log now calls out this invariant. Symlink mode reduces the staged subset size but not the archive size; peak local storage is still full dataset plus archive volumes until upload cleanup is added.
+
+**Follow-ups.** Consider adding explicit `--cleanup-subset-after-upload` and `--cleanup-archive-after-upload` flags if local peak/retained storage remains painful after symlink staging.
