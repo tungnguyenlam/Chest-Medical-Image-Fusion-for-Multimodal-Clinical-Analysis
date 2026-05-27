@@ -1101,25 +1101,3 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** A machine can have `mimic-cxr-2.0.0-split.csv` in place while the actual `files/` tree is missing or lives under a different parent. In that case sampling still works, but staging must abort. If a user sees old output like `jpg copied:` instead of `jpg staged (...)`, they are running an older script and need to pull/update before relying on this guard.
 
 **Follow-ups.** If the full MIMIC files often live in alternate PhysioNet extraction layouts, consider adding explicit `--jpg-root` and `--report-root` overrides instead of requiring the current `--data-dir` convention.
-
-## 2026-05-27 - Preflight subset upload environment
-
-**Goal.** Fix the subset builder so missing or unread upload environment variables are detected before the expensive 7z archive step, after a run archived successfully but failed at HuggingFace repo resolution with `HF_USERNAME not set in .env`.
-
-**Changes.**
-- `scripts/build_mimic_subset.py:42` - added an explicit repo-root `.env` path based on the script location, rather than depending on python-dotenv's current-working-directory discovery.
-- `scripts/build_mimic_subset.py:306` - added shared env helpers that load `.env`, read process environment first, and fall back to parsed `.env` values when the process variable is blank or absent.
-- `scripts/build_mimic_subset.py:563` - moved `DATA_PASSWORD`, `HF_TOKEN`, and bare `--hf-repo`/`HF_USERNAME` validation ahead of staging/archive/upload work, so upload misconfiguration fails immediately.
-- `scripts/build_mimic_subset.py:587` - print the resolved HuggingFace repo id in the upload banner instead of the unresolved bare name.
-- `scripts/download_subset.py:25` and `scripts/download_subset.py:78` - mirrored the explicit `.env` path and lookup helpers for downloads.
-- `README.md:36` - updated setup guidance to mention `HF_USERNAME` alongside `HF_TOKEN` and `DATA_PASSWORD`.
-
-**Reasoning.** The script already called `load_dotenv()`, but checking `HF_USERNAME` only after archiving meant a configuration problem could waste a full archive run. Reading the repo-root `.env` explicitly also avoids subtle failures from cwd discovery or an exported empty shell variable masking the file value. I kept the bare repo + `HF_USERNAME` contract from the previous change instead of falling back to HuggingFace `whoami`, because that would add a network call to local preflight and make org-owned repos ambiguous.
-
-**Assumptions.**
-- A bare `--hf-repo` still means `HF_USERNAME/<repo>`; users can pass `owner/name` to bypass `HF_USERNAME`.
-- Non-empty process environment values should continue to override `.env`, but blank process values should not hide valid file values.
-
-**Gotchas.** `--skip-archive` without `--upload-existing` and without `--skip-upload` now fails before doing any work, because that combination cannot produce uploadable archive paths. The earlier 0.78 GB archive from the failed run can be uploaded directly with `python scripts/build_mimic_subset.py --upload-existing --archive-name bundle-a3f9.7z --single-archive` if that single archive is the intended artifact; split-volume builds can just use `--upload-existing` with the default volume naming.
-
-**Follow-ups.** Consider extracting the duplicated env helpers into a tiny script utility if more dataset scripts need HuggingFace credentials.
