@@ -19,7 +19,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import cpu_count
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_PATH = PROJECT_ROOT / ".env"
 
 
 def _workers_from_cpu_fraction(fraction: float) -> int:
@@ -71,12 +75,34 @@ def repo_archive_names(repo_files: list[str], archive_name: str) -> list[str]:
     return []
 
 
-def resolve_hf_repo_id(repo_id: str) -> str:
+def load_project_env() -> dict[str, str | None]:
+    load_dotenv(ENV_PATH)
+    return dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
+
+
+def env_value(name: str, env_file: dict[str, str | None]) -> str | None:
+    value = os.environ.get(name)
+    if value and value.strip():
+        return value.strip()
+    value = env_file.get(name)
+    if value and value.strip():
+        return value.strip()
+    return None
+
+
+def require_env(name: str, env_file: dict[str, str | None]) -> str:
+    value = env_value(name, env_file)
+    if not value:
+        sys.exit(f"{name} not set in {ENV_PATH}")
+    return value
+
+
+def resolve_hf_repo_id(repo_id: str, env_file: dict[str, str | None]) -> str:
     if "/" in repo_id:
         return repo_id
-    username = os.environ.get("HF_USERNAME", "").strip()
+    username = env_value("HF_USERNAME", env_file)
     if not username:
-        sys.exit("HF_USERNAME not set in .env; set it or pass --hf-repo owner/name")
+        sys.exit(f"HF_USERNAME not set in {ENV_PATH}; set it or pass --hf-repo owner/name")
     resolved = f"{username}/{repo_id}"
     print(f"Resolved HuggingFace repo: {repo_id} -> {resolved}")
     return resolved
@@ -160,17 +186,13 @@ def extract_archive(archive_path: Path, *, data_dir: Path, password: str, extrac
 
 def main() -> int:
     args = parse_args()
-    load_dotenv()
+    env_file = load_project_env()
 
     if not Path("camchex").is_dir():
         sys.exit("Run from project root.")
 
-    token = os.environ.get("HF_TOKEN")
-    password = os.environ.get("DATA_PASSWORD")
-    if not token:
-        sys.exit("HF_TOKEN not set in .env")
-    if not password:
-        sys.exit("DATA_PASSWORD not set in .env")
+    token = require_env("HF_TOKEN", env_file)
+    password = require_env("DATA_PASSWORD", env_file)
 
     from huggingface_hub import HfApi
 
@@ -178,7 +200,7 @@ def main() -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
 
     api = HfApi(token=token)
-    args.hf_repo = resolve_hf_repo_id(args.hf_repo)
+    args.hf_repo = resolve_hf_repo_id(args.hf_repo, env_file)
     repo_files = api.list_repo_files(repo_id=args.hf_repo, repo_type="dataset", token=token)
     archive_names = repo_archive_names(repo_files, args.archive_name)
     if not archive_names:

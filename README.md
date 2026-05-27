@@ -33,7 +33,7 @@ Copy the env template if you'll bundle/upload subsets or pull a private HF datas
 
 ```bash
 cp .env.example .env
-# fill in HF_TOKEN and DATA_PASSWORD
+# fill in HF_TOKEN, HF_USERNAME, and DATA_PASSWORD
 ```
 
 ## Repository layout

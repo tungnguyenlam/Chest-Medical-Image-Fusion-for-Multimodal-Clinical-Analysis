@@ -35,8 +35,12 @@ def _workers_from_cpu_fraction(fraction: float) -> int:
 
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from tqdm import tqdm
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_PATH = PROJECT_ROOT / ".env"
 
 
 def parse_args() -> argparse.Namespace:
@@ -299,12 +303,34 @@ def remove_archive_outputs(archive: Path) -> None:
         part.unlink()
 
 
-def resolve_hf_repo_id(repo_id: str) -> str:
+def load_project_env() -> dict[str, str | None]:
+    load_dotenv(ENV_PATH)
+    return dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
+
+
+def env_value(name: str, env_file: dict[str, str | None]) -> str | None:
+    value = os.environ.get(name)
+    if value and value.strip():
+        return value.strip()
+    value = env_file.get(name)
+    if value and value.strip():
+        return value.strip()
+    return None
+
+
+def require_env(name: str, env_file: dict[str, str | None]) -> str:
+    value = env_value(name, env_file)
+    if not value:
+        sys.exit(f"{name} not set in {ENV_PATH}")
+    return value
+
+
+def resolve_hf_repo_id(repo_id: str, env_file: dict[str, str | None]) -> str:
     if "/" in repo_id:
         return repo_id
-    username = os.environ.get("HF_USERNAME", "").strip()
+    username = env_value("HF_USERNAME", env_file)
     if not username:
-        sys.exit("HF_USERNAME not set in .env; set it or pass --hf-repo owner/name")
+        sys.exit(f"HF_USERNAME not set in {ENV_PATH}; set it or pass --hf-repo owner/name")
     resolved = f"{username}/{repo_id}"
     print(f"Resolved HuggingFace repo: {repo_id} -> {resolved}")
     return resolved
@@ -366,7 +392,6 @@ def upload_to_hf(
 
     from huggingface_hub import HfApi, create_repo
     api = HfApi(token=token)
-    repo_id = resolve_hf_repo_id(repo_id)
     if preserve_history:
         print(f"Preserving existing HuggingFace dataset repo history for {repo_id}.")
     else:
@@ -379,7 +404,13 @@ def upload_to_hf(
         print(f"Uploaded {archive.name} to dataset repo {repo_id}.")
 
 
-def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volume_size: str | None) -> list[Path]:
+def build_archives(
+    args: argparse.Namespace,
+    data_dir: Path,
+    archive: Path,
+    volume_size: str | None,
+    password: str | None,
+) -> list[Path]:
     jpg_root = data_dir / "MIMIC-CXR-JPG"
     txt_root = data_dir / "MIMIC-CXR"
     split_csv = jpg_root / "mimic-cxr-2.0.0-split.csv"
@@ -482,9 +513,8 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
     if args.archive_threads < 1:
         sys.exit("--archive-threads must be >= 1")
 
-    password = os.environ.get("DATA_PASSWORD")
     if not password:
-        sys.exit("DATA_PASSWORD not set in .env")
+        sys.exit(f"DATA_PASSWORD not set in {ENV_PATH}")
 
     remove_archive_outputs(archive)
 
@@ -516,7 +546,7 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
 
 def main() -> int:
     args = parse_args()
-    load_dotenv()
+    env_file = load_project_env()
 
     if not Path("camchex").is_dir() or not Path("data").is_dir():
         sys.exit("Run from project root.")
@@ -526,6 +556,18 @@ def main() -> int:
     archive_dir.mkdir(parents=True, exist_ok=True)
     archive = (archive_dir / args.archive_name).resolve()
     volume_size = None if args.single_archive else args.volume_size
+    password = None
+    token = None
+    hf_repo = args.hf_repo
+
+    if not args.upload_existing and not args.skip_archive and not args.dry_run:
+        password = require_env("DATA_PASSWORD", env_file)
+
+    if not args.skip_upload and not args.dry_run:
+        if args.skip_archive and not args.upload_existing:
+            sys.exit("No archive outputs will be produced. Use --upload-existing to upload existing files.")
+        token = require_env("HF_TOKEN", env_file)
+        hf_repo = resolve_hf_repo_id(args.hf_repo, env_file)
 
     if args.upload_existing:
         archives = discover_existing_archives(archive)
@@ -534,7 +576,7 @@ def main() -> int:
         print(f"Using existing archive output(s) from {archive.parent}")
         print_archive_summary(archives)
     else:
-        archives = build_archives(args, data_dir, archive, volume_size)
+        archives = build_archives(args, data_dir, archive, volume_size, password)
 
     if args.skip_upload or args.dry_run:
         return 0
@@ -542,15 +584,11 @@ def main() -> int:
     if not archives:
         sys.exit("No archive outputs available to upload. Use --upload-existing to upload existing files.")
 
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        sys.exit("HF_TOKEN not set in .env")
-
     visibility = "PUBLIC" if args.public else "private"
-    print(f"Uploading to HuggingFace dataset repo: {args.hf_repo} ({visibility})")
+    print(f"Uploading to HuggingFace dataset repo: {hf_repo} ({visibility})")
     upload_to_hf(
         archives,
-        args.hf_repo,
+        hf_repo,
         token,
         private=not args.public,
         preserve_history=args.preserve_hf_history,
