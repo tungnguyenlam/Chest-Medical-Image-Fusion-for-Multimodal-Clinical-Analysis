@@ -84,6 +84,9 @@ def parse_args() -> argparse.Namespace:
                         "'copy' preserves the historical behavior. 'symlink' creates relative "
                         "symlinks locally; 7z dereferences them by default so downloaded bundles "
                         "still extract as regular files (default: copy)")
+    p.add_argument("--allow-missing-files", action="store_true",
+                   help="Continue even if sampled JPG/report files are missing. By default the "
+                        "script aborts before archiving/uploading any incomplete subset.")
     p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree")
     p.add_argument("--skip-archive", action="store_true", help="Skip 7z step")
     p.add_argument("--skip-upload", action="store_true", help="Skip HuggingFace upload")
@@ -188,6 +191,36 @@ def parallel_stage(
             else:
                 missing += 1
     return ok, missing, total_bytes
+
+
+def require_source_dir(path: Path, label: str) -> None:
+    if path.is_dir():
+        return
+    sys.exit(
+        f"Missing expected {label} source directory: {path}\n"
+        f"Check --data-dir and the full MIMIC layout. Expected files under: {path}"
+    )
+
+
+def validate_stage_counts(
+    label: str,
+    ok: int,
+    missing: int,
+    expected: int,
+    example_src: Path,
+    allow_missing: bool,
+) -> None:
+    if missing == 0:
+        return
+    message = (
+        f"{label} staging is incomplete: staged {ok}/{expected}, missing {missing}.\n"
+        f"Example expected source path: {example_src}\n"
+        "Aborting before archive/upload so a broken subset is not published."
+    )
+    if allow_missing:
+        print(f"  warning: {message}")
+        return
+    sys.exit(message)
 
 
 def patient_hash(patients: set[int]) -> str:
@@ -368,22 +401,43 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
     if not args.skip_copy:
         subset_root.mkdir(parents=True, exist_ok=True)
 
+        jpg_src_root = jpg_root / "files"
+        txt_src_root = txt_root / "files"
+        require_source_dir(jpg_src_root, "JPG")
+        require_source_dir(txt_src_root, "report")
+
         jpg_pairs = [
-            (jpg_src_path(jpg_root / "files", r.subject_id, r.study_id, r.dicom_id),
+            (jpg_src_path(jpg_src_root, r.subject_id, r.study_id, r.dicom_id),
              jpg_dst_path(jpg_dst_root, r.subject_id, r.study_id, r.dicom_id))
             for r in sub_split.itertuples(index=False)
         ]
         ok_j, miss_j, bytes_j = parallel_stage(jpg_pairs, args.workers, "JPG", args.stage_mode)
         print(f"  jpg staged ({args.stage_mode}): {ok_j} (missing {miss_j}) {bytes_j / 1e9:.2f} GB")
+        validate_stage_counts(
+            "JPG",
+            ok_j,
+            miss_j,
+            len(jpg_pairs),
+            jpg_pairs[0][0] if jpg_pairs else jpg_src_root,
+            args.allow_missing_files,
+        )
 
         studies = sub_split[["subject_id", "study_id"]].drop_duplicates()
         txt_pairs = [
-            (txt_src_path(txt_root / "files", r.subject_id, r.study_id),
+            (txt_src_path(txt_src_root, r.subject_id, r.study_id),
              txt_dst_path(txt_dst_root, r.subject_id, r.study_id))
             for r in studies.itertuples(index=False)
         ]
         ok_t, miss_t, bytes_t = parallel_stage(txt_pairs, args.workers, "TXT", args.stage_mode)
         print(f"  txt staged ({args.stage_mode}): {ok_t} (missing {miss_t}) {bytes_t / 1e6:.1f} MB")
+        validate_stage_counts(
+            "TXT",
+            ok_t,
+            miss_t,
+            len(txt_pairs),
+            txt_pairs[0][0] if txt_pairs else txt_src_root,
+            args.allow_missing_files,
+        )
 
         # Mirror JPG-side metadata so the subset remains self-contained after extraction.
         for fname in [

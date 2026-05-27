@@ -1080,3 +1080,24 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** If anyone later adds `-snl` to the 7z command, symlink-mode bundles would extract as symlinks and could be dangling on a rented server. The archive log now calls out this invariant. Symlink mode reduces the staged subset size but not the archive size; peak local storage is still full dataset plus archive volumes until upload cleanup is added.
 
 **Follow-ups.** Consider adding explicit `--cleanup-subset-after-upload` and `--cleanup-archive-after-upload` flags if local peak/retained storage remains painful after symlink staging.
+
+## 2026-05-27 - Abort subset builds when sampled files are missing
+
+**Goal.** Prevent `scripts/build_mimic_subset.py` from publishing a broken HuggingFace bundle when the split CSV exists but the expected MIMIC JPG/report file tree is absent or mismatched. The triggering run sampled 190,174 images and 114,937 reports, found zero of them, then archived/uploaded only the companion datasets.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:87` - added `--allow-missing-files` as an explicit escape hatch for best-effort builds; default behavior is now strict.
+- `scripts/build_mimic_subset.py:196` - added a source-root preflight check for `MIMIC-CXR-JPG/files` and `MIMIC-CXR/files` so an obviously wrong `--data-dir` or dataset layout fails before staging.
+- `scripts/build_mimic_subset.py:205` - added staged-file count validation that prints the staged/missing counts and one concrete expected source path before aborting.
+- `scripts/build_mimic_subset.py:404` - wired the source-root checks into the normal copy/symlink staging path.
+- `scripts/build_mimic_subset.py:416` and `scripts/build_mimic_subset.py:433` - abort after JPG or report staging if any sampled files are missing, before manifest/archive/upload.
+
+**Reasoning.** The previous script treated missing source files as tolerable and only surfaced them in progress summaries, which made it possible to delete/recreate the HF repo with an incomplete archive. A strict default is safer for this dataset pipeline because label prep and training expect the sampled subset to be self-contained after download. I used an opt-in `--allow-missing-files` rather than deleting the best-effort behavior entirely, in case a future diagnostic or intentionally partial build needs it.
+
+**Assumptions.**
+- Normal MIMIC source layout is `data/MIMIC-CXR-JPG/files/...` and `data/MIMIC-CXR/files/...` under the selected `--data-dir`.
+- Any missing sampled image/report should be treated as a build failure unless the user explicitly opts out.
+
+**Gotchas.** A machine can have `mimic-cxr-2.0.0-split.csv` in place while the actual `files/` tree is missing or lives under a different parent. In that case sampling still works, but staging must abort. If a user sees old output like `jpg copied:` instead of `jpg staged (...)`, they are running an older script and need to pull/update before relying on this guard.
+
+**Follow-ups.** If the full MIMIC files often live in alternate PhysioNet extraction layouts, consider adding explicit `--jpg-root` and `--report-root` overrides instead of requiring the current `--data-dir` convention.
