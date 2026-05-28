@@ -38,6 +38,13 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        sys.exit(f"{name} not set in .env")
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data-dir", default="data", help="Project data/ directory (default: data)")
@@ -233,10 +240,9 @@ def remove_archive_outputs(archive: Path) -> None:
         part.unlink()
 
 
-def resolve_hf_repo_id(repo_id: str) -> str:
+def resolve_hf_repo_id(repo_id: str, username: str) -> str:
     if "/" in repo_id:
         return repo_id
-    username = os.environ.get("HF_USERNAME", "").strip()
     if not username:
         sys.exit("HF_USERNAME not set in .env; set it or pass --hf-repo owner/name")
     resolved = f"{username}/{repo_id}"
@@ -288,6 +294,7 @@ def upload_to_hf(
     archives: list[Path],
     repo_id: str,
     token: str,
+    username: str,
     private: bool = True,
     preserve_history: bool = False,
     use_xet: bool = False,
@@ -300,7 +307,7 @@ def upload_to_hf(
 
     from huggingface_hub import HfApi, create_repo
     api = HfApi(token=token)
-    repo_id = resolve_hf_repo_id(repo_id)
+    repo_id = resolve_hf_repo_id(repo_id, username)
     if preserve_history:
         print(f"Preserving existing HuggingFace dataset repo history for {repo_id}.")
     else:
@@ -397,9 +404,7 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
     if args.archive_threads < 1:
         sys.exit("--archive-threads must be >= 1")
 
-    password = os.environ.get("DATA_PASSWORD")
-    if not password:
-        sys.exit("DATA_PASSWORD not set in .env")
+    password = require_env("DATA_PASSWORD")
 
     remove_archive_outputs(archive)
 
@@ -457,9 +462,8 @@ def main() -> int:
     if not archives:
         sys.exit("No archive outputs available to upload. Use --upload-existing to upload existing files.")
 
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        sys.exit("HF_TOKEN not set in .env")
+    token = require_env("HF_TOKEN")
+    username = os.environ.get("HF_USERNAME", "").strip()
 
     visibility = "PUBLIC" if args.public else "private"
     print(f"Uploading to HuggingFace dataset repo: {args.hf_repo} ({visibility})")
@@ -467,6 +471,7 @@ def main() -> int:
         archives,
         args.hf_repo,
         token,
+        username,
         private=not args.public,
         preserve_history=args.preserve_hf_history,
         use_xet=args.hf_use_xet,

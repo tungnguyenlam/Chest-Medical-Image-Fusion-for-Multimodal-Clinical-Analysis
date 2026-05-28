@@ -22,6 +22,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        sys.exit(f"{name} not set in .env")
+    return value
+
+
 def _workers_from_cpu_fraction(fraction: float) -> int:
     """Visible CPU cores multiplied by fraction, floored at 1."""
     return max(1, int(cpu_count() * fraction))
@@ -71,10 +78,9 @@ def repo_archive_names(repo_files: list[str], archive_name: str) -> list[str]:
     return []
 
 
-def resolve_hf_repo_id(repo_id: str) -> str:
+def resolve_hf_repo_id(repo_id: str, username: str) -> str:
     if "/" in repo_id:
         return repo_id
-    username = os.environ.get("HF_USERNAME", "").strip()
     if not username:
         sys.exit("HF_USERNAME not set in .env; set it or pass --hf-repo owner/name")
     resolved = f"{username}/{repo_id}"
@@ -165,12 +171,9 @@ def main() -> int:
     if not Path("camchex").is_dir():
         sys.exit("Run from project root.")
 
-    token = os.environ.get("HF_TOKEN")
-    password = os.environ.get("DATA_PASSWORD")
-    if not token:
-        sys.exit("HF_TOKEN not set in .env")
-    if not password:
-        sys.exit("DATA_PASSWORD not set in .env")
+    token = require_env("HF_TOKEN")
+    username = os.environ.get("HF_USERNAME", "").strip()
+    password = require_env("DATA_PASSWORD")
 
     from huggingface_hub import HfApi
 
@@ -178,7 +181,7 @@ def main() -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
 
     api = HfApi(token=token)
-    args.hf_repo = resolve_hf_repo_id(args.hf_repo)
+    args.hf_repo = resolve_hf_repo_id(args.hf_repo, username)
     repo_files = api.list_repo_files(repo_id=args.hf_repo, repo_type="dataset", token=token)
     archive_names = repo_archive_names(repo_files, args.archive_name)
     if not archive_names:

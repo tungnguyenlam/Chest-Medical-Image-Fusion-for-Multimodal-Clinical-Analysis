@@ -1057,3 +1057,20 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** Bare repo names now fail early with a clear message if `HF_USERNAME` is missing. Full `owner/name` values do not require `HF_USERNAME`.
 
 **Follow-ups.** If more scripts start resolving HuggingFace repos, consider moving this tiny resolver into a shared script utility.
+
+## 2026-05-28 - Load Hugging Face credentials from `.env`
+
+**Goal.** Update the subset upload/download scripts so Hugging Face repo ownership and API auth come from `.env`, avoiding a fixed username in script logic.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:41` - added `require_env()` for required `.env` values such as `HF_TOKEN` and `DATA_PASSWORD`.
+- `scripts/build_mimic_subset.py:243` - changed bare HF repo resolution to accept the loaded `HF_USERNAME` instead of reading or hard-coding ownership inside the helper.
+- `scripts/build_mimic_subset.py:293` - passed the loaded username through upload setup so `tung-thesis` resolves to `${HF_USERNAME}/tung-thesis`.
+- `scripts/download_subset.py:25` - added matching required-env handling for download credentials.
+- `scripts/download_subset.py:81` - changed download repo resolution to use the `.env` username for bare repo names.
+
+**Reasoning.** Keeping token/password validation centralized reduces drift between the two scripts, while passing `HF_USERNAME` into repo resolution makes the owner dependency explicit. Full `owner/name` values passed via `--hf-repo` still bypass `HF_USERNAME`, preserving the previous escape hatch for alternate users or org repos.
+
+**Gotchas.** `load_dotenv()` still runs after argument parsing, so only runtime credential resolution uses `.env`; argparse defaults and help text remain static. Bare repo names now require `HF_USERNAME` to be present in `.env` at upload/download time.
+
+**Follow-ups.** If more scripts start using Hugging Face credentials, consider promoting the env/repo resolution helper into a shared utility rather than duplicating it.
