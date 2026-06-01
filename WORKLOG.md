@@ -1115,3 +1115,23 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The first pasted error (`No module named 'numpy'`) was from running outside the `camchex` conda environment. The second default-subset error means `data/subset/MIMIC-CXR-JPG/mimic-cxr-2.0.0-metadata.csv` is absent, so either the subset bundle has not been extracted/built or the full run should be used intentionally. The very high report parsing rate on the full run strongly suggests `data/MIMIC-CXR/files/.../*.txt` is missing or not laid out as expected on that server.
 
 **Verification.** Ran `python -m py_compile src/prepare/01_make_dataset.py` and a small pandas dtype reproduction confirming an all-missing `report` column remains `object`.
+
+## 2026-06-01 - Add model parameter summary utility
+
+**Goal.** Create a presentation-friendly way to print the active model architecture summary and parameter counts for each major module and the whole model.
+
+**Changes.**
+- `scripts/model_summary.py:1` - added a standalone CLI for `singleview`, `camchex`, `camchex_cxrbert`, `prior_aware`, and `prior_aware_cxrbert` configs.
+- `scripts/model_summary.py:55` - patch BioBERT construction during summary runs to build from config instead of loading pretrained weights; falls back to the BERT-base/BioBERT v1.1 shape when the HF config is not cached.
+- `scripts/model_summary.py:76` - instantiate the right root `src/model` class from the training config while forcing timm `pretrained=False` by default because weights do not affect parameter counts.
+- `scripts/model_summary.py:132` - added recursive child-module parameter tables with total, trainable, frozen, and percentage share; supports plain terminal output and Markdown for slides/docs.
+
+**Reasoning.** A custom script is lighter than adding `torchinfo` just for parameter counts, and it follows the repo's existing training configs so the summary matches the actual experiment variants. The default avoids large checkpoint downloads because presentation counts only depend on architecture. I kept `--use-pretrained` available for cases where someone explicitly wants to instantiate the real pretrained objects.
+
+**Assumptions.**
+- BioBERT v1.1 can be represented by the standard BERT-base shape (`vocab_size=28996`, hidden size 768, 12 layers) for offline parameter counting when no local Hugging Face config is available.
+- Parameter-count summaries do not need a forward pass, so the script does not create dummy image/text batches or validate tensor shapes.
+
+**Gotchas.** The MLDecoder query embedding is intentionally frozen, which is why summaries show 19,968 frozen parameters even though the rest of the model is trainable. The text encoder is shared across clinical and observation streams, so its parameters are counted once, not twice.
+
+**Verification.** Ran `python -m py_compile scripts/model_summary.py`, `python scripts/model_summary.py --model singleview --depth 1`, `python scripts/model_summary.py --model camchex --depth 1`, and `python scripts/model_summary.py --model prior_aware --depth 1 --format markdown`.
