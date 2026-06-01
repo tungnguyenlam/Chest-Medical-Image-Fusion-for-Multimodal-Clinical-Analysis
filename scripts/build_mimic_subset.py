@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Build a deterministic patient-level subset of MIMIC-CXR-JPG + MIMIC-CXR reports,
-bundle it with CXR-LT and MIMIC-IV-ED-2-2 into a password-protected 7z archive,
-and optionally upload to a private HuggingFace dataset repo.
+or bundle the full dataset roots directly, with CXR-LT and MIMIC-IV-ED-2-2 into
+a password-protected 7z archive, and optionally upload to a private HuggingFace
+dataset repo.
 
 Run from the project root:
     python scripts/build_mimic_subset.py
@@ -11,6 +12,7 @@ Run from the project root:
     python scripts/build_mimic_subset.py --cpu-fraction 0.7
     python scripts/build_mimic_subset.py --skip-copy --volume-size 10g
     python scripts/build_mimic_subset.py --upload-existing
+    python scripts/build_mimic_subset.py --bundle-mode full --archive-name full-bundle.7z
 
 Reads HF_TOKEN, HF_USERNAME, and DATA_PASSWORD from .env (see .env.example).
 """
@@ -49,10 +51,14 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data-dir", default="data", help="Project data/ directory (default: data)")
     p.add_argument("--seed", type=int, default=42, help="RNG seed for patient sampling (default: 42)")
-    p.add_argument("--fraction", type=float, default=0.1, help="Patient fraction to sample (default: 0.1)")
+    p.add_argument("--fraction", type=float, default=0.1,
+                   help="Patient fraction to sample in subset mode (default: 0.1)")
     p.add_argument("--subset-name", default=None,
                    help="Subset folder name under data/ (default: derived as 'subset' for the canonical 10%% bundle, "
                         "otherwise 'subset_seed{seed}_{pct}pct')")
+    p.add_argument("--bundle-mode", choices=["subset", "full"], default="subset",
+                   help="Bundle a sampled subset, or archive the full dataset roots directly without staging "
+                        "(default: subset)")
     p.add_argument("--archive-name", default="bundle-a3f9.7z",
                    help="Output archive filename (default: bundle-a3f9.7z)")
     p.add_argument("--archive-dir", default="data/_bundles",
@@ -85,7 +91,7 @@ def parse_args() -> argparse.Namespace:
                         "large WSL/server uploads have been observed getting killed mid-transfer.")
     p.add_argument("--upload-existing", action="store_true",
                    help="Skip copy/archive and upload existing archive file(s) from --archive-dir")
-    p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree")
+    p.add_argument("--skip-copy", action="store_true", help="Reuse existing data/<subset>/ tree in subset mode")
     p.add_argument("--skip-archive", action="store_true", help="Skip 7z step")
     p.add_argument("--skip-upload", action="store_true", help="Skip HuggingFace upload")
     p.add_argument("--dry-run", action="store_true", help="Sample + print stats, then exit")
@@ -240,6 +246,49 @@ def remove_archive_outputs(archive: Path) -> None:
         part.unlink()
 
 
+def companion_sources(data_dir: Path) -> list[Path]:
+    sources = []
+    for companion in ["CXR-LT", "MIMIC-IV-ED-2-2"]:
+        path = data_dir / companion
+        if path.exists():
+            sources.append(path)
+        else:
+            print(f"  warning: {path} missing; not bundled")
+    return sources
+
+
+def archive_sources(
+    sources: list[Path],
+    *,
+    archive: Path,
+    data_dir: Path,
+    args: argparse.Namespace,
+    volume_size: str | None,
+) -> list[Path]:
+    if args.archive_threads < 1:
+        sys.exit("--archive-threads must be >= 1")
+
+    password = require_env("DATA_PASSWORD")
+
+    remove_archive_outputs(archive)
+
+    print(f"Archiving -> {archive}")
+    run_7z(
+        archive,
+        sources,
+        password,
+        data_dir.resolve(),
+        args.compression_level,
+        args.archive_threads,
+        volume_size,
+    )
+    archives = archive_outputs(archive, volume_size)
+    if not archives:
+        sys.exit(f"No archive outputs found for {archive}")
+    print_archive_summary(archives)
+    return archives
+
+
 def resolve_hf_repo_id(repo_id: str, username: str) -> str:
     if "/" in repo_id:
         return repo_id
@@ -323,6 +372,21 @@ def upload_to_hf(
 def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volume_size: str | None) -> list[Path]:
     jpg_root = data_dir / "MIMIC-CXR-JPG"
     txt_root = data_dir / "MIMIC-CXR"
+
+    if args.bundle_mode == "full":
+        required_sources = [jpg_root, txt_root]
+        missing = [path for path in required_sources if not path.exists()]
+        if missing:
+            sys.exit("Missing full dataset source(s): " + ", ".join(str(path) for path in missing))
+
+        print("Bundle mode: full -> archiving full dataset roots directly (no subset staging)")
+        sources = [*required_sources, *companion_sources(data_dir)]
+        for source in sources:
+            print(f"  source: {source}")
+        if args.dry_run or args.skip_archive:
+            return []
+        return archive_sources(sources, archive=archive, data_dir=data_dir, args=args, volume_size=volume_size)
+
     split_csv = jpg_root / "mimic-cxr-2.0.0-split.csv"
     if not split_csv.exists():
         sys.exit(f"Missing {split_csv}")
@@ -401,37 +465,9 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
     if args.skip_archive:
         return []
 
-    if args.archive_threads < 1:
-        sys.exit("--archive-threads must be >= 1")
-
-    password = require_env("DATA_PASSWORD")
-
-    remove_archive_outputs(archive)
-
     # 7z sources, all relative to data_dir so the archive extracts straight into data/.
-    sources = [subset_root]
-    for companion in ["CXR-LT", "MIMIC-IV-ED-2-2"]:
-        path = data_dir / companion
-        if path.exists():
-            sources.append(path)
-        else:
-            print(f"  warning: {path} missing; not bundled")
-
-    print(f"Archiving -> {archive}")
-    run_7z(
-        archive,
-        sources,
-        password,
-        data_dir.resolve(),
-        args.compression_level,
-        args.archive_threads,
-        volume_size,
-    )
-    archives = archive_outputs(archive, volume_size)
-    if not archives:
-        sys.exit(f"No archive outputs found for {archive}")
-    print_archive_summary(archives)
-    return archives
+    sources = [subset_root, *companion_sources(data_dir)]
+    return archive_sources(sources, archive=archive, data_dir=data_dir, args=args, volume_size=volume_size)
 
 
 def main() -> int:

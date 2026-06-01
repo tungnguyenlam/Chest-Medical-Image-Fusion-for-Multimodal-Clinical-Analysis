@@ -192,12 +192,20 @@ with mp_ctx.Pool(n_workers) as pool:
     ))
 
 # Apply parsed results back to DataFrame
+parsed_report_count = 0
 for result in results:
     if result is None:
         continue
     idx = result.pop('_idx')
+    parsed_report_count += 1
     for col, val in result.items():
         mimic_df.at[idx, col] = val
+
+if parsed_report_count == 0:
+    print(
+        "Warning: no report files were parsed. Check that "
+        f"{reports_base_path}/pXX/pXXXXXXXX/sXXXXXXXX.txt exists for this source."
+    )
 
 print("Saving progress checkpoint...")
 mimic_df.to_csv(f'{DATA_CAMCHEX_ROOT}/01_progress.csv', index=False)
@@ -209,13 +217,16 @@ def choose_report(row):
             return row[col]
     return np.nan
 
-mimic_df['report'] = mimic_df.apply(choose_report, axis=1)
+mimic_df['report'] = mimic_df.apply(choose_report, axis=1).astype('object')
 
 for study_id_str, section_name in custom_section_names.items():
     sid = int(study_id_str[1:])
     if section_name in mimic_df.columns:
-        mimic_df.loc[mimic_df['study_id'] == sid, 'report'] = mimic_df.loc[mimic_df['study_id'] == sid, section_name]
-        mimic_df.loc[mimic_df['study_id'] == sid, section_name] = np.nan
+        study_mask = mimic_df['study_id'] == sid
+        section_values = mimic_df.loc[study_mask, section_name].dropna()
+        if not section_values.empty:
+            mimic_df.loc[study_mask, 'report'] = section_values.astype('object')
+            mimic_df.loc[study_mask, section_name] = np.nan
 
 def merge_clinical_indication(row):
     ind  = str(row['indication']) if pd.notna(row['indication']) else ''

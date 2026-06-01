@@ -1074,3 +1074,44 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `load_dotenv()` still runs after argument parsing, so only runtime credential resolution uses `.env`; argparse defaults and help text remain static. Bare repo names now require `HF_USERNAME` to be present in `.env` at upload/download time.
 
 **Follow-ups.** If more scripts start using Hugging Face credentials, consider promoting the env/repo resolution helper into a shared utility rather than duplicating it.
+
+## 2026-05-30 - Add full dataset bundle mode
+
+**Goal.** Let `scripts/build_mimic_subset.py` upload a full dataset bundle without treating `--fraction 1` as a special auto-detected case and without copying the full MIMIC tree into a subset staging directory.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:3` - updated the CLI description/examples so the script advertises both subset bundling and direct full-root bundling.
+- `scripts/build_mimic_subset.py:59` - added `--bundle-mode {subset,full}`, defaulting to the existing subset behavior; `--fraction` and `--skip-copy` help now call out that they apply to subset mode.
+- `scripts/build_mimic_subset.py:249` - added `companion_sources()` so `CXR-LT` and `MIMIC-IV-ED-2-2` selection stays shared between modes.
+- `scripts/build_mimic_subset.py:260` - factored the common 7z/archive-output path into `archive_sources()` so full mode and subset mode keep the same encryption, volume splitting, compression, and summary behavior.
+- `scripts/build_mimic_subset.py:376` - added full mode: require `data/MIMIC-CXR-JPG` and `data/MIMIC-CXR`, archive those roots directly, include existing companion datasets, and skip subset sampling/copying/staging.
+- `scripts/build_mimic_subset.py:469` - kept subset mode archiving the staged subset folder plus companions via the shared archive helper.
+
+**Reasoning.** An explicit `--bundle-mode full` is safer than auto-detecting `--fraction 1` because the two operations have very different storage behavior. `--fraction 1` in subset semantics means “sample every patient and materialize a subset-style tree,” while full mode means “archive existing source roots directly.” Keeping them separate prevents a small-looking fraction change from silently triggering hundreds of GB of duplicate SSD writes.
+
+**Assumptions.**
+- Full mode should archive `MIMIC-CXR-JPG/` and `MIMIC-CXR/` at the archive root, alongside any available `CXR-LT/` and `MIMIC-IV-ED-2-2/`, so extraction into `data/` recreates the expected layout.
+- The existing upload path can remain archive-based; this change does not upload loose HuggingFace dataset files.
+
+**Gotchas.** Full mode bypasses the manifest/sample CSV path entirely, so it does not create `manifest.json`. `--skip-copy` is intentionally a subset-mode flag now; full mode has no staging copy to skip. The archive still uses normal 7z symlink behavior, so if the full dataset roots are symlinks, 7z will dereference them into real archived contents unless future code adds `-snl`.
+
+**Verification.** Ran `python -m py_compile scripts/build_mimic_subset.py` and `python scripts/build_mimic_subset.py --help`. Also built tiny fake archives under `/tmp`: one `--bundle-mode full` run confirmed the encrypted archive contains top-level `MIMIC-CXR-JPG`, `MIMIC-CXR`, `CXR-LT`, and `MIMIC-IV-ED-2-2`; one default subset-mode run confirmed the archive still contains the staged subset folder plus companions.
+
+## 2026-06-01 - Harden staged report parsing against empty report trees
+
+**Goal.** Diagnose the server failure from `python src/prepare/01_make_dataset.py --subset full`, where pandas crashed while assigning custom report sections after no report text had been parsed.
+
+**Changes.**
+- `src/prepare/01_make_dataset.py:195` - count parsed report results and print a path-shape warning when no report files are found, so a missing or mismatched `MIMIC-CXR/files` tree is visible before the later filtering step.
+- `src/prepare/01_make_dataset.py:220` - force the derived `report` column to `object` dtype so newer pandas versions do not infer all-missing reports as `float64` and reject later text/null assignment.
+- `src/prepare/01_make_dataset.py:225` - only apply custom-section overrides when the source section has non-null values for that study, avoiding assignment of all-null section data into `report`.
+
+**Reasoning.** The server traceback was caused by an all-missing report path: parsing completed suspiciously fast, `choose_report` returned only `np.nan`, and pandas inferred `report` as numeric. Initializing the column as `object` is the narrowest compatibility fix, while the warning preserves the more useful diagnosis: the full dataset run likely cannot see report TXT files at the expected MIMIC-CXR path. I did not redirect users to the consolidated subset script because the user ran this staged `src/prepare` entrypoint and the staged pipeline should fail cleanly too.
+
+**Assumptions.**
+- If zero reports parse, continuing to emit an empty post-`dropna(subset=['report'])` dataset is acceptable for now; the script warns rather than exiting to avoid changing long-standing behavior.
+- The existing custom-section rules should only replace `report` with actual parsed text, not with missing placeholders.
+
+**Gotchas.** The first pasted error (`No module named 'numpy'`) was from running outside the `camchex` conda environment. The second default-subset error means `data/subset/MIMIC-CXR-JPG/mimic-cxr-2.0.0-metadata.csv` is absent, so either the subset bundle has not been extracted/built or the full run should be used intentionally. The very high report parsing rate on the full run strongly suggests `data/MIMIC-CXR/files/.../*.txt` is missing or not laid out as expected on that server.
+
+**Verification.** Ran `python -m py_compile src/prepare/01_make_dataset.py` and a small pandas dtype reproduction confirming an all-missing `report` column remains `object`.
