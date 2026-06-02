@@ -40,6 +40,16 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 
+LABEL_COLS = [
+    "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation",
+    "Edema", "Emphysema", "Enlarged Cardiomediastinum", "Fibrosis", "Fracture",
+    "Hernia", "Infiltration", "Lung Lesion", "Lung Opacity", "Mass", "No Finding",
+    "Nodule", "Pleural Effusion", "Pleural Other", "Pleural Thickening",
+    "Pneumomediastinum", "Pneumonia", "Pneumoperitoneum", "Pneumothorax",
+    "Subcutaneous Emphysema", "Support Devices", "Tortuous Aorta",
+]
+
+
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -52,7 +62,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-dir", default="data", help="Project data/ directory (default: data)")
     p.add_argument("--seed", type=int, default=42, help="RNG seed for patient sampling (default: 42)")
     p.add_argument("--fraction", type=float, default=0.1,
-                   help="Patient fraction to sample in subset mode (default: 0.1)")
+                   help="Patient fraction to sample from non-long-tail patients in subset mode (default: 0.1)")
+    p.add_argument("--tail-threshold", type=float, default=0.01,
+                   help="Class prevalence threshold for long-tail inclusion. Classes below this rate are fully "
+                        "included before sampling the remaining patients (default: 0.01)")
+    p.add_argument("--cxr-lt-version", default="cxr-lt-2023",
+                   help="Subdirectory under CXR-LT/.../2.0.0/ to read class labels from (default: cxr-lt-2023)")
     p.add_argument("--subset-name", default=None,
                    help="Subset folder name under data/ (default: derived as 'subset' for the canonical 10%% bundle, "
                         "otherwise 'subset_seed{seed}_{pct}pct')")
@@ -98,6 +113,10 @@ def parse_args() -> argparse.Namespace:
     args = p.parse_args()
     if not 0 < args.cpu_fraction <= 1:
         p.error("--cpu-fraction must be > 0 and <= 1")
+    if not 0 < args.fraction <= 1:
+        p.error("--fraction must be > 0 and <= 1")
+    if not 0 < args.tail_threshold <= 1:
+        p.error("--tail-threshold must be > 0 and <= 1")
     default_workers = _workers_from_cpu_fraction(args.cpu_fraction)
     if args.workers is None:
         args.workers = default_workers
@@ -118,14 +137,61 @@ def resolve_subset_name(args: argparse.Namespace) -> str:
     return f"subset_seed{args.seed}_{int(round(args.fraction * 100))}pct"
 
 
-def sample_patients(split_csv: Path, seed: int, fraction: float) -> tuple[set[int], pd.DataFrame]:
+def load_cxr_lt_labels(data_dir: Path, cxr_lt_version: str) -> pd.DataFrame:
+    cxr_lt_root = (
+        data_dir / "CXR-LT"
+        / "cxr-lt-multi-label-long-tailed-classification-on-chest-x-rays-2.0.0"
+        / cxr_lt_version
+    )
+    frames = []
+    for fname in ["train.csv", "development.csv", "test.csv"]:
+        path = cxr_lt_root / fname
+        if not path.exists():
+            sys.exit(f"Missing {path}; CXR-LT labels are required for long-tail-aware subset sampling")
+        frames.append(pd.read_csv(path, usecols=["subject_id", "dicom_id", *LABEL_COLS]))
+    return pd.concat(frames, ignore_index=True)
+
+
+def long_tail_patients(labels_df: pd.DataFrame, threshold: float) -> tuple[set[int], list[str], pd.Series]:
+    label_values = labels_df[LABEL_COLS].apply(pd.to_numeric, errors="coerce").fillna(0)
+    prevalence = (label_values == 1).mean().sort_values()
+    tail_classes = prevalence[(prevalence > 0) & (prevalence < threshold)].index.tolist()
+    if not tail_classes:
+        return set(), [], prevalence
+    tail_mask = (label_values[tail_classes] == 1).any(axis=1)
+    patients = set(labels_df.loc[tail_mask, "subject_id"].dropna().astype(int).unique().tolist())
+    return patients, tail_classes, prevalence
+
+
+def sample_patients(
+    split_csv: Path,
+    data_dir: Path,
+    seed: int,
+    fraction: float,
+    tail_threshold: float,
+    cxr_lt_version: str,
+) -> tuple[set[int], pd.DataFrame, dict]:
     df = pd.read_csv(split_csv)
     patients = np.sort(df["subject_id"].unique())
+    labels_df = load_cxr_lt_labels(data_dir, cxr_lt_version)
+    tail_patients, tail_classes, prevalence = long_tail_patients(labels_df, tail_threshold)
+    tail_patients = tail_patients.intersection(set(patients.tolist()))
+
     rng = np.random.default_rng(seed)
-    n = int(round(len(patients) * fraction))
-    chosen = set(rng.choice(patients, size=n, replace=False).tolist())
+    non_tail_patients = np.array([sid for sid in patients if sid not in tail_patients])
+    n_sampled = int(round(len(non_tail_patients) * fraction))
+    sampled_patients = set(rng.choice(non_tail_patients, size=n_sampled, replace=False).tolist())
+    chosen = tail_patients | sampled_patients
     sub_df = df[df["subject_id"].isin(chosen)].reset_index(drop=True)
-    return chosen, sub_df
+    stats = {
+        "tail_threshold": tail_threshold,
+        "tail_classes": tail_classes,
+        "tail_class_prevalence": {name: float(prevalence[name]) for name in tail_classes},
+        "n_tail_patients": len(tail_patients),
+        "n_sampled_non_tail_patients": len(sampled_patients),
+        "n_available_non_tail_patients": int(len(non_tail_patients)),
+    }
+    return chosen, sub_df, stats
 
 
 def jpg_src_path(jpg_root: Path, subject_id: int, study_id: int, dicom_id: str) -> Path:
@@ -396,8 +462,30 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
     jpg_dst_root = subset_root / "MIMIC-CXR-JPG" / "files"
     txt_dst_root = subset_root / "MIMIC-CXR" / "files"
 
-    print(f"Sampling: seed={args.seed} fraction={args.fraction} -> {subset_root}")
-    chosen, sub_split = sample_patients(split_csv, args.seed, args.fraction)
+    print(
+        f"Sampling: seed={args.seed} fraction={args.fraction} "
+        f"tail_threshold={args.tail_threshold} -> {subset_root}"
+    )
+    chosen, sub_split, sample_stats = sample_patients(
+        split_csv,
+        data_dir,
+        args.seed,
+        args.fraction,
+        args.tail_threshold,
+        args.cxr_lt_version,
+    )
+    if sample_stats["tail_classes"]:
+        print(
+            "  long-tail classes (< "
+            f"{args.tail_threshold:.2%}): {', '.join(sample_stats['tail_classes'])}"
+        )
+    else:
+        print(f"  long-tail classes (< {args.tail_threshold:.2%}): none")
+    print(
+        f"  long-tail patients: {sample_stats['n_tail_patients']} / "
+        f"sampled non-long-tail patients: {sample_stats['n_sampled_non_tail_patients']} "
+        f"of {sample_stats['n_available_non_tail_patients']}"
+    )
     print(f"  patients: {len(chosen)} / studies: {sub_split['study_id'].nunique()} / images: {len(sub_split)}")
 
     if args.dry_run:
@@ -452,6 +540,14 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
         manifest = {
             "seed": args.seed,
             "fraction": args.fraction,
+            "sampling": "all_patients_with_long_tail_labels_plus_fraction_of_remaining_patients",
+            "tail_threshold": args.tail_threshold,
+            "cxr_lt_version": args.cxr_lt_version,
+            "tail_classes": sample_stats["tail_classes"],
+            "tail_class_prevalence": sample_stats["tail_class_prevalence"],
+            "n_tail_patients": sample_stats["n_tail_patients"],
+            "n_sampled_non_tail_patients": sample_stats["n_sampled_non_tail_patients"],
+            "n_available_non_tail_patients": sample_stats["n_available_non_tail_patients"],
             "unit": "subject_id",
             "n_patients": len(chosen),
             "n_studies": int(sub_split["study_id"].nunique()),

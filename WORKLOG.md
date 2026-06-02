@@ -1135,3 +1135,70 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The MLDecoder query embedding is intentionally frozen, which is why summaries show 19,968 frozen parameters even though the rest of the model is trainable. The text encoder is shared across clinical and observation streams, so its parameters are counted once, not twice.
 
 **Verification.** Ran `python -m py_compile scripts/model_summary.py`, `python scripts/model_summary.py --model singleview --depth 1`, `python scripts/model_summary.py --model camchex --depth 1`, and `python scripts/model_summary.py --model prior_aware --depth 1 --format markdown`.
+
+## 2026-06-02 - assessed EHR graph thesis for CaMCheX improvements
+
+**Goal.** Read `/home/tungnguyen/Downloads/main (1).pdf` and assess whether its EHR graph representation ideas can improve the active CaMCheX refactor for multimodal chest X-ray classification.
+
+**Changes.**
+- No model or data code was changed. This entry records the assessment for future handoff.
+
+**Reasoning.** The thesis is MIMIC-IV EHR-focused, not MIMIC-CXR image-focused, so the whole graph pipeline should not be copied directly. The transferable ideas are selective: temporal/prior context, graph-enriched clinical concept embeddings, static/numeric EHR feature encoding with missingness, and multi-task/ablation discipline. The repo already has a lightweight prior-aware direction in `src/prepare/04_build_prior_aware_dataset.py`, `src/dataloader/PriorAwareDataset.py`, and `src/model/PriorAwareCaMCheXModel.py`, so future work should extend that instead of starting a separate EHR graph stack.
+
+**Gotchas.** Current-study discharge diagnoses, report findings/impression, or labels should not be used as model inputs for current CXR disease classification because they can leak target information. Prior-study reports/labels are safer because they precede the current study. A full external Drug-Disease-Phenotype graph is likely overkill for a 26-class radiology task; a smaller label/concept graph mapped through UMLS/SNOMED/HPO would be a more practical first experiment.
+
+**Follow-ups.** Run controlled ablations: baseline CaMCheX, existing prior-aware model, prior-aware with multiple previous studies or temporal decay, numeric vitals/static feature encoder, and semantic label-prior decoder initialization/regularization. Track AUPR and tail-label performance, not just mean AUROC.
+
+## 2026-06-02 - deduplicated examine-data notebooks and added CXR-LT 2024 comparison
+
+**Goal.** Move reusable helper code out of the `data/00-examine-data` notebooks, add a CXR-LT 2024 exploration notebook modeled on the 2023 notebook, and add a separate notebook comparing 2023 and 2024 overlap and differences.
+
+**Changes.**
+- `data/00-examine-data/utils.py` - added shared notebook path setup, CSV loading, label/path/study-id schema helpers, CXR-LT summary/plotting helpers, report linkage helpers, and MIMIC-CXR-JPG plotting helpers.
+- `data/00-examine-data/cxr-lt-2023.ipynb` - replaced duplicated helper cells with `utils.py` imports and switched report linkage/preview calls to shared helpers.
+- `data/00-examine-data/cxr-lt-2024.ipynb` - added the 2024 analysis notebook using `labels.csv` as the combined view and exposing task-specific CSV schema checks.
+- `data/00-examine-data/cxr-lt-2023-vs-2024.ipynb` - added release comparison tables and plots for identifier overlap, label-set differences, prevalence shifts, split composition, view-position shifts, and image-path availability.
+- `data/00-examine-data/mimic-cxr-jpg.ipynb`, `data/00-examine-data/final-dataset.ipynb`, `data/00-examine-data/prior-study-viability.ipynb` - updated local setup/import cells to use shared helpers where applicable.
+
+**Reasoning.** The largest duplication lived in `cxr-lt-2023.ipynb`, so `utils.py` keeps those functions importable instead of copying them into the 2024 and comparison notebooks. The 2024 schema differs from 2023 (`fpath` vs `path`, `Normal` vs `No Finding`, and `s`-prefixed `study_id` values), so the utility layer normalizes those differences while preserving original notebook display columns.
+
+**Assumptions.** The 2024 `labels.csv` file is the preferred combined labeled dataset, with task-specific files used for schema inspection. Full notebook execution was intentionally skipped; validation stayed limited to imports, AST parsing, and representative helper checks.
+
+**Gotchas.** The repository ignores `data/*`, and only `data/00-examine-data/cxr-lt-2023.ipynb` is tracked right now. The new `utils.py`, `cxr-lt-2024.ipynb`, `cxr-lt-2023-vs-2024.ipynb`, and the updated ignored notebooks exist in the workspace but will need force-adding if they should be committed. The validation emitted Matplotlib/fontconfig cache warnings because `/home/tungnguyen/.config/matplotlib` is not writable in the sandbox.
+
+**Follow-ups.** Execute the CXR-LT notebooks end to end when refreshed outputs are desired, and decide whether to force-add the ignored examine-data notebooks/utilities or move reusable analysis code outside ignored `data/`.
+
+## 2026-06-02 - fixed CXR-LT year comparison readouts
+
+**Goal.** Improve the 2023-vs-2024 comparison notebook after the view-position shift plot produced an empty-looking zero-delta chart.
+
+**Changes.**
+- `data/00-examine-data/cxr-lt-2023-vs-2024.ipynb` - added explicit `No Finding` -> `Normal` aliasing for comparable label analysis, canonicalized 2024 `val` to `development`, added DICOM-aligned per-label change and split-transition tables, and skipped the view-position bar plot when both releases have identical view counts.
+
+**Reasoning.** The 2023 and 2024 files contain the same image cohort and identical view-position distributions, so plotting all-zero view deltas is technically correct but not useful. The meaningful differences are label taxonomy/value changes and split reassignment, so the notebook now makes those differences explicit.
+
+**Gotchas.** The only shared-label per-image changes found in lightweight validation were for the aliased `Normal`/`No Finding` concept; the other 25 shared labels matched exactly. The split comparison must be DICOM-aligned, not index-aligned, because the release row ordering should not be trusted.
+
+**Verification.** Parsed `cxr-lt-2023-vs-2024.ipynb`, validated identical subject/study/DICOM overlap, confirmed zero view-count delta, checked 26 comparable labels after aliasing, and ran the DICOM-aligned split-transition calculation.
+
+## 2026-06-02 - Long-tail-aware subset sampling
+
+**Goal.** Change `scripts/build_mimic_subset.py` so uploaded/staged subsets no longer sample a flat patient fraction from the whole MIMIC-CXR split. The new subset should include all patients with positive examples in classes whose CXR-LT prevalence is below 1%, then sample medium/head patients normally.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:43` - added the shared 26 CXR-LT label list so the subset builder can classify labels before label-prep runs.
+- `scripts/build_mimic_subset.py:64` - changed `--fraction` semantics to apply to non-long-tail patients and added `--tail-threshold` plus `--cxr-lt-version` controls.
+- `scripts/build_mimic_subset.py:140` - added CXR-LT label loading and long-tail patient detection from train/development/test CSVs.
+- `scripts/build_mimic_subset.py:166` - changed patient sampling to include all long-tail-positive patients first, then randomly sample the remaining patients at the requested fraction.
+- `scripts/build_mimic_subset.py:465` - print long-tail sampling stats during subset builds and record those stats in `manifest.json`.
+
+**Reasoning.** Kept the unit of sampling at `subject_id`, matching the existing subset copy contract and avoiding partial-patient bundles. I used CXR-LT labels directly instead of prepared subset labels because `build_mimic_subset.py` runs before `prepare_subset_labels.py`; importing prepared outputs would create a circular workflow. Classes with zero positive labels are not treated as long-tail because they cannot add any patients and would make the manifest misleading.
+
+**Assumptions.**
+- Long-tail prevalence means positive image-level prevalence across the CXR-LT train/development/test label CSVs.
+- “All of the long tailed class” means all patients that have at least one positive image for any class with `0 < prevalence < --tail-threshold`.
+- Medium/head sampling should exclude those already-included long-tail patients, then sample the remaining patients with the existing RNG seed/fraction behavior.
+
+**Gotchas.** The resulting subset can be larger than the requested `--fraction` because long-tail patients are added on top of the sampled non-long-tail pool. The default subset name still derives from seed/fraction, so rerunning the canonical `--fraction 0.1 --seed 42` now writes a different composition into `data/subset` unless an explicit `--subset-name` is used.
+
+**Follow-ups.** Run a real `--dry-run` against the full local data to inspect which classes fall below 1% for the installed CXR-LT version and confirm the final patient/image count is acceptable before a long archive/upload.
