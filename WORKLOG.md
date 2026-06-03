@@ -1224,3 +1224,24 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `torch.compile` errors will occur on the first compiled execution rather than necessarily at startup, so a real smoke run is still needed before trusting it for long jobs. The checkpoints are intentionally saved from the unwrapped module so they remain readable by the existing eval scripts.
 
 **Follow-ups.** Run a short baseline-vs-compiled comparison on the target GPU, checking first-step compile time, peak memory, step/sec, and resume/eval from the saved `last.pt`.
+
+## 2026-06-03 - add ConvNeXtV2 Nano vitals model class
+
+**Goal.** Start a separate model variant that does not disturb existing CaMCheX paths: ConvNeXtV2 Nano images, frozen CXR-BERT clinical indication text, and numeric vitals projected as an 8x8 token block.
+
+**Changes.**
+- `src/model/CaMCheXV2NanoVitalsModel.py:10` - added `VitalsTokenProjector`, which concatenates normalized vital values with missing/dropout indicators and projects them to 64 tokens of width 768.
+- `src/model/CaMCheXV2NanoVitalsModel.py:46` - added the new `CaMCheXV2NanoVitalsModel` class with its own forward contract instead of changing `CaMCheXModel`.
+- `src/model/CaMCheXV2NanoVitalsModel.py:69` - freezes the CXR-BERT text encoder by default and keeps it in eval mode even when the parent model is set to train mode.
+- `src/model/CaMCheXV2NanoVitalsModel.py:74` - uses a `640 -> 768` stride-2 projection because local timm verification showed ConvNeXtV2 Nano returns `(B, 640, 16, 16)` for 512px inputs.
+- `src/model/CaMCheXV2NanoVitalsModel.py:115` - defines the new batch contract as images, view positions, clinical text tokens, numeric vital values, and vital missing masks.
+
+**Reasoning.** Kept this as a new model class to preserve backward compatibility for all old configs and checkpoints. Numeric vitals are no longer converted into text for this path because the requested design treats them as structured measurements, while clinical indication remains text through frozen CXR-BERT. The vital projector emits an 8x8 token block so it slots into the existing fusion transformer pattern without needing a new decoder.
+
+**Assumptions.**
+- The new model uses seven structured fields: `temperature`, `heartrate`, `resprate`, `o2sat`, `sbp`, `dbp`, and `gender`.
+- Missing or augmentation-dropped vitals should be represented by both a masked value and an explicit mask bit, not only by a sentinel value.
+
+**Gotchas.** This commit only adds the model class; existing dataloaders do not yet produce the new numeric vitals tuple. The first validation avoided downloading CXR-BERT weights and checked syntax, the vitals projector shape, and the timm feature shape locally.
+
+**Follow-ups.** Add a dataset/loader path that emits normalized vital values and missing masks while leaving the old `CaMCheXDataset` tuple unchanged.
