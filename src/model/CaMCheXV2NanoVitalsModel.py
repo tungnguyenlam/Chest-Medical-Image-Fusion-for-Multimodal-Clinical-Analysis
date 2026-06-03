@@ -4,7 +4,49 @@ import torch.nn as nn
 from positional_encodings.torch_encodings import PositionalEncoding2D, Summer
 
 from src.decoder.MLDecoder import MLDecoder
-from src.encoder import CaMCheXImageEncoder, CaMCheXTextEncoder
+from src.encoder import CaMCheXTextEncoder, TimmImageEncoder
+
+
+class ConvNeXtV2NanoImageEncoder(nn.Module):
+    def __init__(
+        self,
+        timm_init_args,
+        frontal_pretrained_path=None,
+        lateral_pretrained_path=None,
+        feature_dim: int = 640,
+    ):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.frontal_encoder = TimmImageEncoder(
+            timm_init_args=timm_init_args,
+            pretrained_path=frontal_pretrained_path,
+        )
+        self.lateral_encoder = TimmImageEncoder(
+            timm_init_args=timm_init_args,
+            pretrained_path=lateral_pretrained_path,
+        )
+
+    def forward(self, x, view_positions):
+        b, s, _, h, w = x.shape
+        x = x.reshape(b * s, *x.shape[2:])
+        view_positions = view_positions.reshape(b * s)
+
+        nonzero_mask = x.sum(dim=(1, 2, 3)) != 0
+        x_nonzero = x[nonzero_mask]
+        view_positions_nonzero = view_positions[nonzero_mask]
+
+        feats = torch.zeros(
+            (x_nonzero.shape[0], self.feature_dim, h // 32, w // 32),
+            device=x.device,
+            dtype=x.dtype,
+        )
+        frontal_mask = view_positions_nonzero == 1
+        lateral_mask = view_positions_nonzero == 2
+        if frontal_mask.any():
+            feats[frontal_mask] = self.frontal_encoder(x_nonzero[frontal_mask])
+        if lateral_mask.any():
+            feats[lateral_mask] = self.lateral_encoder(x_nonzero[lateral_mask])
+        return feats, nonzero_mask
 
 
 class VitalsTokenProjector(nn.Module):
@@ -60,7 +102,7 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
         self.freeze_text_encoder = freeze_text_encoder
         self.d_model = d_model
 
-        self.image_encoder = CaMCheXImageEncoder(
+        self.image_encoder = ConvNeXtV2NanoImageEncoder(
             timm_init_args=timm_init_args,
             frontal_pretrained_path=frontal_pretrained_path,
             lateral_pretrained_path=lateral_pretrained_path,

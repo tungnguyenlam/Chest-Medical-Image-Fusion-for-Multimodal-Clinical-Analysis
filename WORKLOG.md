@@ -1268,3 +1268,25 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The dataset still expects the normal image transform path to convert images to channel-first arrays, matching the legacy dataset behavior. A local contract test used a dummy transform/tokenizer and patched image decode rather than real JPG files.
 
 **Follow-ups.** Wire these loaders into a dedicated training/eval entrypoint and config for the new model variant.
+
+## 2026-06-03 - wire ConvNeXtV2 Nano vitals training path
+
+**Goal.** Add an isolated train/eval path and config for the new ConvNeXtV2 Nano + frozen CXR-BERT + numeric vitals model.
+
+**Changes.**
+- `src/model/CaMCheXV2NanoVitalsModel.py:10` - added a model-local `ConvNeXtV2NanoImageEncoder` so this variant can route frontal/lateral images with 640-channel ConvNeXtV2 Nano features without changing the legacy image router.
+- `src/model/CaMCheXV2NanoVitalsModel.py:105` - switched the new model to use the Nano-specific image router.
+- `training/camchex_v2nano_vitals/config.yaml:62` - added the dedicated config using `convnextv2_nano.fcmae_ft_in22k_in1k_384` and CXR-BERT-specialized tokenizer/text model.
+- `training/camchex_v2nano_vitals/config.yaml:65` - added model-specific defaults for frozen text and vital dropout/projection settings.
+- `training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py:27` - added the dedicated training CLI and wired it to `make_camchex_vitals_loaders` plus `CaMCheXV2NanoVitalsModel`.
+- `training/camchex_v2nano_vitals/camchex_v2nano_vitals_eval.py:28` - added the matching eval/prediction CLI and outputs under `output/camchex_v2nano_vitals`.
+
+**Reasoning.** Added a new training folder rather than reusing or overloading `training/camchex_cxrbert` so old commands remain stable. The config uses the timm registry model name without the `timm/` Hub prefix because this repo passes `model_name` directly into `timm.create_model`. A full dummy forward check caught that the legacy `CaMCheXImageEncoder` preallocates 768 channels, so the new model now has its own 640-channel router rather than making the shared encoder more dynamic and risking old behavior.
+
+**Assumptions.**
+- Stage-1 frontal/lateral pretrained paths are optional for this variant; if used, they need to match ConvNeXtV2 Nano weights, not old ConvNeXt Tiny weights.
+- The initial config keeps image size at 512 so Nano emits 16x16 features before the stride-2 `640 -> 768` projection creates 8x8 tokens.
+
+**Gotchas.** Help/config checks import Albumentations/Matplotlib through shared training utilities, which produced warnings about network-disabled version checks and unwritable Matplotlib cache directories in this sandbox. The actual checks still passed. Real first training will need network/cache access for pretrained timm and CXR-BERT weights unless they are already cached.
+
+**Follow-ups.** Run a real `--fast-dev-run --no-pretrained` or cached-weight smoke test against local label CSVs, then compare whether BERT or JPEG decode is the dominant input bottleneck before adding precomputed embeddings or image shards.
