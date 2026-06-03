@@ -64,6 +64,12 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--accelerator", default=None)
     parser.add_argument("--devices", default=None)
     parser.add_argument("--precision", default=None)
+    parser.add_argument(
+        "--compile-model",
+        action="store_true",
+        default=None,
+        help="Opt in to torch.compile(model) before training. Default comes from trainer.compile_model, or false if unset.",
+    )
     parser.add_argument("--accumulate-grad-batches", type=int)
     parser.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
     parser.add_argument("--val-check-interval", type=float)
@@ -386,6 +392,20 @@ def precision_context(device: torch.device, precision: str | None):
     return torch.amp.autocast(device_type=device.type, dtype=dtype)
 
 
+def unwrap_compiled_model(model: torch.nn.Module) -> torch.nn.Module:
+    return getattr(model, "_orig_mod", model)
+
+
+def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: dict[str, Any] | None) -> torch.nn.Module:
+    compile_model = bool(resolve_trainer_arg(args, cfg, "compile_model", False))
+    if not compile_model:
+        return model
+    if not hasattr(torch, "compile"):
+        raise RuntimeError("--compile-model requires torch.compile, which is unavailable in this PyTorch build")
+    print("[train] compiling model with torch.compile()")
+    return torch.compile(model)
+
+
 def train_step(model, criterion, batch, device: torch.device, precision: str | None):
     data, label = batch
     data = move_to_device(data, device)
@@ -437,13 +457,14 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
 
 def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_step: int, best_val_ap: float, classes: list[str], scaler=None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    model_to_save = unwrap_compiled_model(model)
     torch.save(
         {
             "epoch": epoch,
             "global_step": global_step,
             "best_val_ap": best_val_ap,
             "classes": classes,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": model_to_save.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
             "scaler_state_dict": scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
@@ -525,6 +546,8 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     elif args.checkpoint_path:
         load_weights(model, args.checkpoint_path)
         print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
+
+    model = maybe_compile_model(model, args, cfg)
 
     checkpoint_dir = run_dir / "checkpoints"
     logs_dir = run_dir / "logs"
@@ -866,6 +889,7 @@ def load_weights(model: torch.nn.Module, checkpoint_path: str | Path) -> None:
 def save_single_view_encoder(model, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    model = unwrap_compiled_model(model)
     encoder = model.model
     if hasattr(encoder, "model"):
         encoder = encoder.model

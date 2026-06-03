@@ -1202,3 +1202,25 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The resulting subset can be larger than the requested `--fraction` because long-tail patients are added on top of the sampled non-long-tail pool. The default subset name still derives from seed/fraction, so rerunning the canonical `--fraction 0.1 --seed 42` now writes a different composition into `data/subset` unless an explicit `--subset-name` is used.
 
 **Follow-ups.** Run a real `--dry-run` against the full local data to inspect which classes fall below 1% for the installed CXR-LT version and confirm the final patient/image count is acceptable before a long archive/upload.
+
+## 2026-06-03 - opt-in torch compile flag for training
+
+**Goal.** Add an explicit flag so training can try `torch.compile(model)` without making compilation the default behavior.
+
+**Changes.**
+- `training/common.py:67` - added `--compile-model` as a shared CLI option for all active training entrypoints.
+- `training/common.py:395` - added helpers to unwrap compiled modules and opt into `torch.compile(model)` from either CLI or `trainer.compile_model`.
+- `training/common.py:460` - checkpoint saves now unwrap compiled modules before writing `model_state_dict`, avoiding `_orig_mod.` key leakage into eval/resume checkpoints.
+- `training/common.py:550` - compilation happens after checkpoint/weight loading, so existing uncompiled checkpoints load through the normal path before the train loop uses the compiled wrapper.
+- `training/common.py:892` - single-view encoder export also unwraps a compiled module defensively.
+- `training/camchex/config.yaml:92`, `training/camchex_cxrbert/config.yaml:92`, `training/prior_aware/config.yaml:98`, `training/prior_aware_cxrbert/config.yaml:98`, `training/singleview/config.yaml:90` - documented the config knob as `compile_model: false` by default.
+
+**Reasoning.** The shared `training/common.py` path covers CaMCheX, CaMCheX+CXR-BERT, prior-aware, prior-aware+CXR-BERT, and single-view training, so one flag there avoids per-entrypoint duplication. The flag is opt-in because BioBERT/timm/fusion routing may have graph breaks, extra compile startup time, or higher memory use. Compilation is applied after load/resume so checkpoint compatibility stays centered on the ordinary module structure.
+
+**Assumptions.**
+- `--compile-model` being a positive-only override is enough for now; to disable a config-level `compile_model: true`, edit the run config back to false.
+- Building the optimizer before compile is acceptable because the compiled wrapper uses the original module parameters.
+
+**Gotchas.** `torch.compile` errors will occur on the first compiled execution rather than necessarily at startup, so a real smoke run is still needed before trusting it for long jobs. The checkpoints are intentionally saved from the unwrapped module so they remain readable by the existing eval scripts.
+
+**Follow-ups.** Run a short baseline-vs-compiled comparison on the target GPU, checking first-step compile time, peak memory, step/sec, and resume/eval from the saved `last.pt`.
