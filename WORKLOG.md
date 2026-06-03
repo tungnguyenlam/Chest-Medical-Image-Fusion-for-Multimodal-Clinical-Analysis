@@ -1360,3 +1360,25 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** Kept `pin_memory: true`, `persistent_workers: true`, and `prefetch_factor: 2` in YAML because `training.common.dataloader_args_from_config()` sanitizes worker-only settings when `num_workers=0`. That means the default runs anywhere, while increasing `--num-workers` automatically re-enables persistent workers and prefetching.
 
 **Gotchas.** `prefetch_factor=2` is invalid with raw PyTorch `DataLoader(num_workers=0)`, but the shared loader helper removes it in that case. Bypassing `training.common` and constructing DataLoaders directly from YAML would need the same sanitization.
+
+## 2026-06-03 - opt-in prior-aware text embedding cache
+
+**Goal.** Add an opt-in precomputed text embedding mode for prior-aware models while keeping the default behavior trainable text encoder with tokenized parquet.
+
+**Changes.**
+- `src/prepare/04_build_prior_aware_dataset.py:135` - added batched CLS embedding generation for frozen text models.
+- `src/prepare/04_build_prior_aware_dataset.py:327` - added `--precompute-text-embeddings`, `--embedding-batch-size`, and `--device` flags; default remains token IDs plus attention masks.
+- `src/dataloader/PriorAwareDataset.py:33` - added schema support for either token columns or embedding columns in the prior-aware parquet.
+- `src/model/PriorAwareCaMCheXModel.py:49` - added `freeze_text_encoder` and `use_precomputed_text_embeddings` flags, both false by default.
+- `src/model/PriorAwareCaMCheXModel.py:60` - skips constructing `CaMCheXTextEncoder` entirely when precomputed embeddings are requested.
+- `training/prior_aware/*.py` and `training/prior_aware_cxrbert/*.py` - added CLI flags `--freeze-text-encoder` and `--use-precomputed-text-embeddings` for train/eval.
+- `training/prior_aware/config.yaml:70` and `training/prior_aware_cxrbert/config.yaml:70` - documented false defaults for both new model flags.
+- `training/prior_aware/README.md:1` - documented nearest-prior row construction, tokenized vs pre-embedded modes, and example commands.
+
+**Reasoning.** Pre-embedding only makes sense when the text backbone is frozen because otherwise cached embeddings become stale after the first optimizer step. The implementation keeps token mode as the default and requires explicit prepare-time and model-time flags for embedding mode. That preserves old parquet files and old training behavior.
+
+**Assumptions.**
+- Prior context should remain nearest previous study only: for four studies, rows are `2<-1`, `3<-2`, and `4<-3`, plus study 1 with a masked prior branch.
+- Embedded parquet files should be separate outputs via `--out-prefix` so tokenized and embedded datasets do not overwrite each other accidentally.
+
+**Gotchas.** If `use_precomputed_text_embeddings=True` is pointed at old tokenized parquet, the model raises because it expects float embedding tensors. If tokenized mode is pointed at embedded parquet, token columns are absent. Keep prepare and train flags aligned.

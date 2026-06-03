@@ -67,6 +67,8 @@ model:
     transformer_layers: 2
     nhead: 8
     dropout: 0.1
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
   optimizer_init_args:
     weight_decay: 0.01
     betas: [0.9, 0.999]

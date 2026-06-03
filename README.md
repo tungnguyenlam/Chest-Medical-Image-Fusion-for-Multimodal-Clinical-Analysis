@@ -50,6 +50,7 @@ training/
   camchex/           train/eval entrypoints for multimodal CaMCheX
   camchex_v2nano_vitals/
                      ConvNeXtV2 Nano + frozen CXR-BERT + numeric vitals variant
+  prior_aware/       current study + nearest previous study variant
   singleview/        train/eval entrypoints for single-view image models
   common.py          plain PyTorch train/eval helpers
 scripts/

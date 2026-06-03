@@ -132,7 +132,42 @@ def _tokenize_batch(tokenizer, texts: list[str], max_len: int) -> tuple[np.ndarr
     return enc["input_ids"].astype(np.int32), enc["attention_mask"].astype(np.int8)
 
 
-def build_split(csv_path: Path, out_path: Path, tokenizer, batch_size: int = 256) -> None:
+def _embed_texts(
+    tokenizer,
+    text_model,
+    texts: list[str],
+    max_len: int,
+    batch_size: int,
+    device,
+) -> np.ndarray:
+    import torch
+
+    embeddings = []
+    with torch.inference_mode():
+        for start in tqdm(range(0, len(texts), batch_size), desc="embedding text", dynamic_ncols=True):
+            batch = texts[start:start + batch_size]
+            enc = tokenizer(
+                batch,
+                padding="max_length",
+                truncation=True,
+                max_length=max_len,
+                return_tensors="pt",
+            )
+            enc = {k: v.to(device) for k, v in enc.items()}
+            cls = text_model(**enc).last_hidden_state[:, 0, :].detach().cpu().float().numpy()
+            embeddings.append(cls)
+    return np.concatenate(embeddings, axis=0).astype(np.float32)
+
+
+def build_split(
+    csv_path: Path,
+    out_path: Path,
+    tokenizer,
+    batch_size: int = 256,
+    text_model=None,
+    embedding_batch_size: int = 32,
+    device=None,
+) -> None:
     print(f"[build] reading {csv_path}")
     df = pd.read_csv(csv_path, low_memory=False)
     studies = collapse_to_study(df)
@@ -144,14 +179,13 @@ def build_split(csv_path: Path, out_path: Path, tokenizer, batch_size: int = 256
     has_prev = studies["PreviousStudy"].notna()
     studies["_prior_id"] = studies["PreviousStudy"].where(has_prev, other=-1).astype(np.int64)
 
-    # Tokenize current + prior text in batches.
-    print("[build] tokenizing current clinical_indication...")
-    clin_texts = studies.apply(_clin_text, axis=1).tolist()
-    clin_ids, clin_mask = _tokenize_batch(tokenizer, clin_texts, CLIN_MAX_LEN)
+    precompute_embeddings = text_model is not None
 
-    print("[build] tokenizing current vitals...")
+    print("[build] preparing current clinical_indication...")
+    clin_texts = studies.apply(_clin_text, axis=1).tolist()
+
+    print("[build] preparing current vitals...")
     obs_texts = studies.apply(_obs_text, axis=1).tolist()
-    obs_ids, obs_mask = _tokenize_batch(tokenizer, obs_texts, OBS_MAX_LEN)
 
     # Prior text: pull from lookup when available, else use the same placeholder text the
     # current path uses for empties (kept consistent so empty != no-prior at the token level).
@@ -173,10 +207,24 @@ def build_split(csv_path: Path, out_path: Path, tokenizer, batch_size: int = 256
             ]))
             prior_has_text.append(False)
 
-    print("[build] tokenizing prior clinical_indication...")
-    prior_clin_ids, prior_clin_mask = _tokenize_batch(tokenizer, prior_clin_texts, CLIN_MAX_LEN)
-    print("[build] tokenizing prior vitals...")
-    prior_obs_ids, prior_obs_mask = _tokenize_batch(tokenizer, prior_obs_texts, OBS_MAX_LEN)
+    if precompute_embeddings:
+        print("[build] embedding current clinical_indication...")
+        clin_emb = _embed_texts(tokenizer, text_model, clin_texts, CLIN_MAX_LEN, embedding_batch_size, device)
+        print("[build] embedding current vitals...")
+        obs_emb = _embed_texts(tokenizer, text_model, obs_texts, OBS_MAX_LEN, embedding_batch_size, device)
+        print("[build] embedding prior clinical_indication...")
+        prior_clin_emb = _embed_texts(tokenizer, text_model, prior_clin_texts, CLIN_MAX_LEN, embedding_batch_size, device)
+        print("[build] embedding prior vitals...")
+        prior_obs_emb = _embed_texts(tokenizer, text_model, prior_obs_texts, OBS_MAX_LEN, embedding_batch_size, device)
+    else:
+        print("[build] tokenizing current clinical_indication...")
+        clin_ids, clin_mask = _tokenize_batch(tokenizer, clin_texts, CLIN_MAX_LEN)
+        print("[build] tokenizing current vitals...")
+        obs_ids, obs_mask = _tokenize_batch(tokenizer, obs_texts, OBS_MAX_LEN)
+        print("[build] tokenizing prior clinical_indication...")
+        prior_clin_ids, prior_clin_mask = _tokenize_batch(tokenizer, prior_clin_texts, CLIN_MAX_LEN)
+        print("[build] tokenizing prior vitals...")
+        prior_obs_ids, prior_obs_mask = _tokenize_batch(tokenizer, prior_obs_texts, OBS_MAX_LEN)
 
     # Per-row resolved paths + views (current + prior), label vectors, time delta.
     print("[build] resolving paths and assembling rows...")
@@ -221,27 +269,38 @@ def build_split(csv_path: Path, out_path: Path, tokenizer, batch_size: int = 256
             has_prior.append(False)
             days_since.append(float("nan"))
 
-    out_df = pd.DataFrame({
+    payload = {
         "study_id": studies["study_id"].astype(np.int64).values,
         "subject_id": studies["subject_id"].astype(np.int64).values,
         "img_paths": cur_paths,
         "view_positions": cur_views,
         "label": cur_labels,
-        "clin_input_ids": list(clin_ids),
-        "clin_attn_mask": list(clin_mask),
-        "obs_input_ids": list(obs_ids),
-        "obs_attn_mask": list(obs_mask),
         "has_prior": np.array(has_prior, dtype=bool),
         "prior_has_image": np.array(prior_has_image, dtype=bool),
         "days_since_prior": np.array(days_since, dtype=np.float32),
         "prior_img_paths": prv_paths,
         "prior_view_positions": prv_views,
         "prior_label": prv_labels,
-        "prior_clin_input_ids": list(prior_clin_ids),
-        "prior_clin_attn_mask": list(prior_clin_mask),
-        "prior_obs_input_ids": list(prior_obs_ids),
-        "prior_obs_attn_mask": list(prior_obs_mask),
-    })
+    }
+    if precompute_embeddings:
+        payload.update({
+            "clin_embedding": list(clin_emb),
+            "obs_embedding": list(obs_emb),
+            "prior_clin_embedding": list(prior_clin_emb),
+            "prior_obs_embedding": list(prior_obs_emb),
+        })
+    else:
+        payload.update({
+            "clin_input_ids": list(clin_ids),
+            "clin_attn_mask": list(clin_mask),
+            "obs_input_ids": list(obs_ids),
+            "obs_attn_mask": list(obs_mask),
+            "prior_clin_input_ids": list(prior_clin_ids),
+            "prior_clin_attn_mask": list(prior_clin_mask),
+            "prior_obs_input_ids": list(prior_obs_ids),
+            "prior_obs_attn_mask": list(prior_obs_mask),
+        })
+    out_df = pd.DataFrame(payload)
 
     print(f"[build] writing {out_path} ({len(out_df)} studies)")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -264,21 +323,51 @@ def parse_args() -> argparse.Namespace:
         help="Input CSV filename prefix. Default 03_mimic_ matches the output of src/prepare/03_filter_existing_images.py with --subset mimic.",
     )
     p.add_argument("--out-prefix", default="prior_aware_")
+    p.add_argument(
+        "--precompute-text-embeddings",
+        action="store_true",
+        help="Store frozen text CLS embeddings instead of token ids/attention masks.",
+    )
+    p.add_argument("--embedding-batch-size", type=int, default=32)
+    p.add_argument("--device", default="auto", help="Device for --precompute-text-embeddings: auto, cpu, cuda, etc.")
     return p.parse_args()
 
 
 def main() -> None:
     from transformers import AutoTokenizer
+    import torch
 
     args = parse_args()
     in_dir = (ROOT / args.in_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
+    text_model = None
+    device = None
+    if args.precompute_text_embeddings:
+        from transformers import AutoModel
+
+        if args.device != "auto":
+            device = torch.device(args.device)
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+        text_model = AutoModel.from_pretrained(args.tokenizer, trust_remote_code=True).to(device)
+        text_model.eval()
 
     for split in args.splits:
         csv_path = in_dir / f"{args.in_prefix}{split}.csv"
         out_path = out_dir / f"{args.out_prefix}{split}.parquet"
-        build_split(csv_path, out_path, tokenizer)
+        build_split(
+            csv_path,
+            out_path,
+            tokenizer,
+            text_model=text_model,
+            embedding_batch_size=args.embedding_batch_size,
+            device=device,
+        )
 
 
 if __name__ == "__main__":

@@ -30,6 +30,16 @@ def _to_array(x, dtype):
     return np.asarray(list(x), dtype=dtype)
 
 
+def _has_value(row, key: str) -> bool:
+    return key in row.index and row[key] is not None
+
+
+def _text_array(row, embedding_key: str, token_key: str, dtype):
+    if _has_value(row, embedding_key):
+        return _to_array(row[embedding_key], np.float32)
+    return _to_array(row[token_key], dtype)
+
+
 def _zero_image_block(size: int) -> np.ndarray:
     return np.zeros((MAX_VIEWS, 3, size, size), dtype=np.float32)
 
@@ -107,18 +117,18 @@ class PriorAwareDataset(Dataset):
             "study_id": int(row["study_id"]),
             "img": cur_img,
             "view_positions": cur_views,
-            "clin_input_ids": _to_array(row["clin_input_ids"], np.int64),
-            "clin_attn_mask": _to_array(row["clin_attn_mask"], np.int64),
-            "obs_input_ids": _to_array(row["obs_input_ids"], np.int64),
-            "obs_attn_mask": _to_array(row["obs_attn_mask"], np.int64),
+            "clin_input_ids": _text_array(row, "clin_embedding", "clin_input_ids", np.int64),
+            "clin_attn_mask": _to_array(row["clin_attn_mask"], np.int64) if _has_value(row, "clin_attn_mask") else np.zeros(1, dtype=np.int64),
+            "obs_input_ids": _text_array(row, "obs_embedding", "obs_input_ids", np.int64),
+            "obs_attn_mask": _to_array(row["obs_attn_mask"], np.int64) if _has_value(row, "obs_attn_mask") else np.zeros(1, dtype=np.int64),
 
             "has_prior": bool(has_prior),
             "prior_img": prv_img,
             "prior_view_positions": prv_views,
-            "prior_clin_input_ids": _to_array(row["prior_clin_input_ids"], np.int64),
-            "prior_clin_attn_mask": _to_array(row["prior_clin_attn_mask"], np.int64),
-            "prior_obs_input_ids": _to_array(row["prior_obs_input_ids"], np.int64),
-            "prior_obs_attn_mask": _to_array(row["prior_obs_attn_mask"], np.int64),
+            "prior_clin_input_ids": _text_array(row, "prior_clin_embedding", "prior_clin_input_ids", np.int64),
+            "prior_clin_attn_mask": _to_array(row["prior_clin_attn_mask"], np.int64) if _has_value(row, "prior_clin_attn_mask") else np.zeros(1, dtype=np.int64),
+            "prior_obs_input_ids": _text_array(row, "prior_obs_embedding", "prior_obs_input_ids", np.int64),
+            "prior_obs_attn_mask": _to_array(row["prior_obs_attn_mask"], np.int64) if _has_value(row, "prior_obs_attn_mask") else np.zeros(1, dtype=np.int64),
             "prior_label": _to_array(row["prior_label"], np.float32) if has_prior else np.zeros(N_CLASSES, dtype=np.float32),
             "days_since_prior": float(row["days_since_prior"]) if has_prior and not pd.isna(row["days_since_prior"]) else 0.0,
         }

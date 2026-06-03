@@ -46,9 +46,13 @@ class PriorAwareCaMCheXModel(nn.Module):
         transformer_layers: int = 2,
         nhead: int = 8,
         dropout: float = 0.1,
+        freeze_text_encoder: bool = False,
+        use_precomputed_text_embeddings: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
+        self.freeze_text_encoder = freeze_text_encoder
+        self.use_precomputed_text_embeddings = use_precomputed_text_embeddings
 
         # --- shared encoders ---------------------------------------------
         self.image_encoder = CaMCheXImageEncoder(
@@ -56,7 +60,13 @@ class PriorAwareCaMCheXModel(nn.Module):
             frontal_pretrained_path=frontal_pretrained_path,
             lateral_pretrained_path=lateral_pretrained_path,
         )
-        self.text_encoder = CaMCheXTextEncoder(text_model=text_model)
+        self.text_encoder = None
+        if not use_precomputed_text_embeddings:
+            self.text_encoder = CaMCheXTextEncoder(text_model=text_model)
+            if freeze_text_encoder:
+                for param in self.text_encoder.parameters():
+                    param.requires_grad = False
+                self.text_encoder.eval()
 
         self.conv2d = nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1)
         self.pos_encoding = Summer(PositionalEncoding2D(d_model))
@@ -78,6 +88,12 @@ class PriorAwareCaMCheXModel(nn.Module):
             num_layers=transformer_layers,
         )
         self.head = MLDecoder(num_classes=n_classes, initial_num_features=d_model)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.freeze_text_encoder and self.text_encoder is not None:
+            self.text_encoder.eval()
+        return self
 
     # ---------------------------------------------------------------------
     # Image branch
@@ -116,6 +132,34 @@ class PriorAwareCaMCheXModel(nn.Module):
         """(B, S, C, h2, w2) -> (B, S*h2*w2, C)."""
         return einops.rearrange(block, "b s c h w -> b (s h w) c")
 
+    def _encode_text_pair(
+        self,
+        clinical_input_ids: torch.Tensor,
+        clinical_attention_mask: torch.Tensor,
+        clinical_obs_input_ids: torch.Tensor,
+        clinical_obs_attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.use_precomputed_text_embeddings:
+            if not clinical_input_ids.is_floating_point() or not clinical_obs_input_ids.is_floating_point():
+                raise TypeError("use_precomputed_text_embeddings=True requires float embedding tensors in the prior-aware batch")
+            return clinical_input_ids.float(), clinical_obs_input_ids.float()
+        if self.text_encoder is None:
+            raise RuntimeError("text_encoder is not initialized; set use_precomputed_text_embeddings=False for token batches")
+        if self.freeze_text_encoder:
+            with torch.no_grad():
+                return self.text_encoder(
+                    clinical_input_ids=clinical_input_ids,
+                    clinical_attention_mask=clinical_attention_mask,
+                    clinical_obs_input_ids=clinical_obs_input_ids,
+                    clinical_obs_attention_mask=clinical_obs_attention_mask,
+                )
+        return self.text_encoder(
+            clinical_input_ids=clinical_input_ids,
+            clinical_attention_mask=clinical_attention_mask,
+            clinical_obs_input_ids=clinical_obs_input_ids,
+            clinical_obs_attention_mask=clinical_obs_attention_mask,
+        )
+
     # ---------------------------------------------------------------------
     # Forward
     # ---------------------------------------------------------------------
@@ -126,7 +170,7 @@ class PriorAwareCaMCheXModel(nn.Module):
         )
         b, s_img, cdim, h2, w2 = cur_block.shape
 
-        cur_clin_cls, cur_obs_cls = self.text_encoder(
+        cur_clin_cls, cur_obs_cls = self._encode_text_pair(
             clinical_input_ids=data["clin_input_ids"],
             clinical_attention_mask=data["clin_attn_mask"],
             clinical_obs_input_ids=data["obs_input_ids"],
@@ -152,7 +196,7 @@ class PriorAwareCaMCheXModel(nn.Module):
         )
         prv_img_tokens = self._expand_block_tokens(prv_block)                         # (B, s*h*w, C)
 
-        prv_clin_cls, prv_obs_cls = self.text_encoder(
+        prv_clin_cls, prv_obs_cls = self._encode_text_pair(
             clinical_input_ids=data["prior_clin_input_ids"],
             clinical_attention_mask=data["prior_clin_attn_mask"],
             clinical_obs_input_ids=data["prior_obs_input_ids"],
