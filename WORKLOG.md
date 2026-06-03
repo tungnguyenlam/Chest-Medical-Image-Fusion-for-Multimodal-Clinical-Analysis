@@ -1311,3 +1311,24 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The precompute script requires CXR-BERT weights/tokenizer to be available through Hugging Face or local cache. A local validation used a toy `.pt` cache and a dummy model path to confirm the dataset skips tokenization and the model skips BERT for cached embeddings.
 
 **Follow-ups.** Consider adding a stricter cache metadata check if multiple text models are used in the same workspace.
+
+## 2026-06-03 - optional decoded image cache
+
+**Goal.** Add a safer image precompute path that reduces JPEG decode overhead while preserving train-time augmentations.
+
+**Changes.**
+- `scripts/precompute_image_cache.py:25` - added a CLI that reads one or more label CSVs, resolves unique image paths, decodes JPEGs, and saves RGB uint8 `.npy` arrays in a hashed cache directory.
+- `src/dataloader/utils.py:90` - added shared cache path hashing and cached RGB array loading helpers.
+- `src/dataloader/CaMCheXVitalsDataset.py:35` - reads optional `image_cache_dir` from the new model config.
+- `src/dataloader/CaMCheXVitalsDataset.py:116` - attempts cached RGB loading before falling back to normal JPEG decode.
+- `training/camchex_v2nano_vitals/config.yaml:91` - documented the optional `image_cache_dir: null` knob.
+
+**Reasoning.** Cached final float tensors would freeze the training augmentation pipeline or create a very large cache per transform policy. Caching decoded RGB arrays is a middle ground: it avoids repeated JPEG decode while still allowing Albumentations to run random crops, flips, and photometric transforms each epoch. The cache is optional and only used by `CaMCheXVitalsDataset`, so legacy datasets and configs are unchanged.
+
+**Assumptions.**
+- The best first image-cache artifact is RGB uint8 HWC arrays, not normalized CHW tensors.
+- Hashing the resolved image path is sufficient for stable cache lookup across one machine/workspace.
+
+**Gotchas.** Moving the cache between machines with different absolute paths may miss because the hash includes the resolved path string. The dataset falls back to JPEG decode on a miss, so this is a performance issue rather than a correctness issue.
+
+**Follow-ups.** If cache portability matters, add a manifest keyed by dataset-relative path instead of absolute resolved path.

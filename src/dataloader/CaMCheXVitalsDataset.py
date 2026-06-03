@@ -6,7 +6,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from src.dataloader.utils import _safe_decode_jpeg, resolve_preferred_image_path
+from src.dataloader.utils import _safe_decode_jpeg, load_cached_rgb, resolve_preferred_image_path
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +32,7 @@ class CaMCheXVitalsDataset(Dataset):
         self.study_ids = list(self.df.groups.keys())
         self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
         self.clinical_embeddings = self._load_clinical_embeddings(cfg.get("clinical_embedding_path"))
+        self.image_cache_dir = cfg.get("image_cache_dir")
 
     def _resolve_path(self, path):
         p = Path(path)
@@ -112,7 +113,9 @@ class CaMCheXVitalsDataset(Dataset):
             path = df.iloc[i]["path"]
             path = resolve_preferred_image_path(path)
 
-            img = _safe_decode_jpeg(path)
+            img = load_cached_rgb(self.image_cache_dir, path)
+            if img is None:
+                img = _safe_decode_jpeg(path)
             if img is None:
                 warnings.warn(f"Skipping unreadable image {path} in study {study_id}")
                 continue

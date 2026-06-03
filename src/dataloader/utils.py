@@ -1,5 +1,8 @@
+import hashlib
+
 import cv2
 import albumentations as A
+import numpy as np
 from pathlib import Path
 
 def get_transforms(size):
@@ -82,3 +85,18 @@ def _safe_decode_jpeg(path):
         if img is not None:
             return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return None
+
+
+def image_cache_path(cache_dir, image_path):
+    resolved = str(Path(image_path).resolve(strict=False))
+    digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()
+    return Path(cache_dir) / f"{digest}.npy"
+
+
+def load_cached_rgb(cache_dir, image_path):
+    if not cache_dir:
+        return None
+    path = image_cache_path(cache_dir, image_path)
+    if not path.exists():
+        return None
+    return np.load(path)
