@@ -1382,3 +1382,14 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 - Embedded parquet files should be separate outputs via `--out-prefix` so tokenized and embedded datasets do not overwrite each other accidentally.
 
 **Gotchas.** If `use_precomputed_text_embeddings=True` is pointed at old tokenized parquet, the model raises because it expects float embedding tensors. If tokenized mode is pointed at embedded parquet, token columns are absent. Keep prepare and train flags aligned.
+
+## 2026-06-03 - clarify text embedding cache scripts
+
+**Goal.** Clarify why `scripts/precompute_clinical_embeddings.py` still exists and prevent confusing it with the prior-aware embedding workflow.
+
+**Changes.**
+- `scripts/precompute_clinical_embeddings.py:31` - updated CLI help to state it is only for the non-prior `camchex_v2nano_vitals` path.
+- `training/camchex_v2nano_vitals/README.md:120` - documented that the script writes a simple `study_id -> clinical_indication` cache for `clinical_embedding_path`.
+- `training/prior_aware/README.md:75` - documented that prior-aware embedding caches must be built inside `04_build_prior_aware_dataset.py` because prior-aware rows need current/prior clinical and observation embeddings.
+
+**Reasoning.** Kept the script because it serves a different, simpler cache contract than prior-aware parquet embedding. Removing it would break the optional cache path for `CaMCheXV2NanoVitalsModel`; the fix was clearer docs rather than deletion.

@@ -117,6 +117,12 @@ output/camchex_v2nano_vitals/metrics.json
 Because the text encoder is frozen, clinical indication CLS embeddings can be
 precomputed once per `study_id`.
 
+Use `scripts/precompute_clinical_embeddings.py` only for this non-prior model
+path. It writes a simple `study_id -> clinical_indication CLS embedding` cache
+used through `clinical_embedding_path`. It is not the right tool for
+prior-aware training, where the parquet must contain current clinical, current
+observation, prior clinical, and prior observation embeddings per row.
+
 ```bash
 python scripts/precompute_clinical_embeddings.py \
   --input-csv data/data-camchex/03_mimic_train.csv \
@@ -135,6 +141,14 @@ data:
 
 If an embedding is missing for a study, the dataset falls back to tokenization
 and live frozen CXR-BERT inference.
+
+For prior-aware text embedding caches, use:
+
+```bash
+python src/prepare/04_build_prior_aware_dataset.py --precompute-text-embeddings
+```
+
+See `training/prior_aware/README.md`.
 
 ## Optional Decoded Image Cache
 

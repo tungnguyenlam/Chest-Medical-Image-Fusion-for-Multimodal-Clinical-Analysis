@@ -29,7 +29,13 @@ def clinical_text(row) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Precompute frozen clinical indication embeddings for CaMCheX vitals training.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Precompute frozen clinical indication embeddings for the non-prior "
+            "camchex_v2nano_vitals training path. For prior-aware parquet files, "
+            "use src/prepare/04_build_prior_aware_dataset.py --precompute-text-embeddings."
+        )
+    )
     parser.add_argument("--input-csv", action="append", required=True, help="CSV to read. Repeat for train/val/test.")
     parser.add_argument("--output-path", required=True, help="Output .pt file containing study_id -> CLS embedding.")
     parser.add_argument("--text-model", default="microsoft/BiomedVLP-CXR-BERT-specialized")

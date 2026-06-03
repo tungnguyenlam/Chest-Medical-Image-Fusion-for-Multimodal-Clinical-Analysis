@@ -72,6 +72,18 @@ embeddings would be stale.
 
 ## Precompute Text Embeddings
 
+Do not use `scripts/precompute_clinical_embeddings.py` for prior-aware models.
+That script only caches one current clinical indication embedding per study for
+the non-prior `camchex_v2nano_vitals` path. Prior-aware rows need four text
+streams embedded into the parquet itself:
+
+```text
+current clinical
+current observation/vitals text
+prior clinical
+prior observation/vitals text
+```
+
 BioBERT:
 
 ```bash
