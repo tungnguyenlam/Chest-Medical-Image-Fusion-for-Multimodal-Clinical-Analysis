@@ -72,8 +72,8 @@ model:
     eta_min_factor: 0.1
 data:
   dataloader_init_args:
-    batch_size: 8
-    num_workers: 2
+    batch_size: 4
+    num_workers: 0
     pin_memory: true
     persistent_workers: true
     prefetch_factor: 2

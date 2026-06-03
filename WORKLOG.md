@@ -1348,3 +1348,15 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** Kept the detailed notes inside the variant's training folder because this is an isolated model path with its own config and scripts. The root README only gets a short pointer so it remains a general project overview.
 
 **Gotchas.** The docs intentionally use the timm registry name `convnextv2_nano.fcmae_ft_in22k_in1k_384` rather than the Hugging Face-style `timm/...` prefix because the repo passes model names directly to `timm.create_model`.
+
+## 2026-06-03 - portable dataloader defaults
+
+**Goal.** Make all active training configs run more safely out of the box across machines by reducing default batch size and default dataloader worker count.
+
+**Changes.**
+- `training/camchex/config.yaml:75`, `training/camchex_cxrbert/config.yaml:75`, `training/singleview/config.yaml:74` - changed default `batch_size` from 8 to 4 and `num_workers` from 2 to 0.
+- `training/prior_aware/config.yaml:80`, `training/prior_aware_cxrbert/config.yaml:80`, `training/camchex_v2nano_vitals/config.yaml:80` - made the same batch/worker default change for prior-aware and ConvNeXtV2 vitals configs.
+
+**Reasoning.** Kept `pin_memory: true`, `persistent_workers: true`, and `prefetch_factor: 2` in YAML because `training.common.dataloader_args_from_config()` sanitizes worker-only settings when `num_workers=0`. That means the default runs anywhere, while increasing `--num-workers` automatically re-enables persistent workers and prefetching.
+
+**Gotchas.** `prefetch_factor=2` is invalid with raw PyTorch `DataLoader(num_workers=0)`, but the shared loader helper removes it in that case. Bypassing `training.common` and constructing DataLoaders directly from YAML would need the same sanitization.
