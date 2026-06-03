@@ -201,6 +201,7 @@ def parse_all_reports(mimic_df: pd.DataFrame, reports_base: Path, workers: int) 
 
     args = list(zip(mimic_df.index, mimic_df["subject_id"], mimic_df["study_id"]))
     ctx = get_context("fork")
+    print(f"  starting report parser pool: {workers} worker(s), {len(args)} report candidate(s)", flush=True)
     with ctx.Pool(
         workers, initializer=_worker_init,
         initargs=(str(reports_base), custom_section_names, custom_indices),

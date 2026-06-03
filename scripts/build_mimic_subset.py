@@ -225,6 +225,8 @@ def copy_file(src: Path, dst: Path) -> tuple[bool, int]:
 
 def parallel_copy(pairs: list[tuple[Path, Path]], workers: int, desc: str) -> tuple[int, int, int]:
     ok = missing = total_bytes = 0
+    worker_count = min(workers, len(pairs)) if pairs else 0
+    print(f"{desc}: copying {len(pairs)} file(s) with {worker_count} worker(s) ...", flush=True)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = [ex.submit(copy_file, s, d) for s, d in pairs]
         for f in tqdm(as_completed(futs), total=len(futs), desc=desc):
@@ -307,6 +309,7 @@ def print_archive_summary(archives: list[Path]) -> None:
 
 
 def remove_archive_outputs(archive: Path) -> None:
+    print(f"Removing old archive output(s) for {archive.name} in {archive.parent}", flush=True)
     archive.unlink(missing_ok=True)
     for part in archive.parent.glob(f"{archive.name}.[0-9][0-9][0-9]"):
         part.unlink()
@@ -392,10 +395,12 @@ def upload_info_with_progress(path: Path):
 def upload_archive_file(api, archive: Path, repo_id: str, token: str) -> None:
     from huggingface_hub._commit_api import CommitOperationAdd
 
+    print(f"Preparing upload metadata for {archive.name} ...", flush=True)
     upload_info = upload_info_with_progress(archive)
     operation = CommitOperationAdd(path_or_fileobj=b"", path_in_repo=archive.name)
     operation.path_or_fileobj = str(archive)
     operation.upload_info = upload_info
+    print(f"Creating HuggingFace commit for {archive.name} ...", flush=True)
     api.create_commit(
         repo_id=repo_id,
         repo_type="dataset",

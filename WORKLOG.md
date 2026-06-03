@@ -1432,3 +1432,23 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** The previous shared-cache implementation fixed duplication but still loaded the entire embedding payload into memory and then built another study-id mapping for v2nano. Per-key files keep startup memory bounded: the loader may scan strings to fill cache misses, but the dataset reads only the current sample's CLS vector.
 
 **Gotchas.** The cache object must not carry a loaded CXR-BERT model into DataLoader workers, so `training.common` unloads it after precomputing misses. Prior-aware embedded parquet generation still materializes arrays for the parquet it is writing; this change is specifically for runtime train/eval streaming in the v2nano dataset path.
+
+## 2026-06-04 - make subset pipeline background work visible
+
+**Goal.** Surface long-running or background-style work so the user can tell what the subset scripts are doing while copies, downloads, extraction, and upload setup are in progress.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:226` - print the number of files and worker count before parallel copy starts.
+- `scripts/build_mimic_subset.py:311` - announce archive cleanup before deleting stale archive parts.
+- `scripts/build_mimic_subset.py:395` - announce upload metadata preparation and HuggingFace commit creation around the previously quiet upload setup.
+- `scripts/download_subset.py:91` - print each archive filename before `hf_hub_download()` starts, including parallel worker downloads.
+- `scripts/download_subset.py:156` - print the sanitized 7z extraction command before running it.
+- `scripts/prepare_subset_labels.py:194` - print report-parser pool size and candidate count before multiprocessing begins.
+
+**Reasoning.** The scripts already had tqdm bars and some completion messages, so I added boundary/status prints around quiet phases instead of replacing progress bars or introducing a logging framework. The 7z command keeps `DATA_PASSWORD` redacted, matching the archive path behavior in `build_mimic_subset.py`.
+
+**Assumptions.** The user meant repo scripts that launch parallel workers/subprocesses, especially the subset data pipeline, rather than changing model training verbosity.
+
+**Gotchas.** HuggingFace internals may still have quiet periods inside `create_commit()` or `hf_hub_download()`; these messages make the active phase visible but do not provide byte-level transfer progress beyond what the underlying library exposes.
+
+**Follow-ups.** If training logs are also too quiet, add similar start/end prints around checkpoint saves, validation, cache building, and dataloader construction in `training/common.py`.

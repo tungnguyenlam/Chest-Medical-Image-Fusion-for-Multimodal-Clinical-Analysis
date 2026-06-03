@@ -97,6 +97,7 @@ def download_archive(
 ) -> Path:
     from huggingface_hub import hf_hub_download
 
+    print(f"  starting download: {archive_name}", flush=True)
     archive_path = hf_hub_download(
         repo_id=repo_id,
         filename=archive_name,
@@ -157,6 +158,7 @@ def extract_archive(archive_path: Path, *, data_dir: Path, password: str, extrac
         sys.exit("--extract-threads must be >= 1")
 
     print(f"Extracting into {data_dir} with {extract_threads} thread(s) ...")
+    print(f"  $ 7z x -y -p<DATA_PASSWORD> -mmt={extract_threads} {archive_path}", flush=True)
     subprocess.run(
         ["7z", "x", "-y", f"-p{password}", f"-mmt={extract_threads}", str(archive_path)],
         cwd=str(data_dir),
