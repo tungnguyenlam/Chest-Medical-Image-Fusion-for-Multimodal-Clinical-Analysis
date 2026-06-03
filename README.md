@@ -48,6 +48,8 @@ src/
   loss/              AsymetricLoss
 training/
   camchex/           train/eval entrypoints for multimodal CaMCheX
+  camchex_v2nano_vitals/
+                     ConvNeXtV2 Nano + frozen CXR-BERT + numeric vitals variant
   singleview/        train/eval entrypoints for single-view image models
   common.py          plain PyTorch train/eval helpers
 scripts/
@@ -127,6 +129,14 @@ python training/camchex/camchex_train.py \
 ```
 
 Full list: `python training/camchex/camchex_train.py --help`.
+
+## ConvNeXtV2 Nano + Numeric Vitals Variant
+
+The isolated variant in `training/camchex_v2nano_vitals/` uses ConvNeXtV2 Nano,
+frozen `microsoft/BiomedVLP-CXR-BERT-specialized`, and numeric ED vitals
+projected as 8x8 tokens. See
+`training/camchex_v2nano_vitals/README.md` for architecture notes, train/eval
+commands, and optional clinical/image cache workflows.
 
 ## Adding a new model
 

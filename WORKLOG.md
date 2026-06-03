@@ -1332,3 +1332,19 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** Moving the cache between machines with different absolute paths may miss because the hash includes the resolved path string. The dataset falls back to JPEG decode on a miss, so this is a performance issue rather than a correctness issue.
 
 **Follow-ups.** If cache portability matters, add a manifest keyed by dataset-relative path instead of absolute resolved path.
+
+## 2026-06-03 - document ConvNeXtV2 Nano vitals variant
+
+**Goal.** Save the new model design, commands, and cache workflows into Markdown so the implementation is discoverable without reading the commit series.
+
+**Changes.**
+- `training/camchex_v2nano_vitals/README.md:1` - added dedicated documentation for the new ConvNeXtV2 Nano + frozen CXR-BERT + numeric vitals variant.
+- `training/camchex_v2nano_vitals/README.md:32` - documented the 384-token layout and why this model has its own 640-channel Nano image router.
+- `training/camchex_v2nano_vitals/README.md:51` - documented numeric vital fields, normalization, missing masks, and vital dropout.
+- `training/camchex_v2nano_vitals/README.md:77` - added train/eval commands and optional clinical/image cache workflows.
+- `README.md:51` - added the new training folder to the repository layout.
+- `README.md:132` - added a root-level pointer to the detailed variant README.
+
+**Reasoning.** Kept the detailed notes inside the variant's training folder because this is an isolated model path with its own config and scripts. The root README only gets a short pointer so it remains a general project overview.
+
+**Gotchas.** The docs intentionally use the timm registry name `convnextv2_nano.fcmae_ft_in22k_in1k_384` rather than the Hugging Face-style `timm/...` prefix because the repo passes model names directly to `timm.create_model`.
