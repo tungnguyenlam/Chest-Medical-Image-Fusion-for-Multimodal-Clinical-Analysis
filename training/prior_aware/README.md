@@ -72,10 +72,7 @@ embeddings would be stale.
 
 ## Precompute Text Embeddings
 
-Do not use `scripts/precompute_clinical_embeddings.py` for prior-aware models.
-That script only caches one current clinical indication embedding per study for
-the non-prior `camchex_v2nano_vitals` path. Prior-aware rows need four text
-streams embedded into the parquet itself:
+Prior-aware rows need four text streams embedded into the parquet itself:
 
 ```text
 current clinical
@@ -84,12 +81,18 @@ prior clinical
 prior observation/vitals text
 ```
 
+The parquet builder uses the shared frozen text embedding cache under
+`data/text_embeddings/<embedding-model-name>-<model-hash>/cache.pt`, so repeated
+runs and other model variants reuse already-computed CLS embeddings for the same
+text model, max token length, and raw text.
+
 BioBERT:
 
 ```bash
 python src/prepare/04_build_prior_aware_dataset.py \
   --tokenizer dmis-lab/biobert-v1.1 \
   --precompute-text-embeddings \
+  --text-embedding-cache-dir data/text_embeddings \
   --out-prefix prior_aware_biobert_embedded_
 ```
 
@@ -99,6 +102,7 @@ CXR-BERT:
 python src/prepare/04_build_prior_aware_dataset.py \
   --tokenizer microsoft/BiomedVLP-CXR-BERT-specialized \
   --precompute-text-embeddings \
+  --text-embedding-cache-dir data/text_embeddings \
   --out-prefix prior_aware_cxrbert_embedded_
 ```
 

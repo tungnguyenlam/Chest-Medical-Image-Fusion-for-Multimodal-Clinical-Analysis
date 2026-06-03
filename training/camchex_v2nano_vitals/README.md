@@ -7,7 +7,7 @@ This is an additive CaMCheX variant. It does not change the legacy
 
 - Image backbone: `convnextv2_nano.fcmae_ft_in22k_in1k_384`.
 - Text backbone: `microsoft/BiomedVLP-CXR-BERT-specialized`.
-- Text encoder is frozen by default.
+- Text encoder freezing is opt-in by config or `--freeze-text-encoder`.
 - Structured ED vitals are numeric features, not observation text.
 - Numeric vitals are projected to one 8x8 token block.
 - Optional vital dropout masks individual vital fields during training.
@@ -24,7 +24,6 @@ This is an additive CaMCheX variant. It does not change the legacy
 | Train script | `training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py` |
 | Eval script | `training/camchex_v2nano_vitals/camchex_v2nano_vitals_eval.py` |
 | Config | `training/camchex_v2nano_vitals/config.yaml` |
-| Clinical embedding cache script | `scripts/precompute_clinical_embeddings.py` |
 | Decoded image cache script | `scripts/precompute_image_cache.py` |
 
 ## Token layout
@@ -94,8 +93,8 @@ python training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py \
   --fast-dev-run
 ```
 
-CXR-BERT still needs to be available from Hugging Face or local cache unless a
-clinical embedding cache is configured.
+CXR-BERT still needs to be available from Hugging Face or local cache on the
+first run that misses the shared text embedding cache.
 
 ## Eval
 
@@ -114,41 +113,54 @@ output/camchex_v2nano_vitals/metrics.json
 
 ## Optional Clinical Embedding Cache
 
-Because the text encoder is frozen, clinical indication CLS embeddings can be
-precomputed once per `study_id`.
-
-Use `scripts/precompute_clinical_embeddings.py` only for this non-prior model
-path. It writes a simple `study_id -> clinical_indication CLS embedding` cache
-used through `clinical_embedding_path`. It is not the right tool for
-prior-aware training, where the parquet must contain current clinical, current
-observation, prior clinical, and prior observation embeddings per row.
+When the text encoder is frozen, clinical indication CLS embeddings can be
+cached automatically by the train/eval data path. There is no separate
+precompute command for this model. Enable it with
+`--use-precomputed-text-embeddings` or the config flags below. The loader then
+gathers the needed `study_id -> clinical_indication` texts, computes only cache
+misses, and feeds float CLS embeddings to the model so CXR-BERT does not need to
+stay loaded during training.
 
 ```bash
-python scripts/precompute_clinical_embeddings.py \
-  --input-csv data/data-camchex/03_mimic_train.csv \
-  --input-csv data/data-camchex/03_mimic_development.csv \
-  --input-csv data/data-camchex/03_mimic_test.csv \
-  --output-path data/data-camchex/cxrbert_clinical_embeddings.pt
+python training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py \
+  --use-precomputed-text-embeddings \
+  --text-embedding-cache-dir data/text_embeddings
 ```
-
-Then set:
 
 ```yaml
+model:
+  model_init_args:
+    freeze_text_encoder: true
+    use_precomputed_text_embeddings: true
 data:
   datamodule_cfg:
-    clinical_embedding_path: data/data-camchex/cxrbert_clinical_embeddings.pt
+    use_text_embedding_cache: true
+    text_embedding_cache_dir: data/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
 ```
 
-If an embedding is missing for a study, the dataset falls back to tokenization
-and live frozen CXR-BERT inference.
+The shared cache is grouped by embedding model:
+
+```text
+data/text_embeddings/<embedding-model-name>-<model-hash>/cache.pt
+```
+
+Each entry key also includes the text model, max token length, and raw text, so
+the same cache root can be shared across model variants that use the same frozen
+text backbone.
 
 For prior-aware text embedding caches, use:
 
 ```bash
-python src/prepare/04_build_prior_aware_dataset.py --precompute-text-embeddings
+python src/prepare/04_build_prior_aware_dataset.py \
+  --tokenizer microsoft/BiomedVLP-CXR-BERT-specialized \
+  --precompute-text-embeddings
 ```
 
-See `training/prior_aware/README.md`.
+That builder writes the embedded current/prior text streams into parquet, but
+the underlying frozen CLS embeddings are still read from and written to the same
+shared `data/text_embeddings/...` cache.
 
 ## Optional Decoded Image Cache
 

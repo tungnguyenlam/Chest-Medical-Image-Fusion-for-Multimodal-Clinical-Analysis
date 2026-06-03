@@ -92,7 +92,8 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
         frontal_pretrained_path=None,
         lateral_pretrained_path=None,
         text_model="microsoft/BiomedVLP-CXR-BERT-specialized",
-        freeze_text_encoder: bool = True,
+        freeze_text_encoder: bool = False,
+        use_precomputed_text_embeddings: bool = False,
         vital_dropout_p: float = 0.0,
         vitals_dropout: float = 0.1,
         vitals_hidden_dim: int = 256,
@@ -100,6 +101,7 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
     ):
         super().__init__()
         self.freeze_text_encoder = freeze_text_encoder
+        self.use_precomputed_text_embeddings = use_precomputed_text_embeddings
         self.d_model = d_model
 
         self.image_encoder = ConvNeXtV2NanoImageEncoder(
@@ -107,11 +109,13 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
             frontal_pretrained_path=frontal_pretrained_path,
             lateral_pretrained_path=lateral_pretrained_path,
         )
-        self.text_encoder = CaMCheXTextEncoder(text_model=text_model)
-        if freeze_text_encoder:
-            for param in self.text_encoder.parameters():
-                param.requires_grad = False
-            self.text_encoder.eval()
+        self.text_encoder = None
+        if not use_precomputed_text_embeddings:
+            self.text_encoder = CaMCheXTextEncoder(text_model=text_model)
+            if freeze_text_encoder:
+                for param in self.text_encoder.parameters():
+                    param.requires_grad = False
+                self.text_encoder.eval()
 
         self.image_proj = nn.Conv2d(640, d_model, kernel_size=3, stride=2, padding=1)
         self.pos_encoding = Summer(PositionalEncoding2D(d_model))
@@ -137,13 +141,17 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
 
     def train(self, mode: bool = True):
         super().train(mode)
-        if self.freeze_text_encoder:
+        if self.freeze_text_encoder and self.text_encoder is not None:
             self.text_encoder.eval()
         return self
 
     def _encode_text(self, clinical_input_ids, clinical_attention_mask):
         if clinical_input_ids.is_floating_point() and clinical_input_ids.ndim == 2:
             return clinical_input_ids
+        if self.use_precomputed_text_embeddings:
+            raise TypeError("use_precomputed_text_embeddings=True requires float clinical embedding tensors")
+        if self.text_encoder is None:
+            raise RuntimeError("text_encoder is not initialized; disable use_precomputed_text_embeddings for token batches")
         if self.freeze_text_encoder:
             with torch.no_grad():
                 clinical_cls = self.text_encoder.biobert_encoder(

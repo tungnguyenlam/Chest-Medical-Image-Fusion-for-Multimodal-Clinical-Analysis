@@ -26,12 +26,11 @@ class CaMCheXVitalsDataset(Dataset):
     def __init__(self, cfg, df, transform=None, tokenizer=None):
         self.cfg = cfg
         self.transform = transform
-        assert tokenizer is not None, "Tokenizer must be provided for this dataset."
         self.tokenizer = tokenizer
         self.df = df.groupby("study_id")
         self.study_ids = list(self.df.groups.keys())
         self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
-        self.clinical_embeddings = self._load_clinical_embeddings(cfg.get("clinical_embedding_path"))
+        self.clinical_embeddings = self._load_clinical_embeddings(cfg.get("clinical_embeddings"))
         self.image_cache_dir = cfg.get("image_cache_dir")
 
     def _resolve_path(self, path):
@@ -40,11 +39,9 @@ class CaMCheXVitalsDataset(Dataset):
             return p
         return ROOT / p
 
-    def _load_clinical_embeddings(self, path):
-        if not path:
+    def _load_clinical_embeddings(self, embeddings):
+        if not embeddings:
             return None
-        payload = torch.load(self._resolve_path(path), map_location="cpu")
-        embeddings = payload.get("embeddings", payload) if isinstance(payload, dict) else payload
         return {str(k): np.asarray(v, dtype=np.float32) for k, v in embeddings.items()}
 
     def __len__(self):
@@ -81,6 +78,11 @@ class CaMCheXVitalsDataset(Dataset):
             embedding = self.clinical_embeddings.get(str(study_id))
             if embedding is not None:
                 return embedding.astype(np.float32), np.zeros(1, dtype=np.int64)
+        if self.tokenizer is None:
+            raise RuntimeError(
+                f"Missing precomputed clinical embedding for study {study_id}; "
+                "disable use_precomputed_text_embeddings or rebuild the shared text embedding cache."
+            )
 
         clinical_text = row.get("clinical_indication", "")
         if pd.isna(clinical_text) or str(clinical_text).strip() == "":

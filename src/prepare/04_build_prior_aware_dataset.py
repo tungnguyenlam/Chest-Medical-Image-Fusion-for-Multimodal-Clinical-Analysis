@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dataloader.utils import resolve_preferred_image_path
+from src.utils.text_embedding_cache import TextEmbeddingCache
 
 CLASSES = [
     "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation",
@@ -132,41 +133,12 @@ def _tokenize_batch(tokenizer, texts: list[str], max_len: int) -> tuple[np.ndarr
     return enc["input_ids"].astype(np.int32), enc["attention_mask"].astype(np.int8)
 
 
-def _embed_texts(
-    tokenizer,
-    text_model,
-    texts: list[str],
-    max_len: int,
-    batch_size: int,
-    device,
-) -> np.ndarray:
-    import torch
-
-    embeddings = []
-    with torch.inference_mode():
-        for start in tqdm(range(0, len(texts), batch_size), desc="embedding text", dynamic_ncols=True):
-            batch = texts[start:start + batch_size]
-            enc = tokenizer(
-                batch,
-                padding="max_length",
-                truncation=True,
-                max_length=max_len,
-                return_tensors="pt",
-            )
-            enc = {k: v.to(device) for k, v in enc.items()}
-            cls = text_model(**enc).last_hidden_state[:, 0, :].detach().cpu().float().numpy()
-            embeddings.append(cls)
-    return np.concatenate(embeddings, axis=0).astype(np.float32)
-
-
 def build_split(
     csv_path: Path,
     out_path: Path,
     tokenizer,
     batch_size: int = 256,
-    text_model=None,
-    embedding_batch_size: int = 32,
-    device=None,
+    text_cache: TextEmbeddingCache | None = None,
 ) -> None:
     print(f"[build] reading {csv_path}")
     df = pd.read_csv(csv_path, low_memory=False)
@@ -179,7 +151,7 @@ def build_split(
     has_prev = studies["PreviousStudy"].notna()
     studies["_prior_id"] = studies["PreviousStudy"].where(has_prev, other=-1).astype(np.int64)
 
-    precompute_embeddings = text_model is not None
+    precompute_embeddings = text_cache is not None
 
     print("[build] preparing current clinical_indication...")
     clin_texts = studies.apply(_clin_text, axis=1).tolist()
@@ -209,13 +181,13 @@ def build_split(
 
     if precompute_embeddings:
         print("[build] embedding current clinical_indication...")
-        clin_emb = _embed_texts(tokenizer, text_model, clin_texts, CLIN_MAX_LEN, embedding_batch_size, device)
+        clin_emb = text_cache.embed_texts(clin_texts, CLIN_MAX_LEN, desc="current clinical embeddings")
         print("[build] embedding current vitals...")
-        obs_emb = _embed_texts(tokenizer, text_model, obs_texts, OBS_MAX_LEN, embedding_batch_size, device)
+        obs_emb = text_cache.embed_texts(obs_texts, OBS_MAX_LEN, desc="current vitals embeddings")
         print("[build] embedding prior clinical_indication...")
-        prior_clin_emb = _embed_texts(tokenizer, text_model, prior_clin_texts, CLIN_MAX_LEN, embedding_batch_size, device)
+        prior_clin_emb = text_cache.embed_texts(prior_clin_texts, CLIN_MAX_LEN, desc="prior clinical embeddings")
         print("[build] embedding prior vitals...")
-        prior_obs_emb = _embed_texts(tokenizer, text_model, prior_obs_texts, OBS_MAX_LEN, embedding_batch_size, device)
+        prior_obs_emb = text_cache.embed_texts(prior_obs_texts, OBS_MAX_LEN, desc="prior vitals embeddings")
     else:
         print("[build] tokenizing current clinical_indication...")
         clin_ids, clin_mask = _tokenize_batch(tokenizer, clin_texts, CLIN_MAX_LEN)
@@ -329,33 +301,32 @@ def parse_args() -> argparse.Namespace:
         help="Store frozen text CLS embeddings instead of token ids/attention masks.",
     )
     p.add_argument("--embedding-batch-size", type=int, default=32)
+    p.add_argument(
+        "--text-embedding-cache-dir",
+        default="data/text_embeddings",
+        help="Shared cache root for frozen text embeddings, grouped by embedding model.",
+    )
     p.add_argument("--device", default="auto", help="Device for --precompute-text-embeddings: auto, cpu, cuda, etc.")
     return p.parse_args()
 
 
 def main() -> None:
     from transformers import AutoTokenizer
-    import torch
 
     args = parse_args()
     in_dir = (ROOT / args.in_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
-    text_model = None
-    device = None
+    tokenizer = None
+    text_cache = None
     if args.precompute_text_embeddings:
-        from transformers import AutoModel
-
-        if args.device != "auto":
-            device = torch.device(args.device)
-        elif torch.cuda.is_available():
-            device = torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            device = torch.device("mps")
-        else:
-            device = torch.device("cpu")
-        text_model = AutoModel.from_pretrained(args.tokenizer, trust_remote_code=True).to(device)
-        text_model.eval()
+        text_cache = TextEmbeddingCache(
+            text_model=args.tokenizer,
+            cache_root=args.text_embedding_cache_dir,
+            batch_size=args.embedding_batch_size,
+            device=args.device,
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
 
     for split in args.splits:
         csv_path = in_dir / f"{args.in_prefix}{split}.csv"
@@ -364,9 +335,7 @@ def main() -> None:
             csv_path,
             out_path,
             tokenizer,
-            text_model=text_model,
-            embedding_batch_size=args.embedding_batch_size,
-            device=device,
+            text_cache=text_cache,
         )
 
 

@@ -1393,3 +1393,27 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 - `training/prior_aware/README.md:75` - documented that prior-aware embedding caches must be built inside `04_build_prior_aware_dataset.py` because prior-aware rows need current/prior clinical and observation embeddings.
 
 **Reasoning.** Kept the script because it serves a different, simpler cache contract than prior-aware parquet embedding. Removing it would break the optional cache path for `CaMCheXV2NanoVitalsModel`; the fix was clearer docs rather than deletion.
+
+## 2026-06-03 - shared frozen text embedding cache
+
+**Goal.** Replace the model-specific clinical embedding precompute script with a shared cache that the training/data path can use on demand, while keeping precomputed text embeddings behind explicit flags.
+
+**Changes.**
+- `src/utils/text_embedding_cache.py:1` - added a shared `TextEmbeddingCache` keyed by text model, max token length, and raw text; cache files live under `data/text_embeddings/<embedding-model-name>-<model-hash>/cache.pt`.
+- `training/common.py:297` - added v2nano clinical-text cache injection that gathers needed study texts from the train/eval dataframes, computes only cache misses, and passes in-memory embeddings to the dataset.
+- `src/dataloader/CaMCheXVitalsDataset.py:26` - changed clinical embedding input from a model-specific path file to an in-memory mapping and allowed tokenizer-free operation when embeddings are present.
+- `src/model/CaMCheXV2NanoVitalsModel.py:95` - made text freezing and precomputed text embeddings opt-in; precomputed mode skips constructing the CXR-BERT text encoder.
+- `training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py:28` and `training/camchex_v2nano_vitals/camchex_v2nano_vitals_eval.py:29` - added `--freeze-text-encoder`, `--use-precomputed-text-embeddings`, and `--text-embedding-cache-dir` flags.
+- `src/prepare/04_build_prior_aware_dataset.py:34` - replaced the local prior-aware embedding loop and direct `AutoModel` load with the shared cache utility while still writing embedded columns into the prior-aware parquet.
+- `scripts/precompute_clinical_embeddings.py` - removed the one-off v2nano clinical embedding script.
+- `training/camchex_v2nano_vitals/README.md:116`, `training/prior_aware/README.md:75`, and `README.md:52` - updated docs to describe the shared cache and opt-in defaults.
+
+**Reasoning.** The old script made embedding precompute look like a v2nano-only artifact even though the expensive part is shared by any frozen text-backbone path. Centralizing the cache keeps repeated texts and repeated model variants from recomputing the same CLS vectors, and keeping the v2nano default as live tokenized text preserves backward compatibility unless the user opts into cached embeddings.
+
+**Assumptions.**
+- Precomputed embeddings are valid only for frozen text backbones; CLI precompute mode forces `freeze_text_encoder=True` for the v2nano model.
+- Prior-aware still needs embedded parquet columns because the runtime dataset is already parquet-backed and needs current/prior clinical and observation streams materialized per row.
+
+**Gotchas.** The shared cache is text-content keyed, not study-id keyed. That is intentional for reuse across datasets and model variants, but the v2nano loader still maps the returned embeddings back to study IDs for the current dataset contract. If a cache file exists for the model but is missing new texts, the cache utility loads CXR-BERT only for those misses.
+
+**Follow-ups.** Consider moving the v2nano cache helper out of `training/common.py` if another non-prior model needs the same study-id mapping logic.

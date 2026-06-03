@@ -32,6 +32,7 @@ from src.dataloader.utils import get_transforms
 from src.loss.AsymetricLoss import AsymetricLoss
 from src.optimizer import build_adamw_optimizer
 from src.scheduler import build_warmup_cosine_scheduler
+from src.utils.text_embedding_cache import TextEmbeddingCache
 
 
 VIEW_ALIASES = {
@@ -286,17 +287,76 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     return train_loader, val_loader
 
 
+def _clinical_text(row: pd.Series) -> str:
+    text = row.get("clinical_indication", "")
+    if pd.isna(text) or str(text).strip() == "":
+        return "No clinical history available."
+    return str(text)
+
+
+def maybe_add_camchex_vitals_text_embeddings(
+    cfg: dict[str, Any],
+    data_cfg: dict[str, Any],
+    dfs: list[pd.DataFrame],
+    args: argparse.Namespace | None = None,
+) -> dict[str, Any]:
+    model_cfg = cfg.get("model", {}) or {}
+    model_init_args = dict(model_cfg.get("model_init_args", {}) or {})
+    use_cache = bool(
+        data_cfg.get("use_text_embedding_cache", False)
+        or model_init_args.get("use_precomputed_text_embeddings", False)
+        or getattr(args, "use_precomputed_text_embeddings", False)
+    )
+    if not use_cache:
+        return data_cfg
+
+    rows = []
+    seen = set()
+    for df in dfs:
+        for _, row in df.groupby("study_id", sort=False).head(1).iterrows():
+            study_id = str(row["study_id"])
+            if study_id in seen:
+                continue
+            seen.add(study_id)
+            rows.append((study_id, _clinical_text(row)))
+
+    if not rows:
+        return data_cfg
+
+    text_model = (
+        getattr(args, "text_model", None)
+        or model_cfg.get("text_model")
+        or data_cfg.get("tokenizer")
+        or "microsoft/BiomedVLP-CXR-BERT-specialized"
+    )
+    cache = TextEmbeddingCache(
+        text_model=text_model,
+        cache_root=getattr(args, "text_embedding_cache_dir", None) or data_cfg.get("text_embedding_cache_dir", "data/text_embeddings"),
+        batch_size=int(data_cfg.get("text_embedding_batch_size", 32) or 32),
+        device=data_cfg.get("text_embedding_device", "auto"),
+    )
+    embeddings = cache.embed_texts([text for _, text in rows], max_length=384, desc=f"{text_model} clinical embeddings")
+    data_cfg = dict(data_cfg)
+    data_cfg["clinical_embeddings"] = {study_id: emb for (study_id, _), emb in zip(rows, embeddings)}
+    return data_cfg
+
+
 def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
     transforms_train, transforms_val = get_transforms(data_cfg["size"])
-    tokenizer = AutoTokenizer.from_pretrained(
-        data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
-        trust_remote_code=True,
-    )
-    train_ds = CaMCheXVitalsDataset(data_cfg, read_dataframe(data_cfg["train_df_path"]), transforms_train, tokenizer)
-    val_ds = CaMCheXVitalsDataset(data_cfg, read_dataframe(data_cfg["devel_df_path"]), transforms_val, tokenizer)
+    train_df = read_dataframe(data_cfg["train_df_path"])
+    val_df = read_dataframe(data_cfg["devel_df_path"])
+    data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [train_df, val_df], args=args)
+    tokenizer = None
+    if "clinical_embeddings" not in data_cfg:
+        tokenizer = AutoTokenizer.from_pretrained(
+            data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
+            trust_remote_code=True,
+        )
+    train_ds = CaMCheXVitalsDataset(data_cfg, train_df, transforms_train, tokenizer)
+    val_ds = CaMCheXVitalsDataset(data_cfg, val_df, transforms_val, tokenizer)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
     val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
     print(f"[dataloader] train: {train_dl_args}")
@@ -379,11 +439,14 @@ def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespac
 
     data_cfg = data_cfg_from_config(cfg, args)
     _, transforms_val = get_transforms(data_cfg["size"])
-    tokenizer = AutoTokenizer.from_pretrained(
-        data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
-        trust_remote_code=True,
-    )
     df = read_dataframe(data_cfg["pred_df_path"])
+    data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [df], args=args)
+    tokenizer = None
+    if "clinical_embeddings" not in data_cfg:
+        tokenizer = AutoTokenizer.from_pretrained(
+            data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
+            trust_remote_code=True,
+        )
     ds = CaMCheXVitalsDataset(data_cfg, df, transforms_val, tokenizer)
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
     labels_available = all(c in df.columns for c in data_cfg["classes"])
