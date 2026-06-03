@@ -82,9 +82,10 @@ prior observation/vitals text
 ```
 
 The parquet builder uses the shared frozen text embedding cache under
-`data/text_embeddings/<embedding-model-name>-<model-hash>/cache.pt`, so repeated
-runs and other model variants reuse already-computed CLS embeddings for the same
-text model, max token length, and raw text.
+`data/text_embeddings/<embedding-model-name>-<model-hash>/`, with one `.npy`
+file per cached text key. Repeated runs and other model variants reuse
+already-computed CLS embeddings for the same text model, max token length, and
+raw text.
 
 BioBERT:
 

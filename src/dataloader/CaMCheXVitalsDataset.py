@@ -31,6 +31,7 @@ class CaMCheXVitalsDataset(Dataset):
         self.study_ids = list(self.df.groups.keys())
         self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
         self.clinical_embeddings = self._load_clinical_embeddings(cfg.get("clinical_embeddings"))
+        self.clinical_embedding_cache = cfg.get("clinical_embedding_cache")
         self.image_cache_dir = cfg.get("image_cache_dir")
 
     def _resolve_path(self, path):
@@ -73,22 +74,27 @@ class CaMCheXVitalsDataset(Dataset):
             missing.append(False)
         return np.array(values, dtype=np.float32), np.array(missing, dtype=np.bool_)
 
+    def _clinical_text(self, row):
+        text = row.get("clinical_indication", "")
+        if pd.isna(text) or str(text).strip() == "":
+            return "No clinical history available."
+        return str(text)
+
     def _encode_clinical_text(self, study_id, row):
         if self.clinical_embeddings is not None:
             embedding = self.clinical_embeddings.get(str(study_id))
             if embedding is not None:
                 return embedding.astype(np.float32), np.zeros(1, dtype=np.int64)
+        clinical_text = self._clinical_text(row)
+        if self.clinical_embedding_cache is not None:
+            embedding = self.clinical_embedding_cache.get_embedding(clinical_text, max_length=384)
+            return embedding.astype(np.float32, copy=False), np.zeros(1, dtype=np.int64)
         if self.tokenizer is None:
             raise RuntimeError(
                 f"Missing precomputed clinical embedding for study {study_id}; "
                 "disable use_precomputed_text_embeddings or rebuild the shared text embedding cache."
             )
 
-        clinical_text = row.get("clinical_indication", "")
-        if pd.isna(clinical_text) or str(clinical_text).strip() == "":
-            clinical_text = "No clinical history available."
-        else:
-            clinical_text = str(clinical_text)
         clinical_tokens = self.tokenizer(
             clinical_text,
             padding="max_length",

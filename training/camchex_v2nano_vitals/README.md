@@ -143,12 +143,15 @@ data:
 The shared cache is grouped by embedding model:
 
 ```text
-data/text_embeddings/<embedding-model-name>-<model-hash>/cache.pt
+data/text_embeddings/<embedding-model-name>-<model-hash>/
+  metadata.json
+  embeddings/<key-prefix>/<cache-key>.npy
 ```
 
 Each entry key also includes the text model, max token length, and raw text, so
 the same cache root can be shared across model variants that use the same frozen
-text backbone.
+text backbone. The train/eval dataset streams one `.npy` vector per sample
+instead of loading every cached embedding into memory at startup.
 
 For prior-aware text embedding caches, use:
 

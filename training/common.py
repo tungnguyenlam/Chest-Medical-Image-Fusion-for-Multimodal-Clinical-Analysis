@@ -335,9 +335,10 @@ def maybe_add_camchex_vitals_text_embeddings(
         batch_size=int(data_cfg.get("text_embedding_batch_size", 32) or 32),
         device=data_cfg.get("text_embedding_device", "auto"),
     )
-    embeddings = cache.embed_texts([text for _, text in rows], max_length=384, desc=f"{text_model} clinical embeddings")
+    cache.ensure_texts([text for _, text in rows], max_length=384, desc=f"{text_model} clinical embeddings")
+    cache.unload_model()
     data_cfg = dict(data_cfg)
-    data_cfg["clinical_embeddings"] = {study_id: emb for (study_id, _), emb in zip(rows, embeddings)}
+    data_cfg["clinical_embedding_cache"] = cache
     return data_cfg
 
 
@@ -350,7 +351,7 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     val_df = read_dataframe(data_cfg["devel_df_path"])
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [train_df, val_df], args=args)
     tokenizer = None
-    if "clinical_embeddings" not in data_cfg:
+    if "clinical_embedding_cache" not in data_cfg and "clinical_embeddings" not in data_cfg:
         tokenizer = AutoTokenizer.from_pretrained(
             data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
             trust_remote_code=True,
@@ -442,7 +443,7 @@ def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespac
     df = read_dataframe(data_cfg["pred_df_path"])
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [df], args=args)
     tokenizer = None
-    if "clinical_embeddings" not in data_cfg:
+    if "clinical_embedding_cache" not in data_cfg and "clinical_embeddings" not in data_cfg:
         tokenizer = AutoTokenizer.from_pretrained(
             data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
             trust_remote_code=True,

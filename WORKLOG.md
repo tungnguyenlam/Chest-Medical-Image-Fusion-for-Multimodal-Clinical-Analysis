@@ -1417,3 +1417,18 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The shared cache is text-content keyed, not study-id keyed. That is intentional for reuse across datasets and model variants, but the v2nano loader still maps the returned embeddings back to study IDs for the current dataset contract. If a cache file exists for the model but is missing new texts, the cache utility loads CXR-BERT only for those misses.
 
 **Follow-ups.** Consider moving the v2nano cache helper out of `training/common.py` if another non-prior model needs the same study-id mapping logic.
+
+## 2026-06-03 - stream v2nano text embedding cache reads
+
+**Goal.** Avoid loading all precomputed text embeddings into memory when the v2nano training/eval path uses frozen cached text embeddings.
+
+**Changes.**
+- `src/utils/text_embedding_cache.py:50` - replaced the monolithic `cache.pt` payload with a model-specific cache folder containing `metadata.json` and one float32 `.npy` file per text key under sharded `embeddings/<prefix>/` directories.
+- `src/utils/text_embedding_cache.py:104` - added `ensure_texts()` to precompute only missing keys and `get_embedding()` to read one cached vector on demand.
+- `training/common.py:337` - changed the v2nano cache setup to call `ensure_texts()`, unload the text model, and pass the lightweight cache handle into the dataset instead of building an all-study embedding dict.
+- `src/dataloader/CaMCheXVitalsDataset.py:34` - added per-sample cache lookup by normalized clinical indication text while retaining the in-memory mapping path for tests or explicit callers.
+- `training/camchex_v2nano_vitals/README.md:143` and `training/prior_aware/README.md:84` - documented the sharded per-key cache layout.
+
+**Reasoning.** The previous shared-cache implementation fixed duplication but still loaded the entire embedding payload into memory and then built another study-id mapping for v2nano. Per-key files keep startup memory bounded: the loader may scan strings to fill cache misses, but the dataset reads only the current sample's CLS vector.
+
+**Gotchas.** The cache object must not carry a loaded CXR-BERT model into DataLoader workers, so `training.common` unloads it after precomputing misses. Prior-aware embedded parquet generation still materializes arrays for the parquet it is writing; this change is specifically for runtime train/eval streaming in the v2nano dataset path.
