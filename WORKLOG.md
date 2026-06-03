@@ -1290,3 +1290,24 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** Help/config checks import Albumentations/Matplotlib through shared training utilities, which produced warnings about network-disabled version checks and unwritable Matplotlib cache directories in this sandbox. The actual checks still passed. Real first training will need network/cache access for pretrained timm and CXR-BERT weights unless they are already cached.
 
 **Follow-ups.** Run a real `--fast-dev-run --no-pretrained` or cached-weight smoke test against local label CSVs, then compare whether BERT or JPEG decode is the dominant input bottleneck before adding precomputed embeddings or image shards.
+
+## 2026-06-03 - optional precomputed clinical embeddings
+
+**Goal.** Add a safe precompute path for frozen CXR-BERT clinical indication embeddings without making it mandatory for the new model.
+
+**Changes.**
+- `scripts/precompute_clinical_embeddings.py:31` - added a CLI that reads one or more label CSVs, groups by `study_id`, runs CXR-BERT once per study, and saves a `.pt` mapping of study ID to CLS embedding.
+- `src/dataloader/CaMCheXVitalsDataset.py:34` - optionally loads `clinical_embedding_path` from the new model data config.
+- `src/dataloader/CaMCheXVitalsDataset.py:78` - returns a cached 768-d embedding when present, otherwise falls back to tokenizing clinical indication text.
+- `src/model/CaMCheXV2NanoVitalsModel.py:144` - detects floating-point `(B, 768)` clinical inputs and skips the CXR-BERT forward pass.
+- `training/camchex_v2nano_vitals/config.yaml:90` - documented the optional `clinical_embedding_path: null` knob.
+
+**Reasoning.** Because CXR-BERT is frozen in this variant, precomputing clinical indication embeddings is behavior-preserving for deterministic text and avoids repeated BERT inference during training. Keeping tokenization as a fallback means the same training entrypoint works before and after cache generation, and old model paths are unaffected.
+
+**Assumptions.**
+- Study-level clinical indication text is stable enough to cache by `study_id` across train/validation/test CSVs.
+- Cached embeddings are produced by the same `text_model` named in the config; the script records the model name but the dataset does not enforce it yet.
+
+**Gotchas.** The precompute script requires CXR-BERT weights/tokenizer to be available through Hugging Face or local cache. A local validation used a toy `.pt` cache and a dummy model path to confirm the dataset skips tokenization and the model skips BERT for cached embeddings.
+
+**Follow-ups.** Consider adding a stricter cache metadata check if multiple text models are used in the same workspace.

@@ -1,12 +1,15 @@
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 from torch.utils.data import Dataset
 
 from src.dataloader.utils import _safe_decode_jpeg, resolve_preferred_image_path
 
 
+ROOT = Path(__file__).resolve().parents[2]
 VITAL_FIELDS = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp", "gender"]
 DEFAULT_VITAL_STATS = {
     "temperature": {"mean": 98.6, "std": 3.0},
@@ -28,6 +31,20 @@ class CaMCheXVitalsDataset(Dataset):
         self.df = df.groupby("study_id")
         self.study_ids = list(self.df.groups.keys())
         self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
+        self.clinical_embeddings = self._load_clinical_embeddings(cfg.get("clinical_embedding_path"))
+
+    def _resolve_path(self, path):
+        p = Path(path)
+        if p.is_absolute() or p.exists():
+            return p
+        return ROOT / p
+
+    def _load_clinical_embeddings(self, path):
+        if not path:
+            return None
+        payload = torch.load(self._resolve_path(path), map_location="cpu")
+        embeddings = payload.get("embeddings", payload) if isinstance(payload, dict) else payload
+        return {str(k): np.asarray(v, dtype=np.float32) for k, v in embeddings.items()}
 
     def __len__(self):
         return len(self.study_ids)
@@ -57,6 +74,26 @@ class CaMCheXVitalsDataset(Dataset):
             values.append((float(value) - float(stats.get("mean", 0.0))) / std)
             missing.append(False)
         return np.array(values, dtype=np.float32), np.array(missing, dtype=np.bool_)
+
+    def _encode_clinical_text(self, study_id, row):
+        if self.clinical_embeddings is not None:
+            embedding = self.clinical_embeddings.get(str(study_id))
+            if embedding is not None:
+                return embedding.astype(np.float32), np.zeros(1, dtype=np.int64)
+
+        clinical_text = row.get("clinical_indication", "")
+        if pd.isna(clinical_text) or str(clinical_text).strip() == "":
+            clinical_text = "No clinical history available."
+        else:
+            clinical_text = str(clinical_text)
+        clinical_tokens = self.tokenizer(
+            clinical_text,
+            padding="max_length",
+            truncation=True,
+            max_length=384,
+            return_tensors="pt",
+        )
+        return clinical_tokens["input_ids"].squeeze(0), clinical_tokens["attention_mask"].squeeze(0)
 
     def __getitem__(self, index):
         df = self.df.get_group(self.study_ids[index])
@@ -106,26 +143,15 @@ class CaMCheXVitalsDataset(Dataset):
         view_positions = np.array(view_positions + [0] * (4 - n), dtype=np.int64)
 
         row = df.iloc[0]
-        clinical_text = row.get("clinical_indication", "")
-        if pd.isna(clinical_text) or str(clinical_text).strip() == "":
-            clinical_text = "No clinical history available."
-        else:
-            clinical_text = str(clinical_text)
-        clinical_tokens = self.tokenizer(
-            clinical_text,
-            padding="max_length",
-            truncation=True,
-            max_length=384,
-            return_tensors="pt",
-        )
+        clinical_input, clinical_attention_mask = self._encode_clinical_text(study_id, row)
         vital_values, vital_missing_mask = self._encode_vitals(row)
 
         return (
             study_id,
             img,
             view_positions,
-            clinical_tokens["input_ids"].squeeze(0),
-            clinical_tokens["attention_mask"].squeeze(0),
+            clinical_input,
+            clinical_attention_mask,
             vital_values,
             vital_missing_mask,
         ), label

@@ -87,6 +87,7 @@ data:
     train_df_path: data/data-camchex/03_mimic_train.csv
     devel_df_path: data/data-camchex/03_mimic_development.csv
     pred_df_path: data/data-camchex/03_mimic_test.csv
+    clinical_embedding_path: null
     size: 512
     classes: *classes
 trainer:

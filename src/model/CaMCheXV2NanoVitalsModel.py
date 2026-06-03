@@ -142,6 +142,8 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
         return self
 
     def _encode_text(self, clinical_input_ids, clinical_attention_mask):
+        if clinical_input_ids.is_floating_point() and clinical_input_ids.ndim == 2:
+            return clinical_input_ids
         if self.freeze_text_encoder:
             with torch.no_grad():
                 clinical_cls = self.text_encoder.biobert_encoder(
