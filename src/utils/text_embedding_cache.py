@@ -38,6 +38,42 @@ def model_cache_dir(cache_root: str | Path, text_model: str) -> Path:
     return resolve_path(cache_root) / f"{safe}-{digest}"
 
 
+def _replace_parameter(module: torch.nn.Module, name: str, tensor: torch.Tensor, requires_grad: bool) -> None:
+    parent = module
+    parts = name.split(".")
+    for part in parts[:-1]:
+        parent = getattr(parent, part)
+    setattr(parent, parts[-1], torch.nn.Parameter(tensor, requires_grad=requires_grad))
+
+
+def _materialize_unused_cxrbert_meta_parameters(model: torch.nn.Module) -> list[str]:
+    meta_params = {name: param for name, param in model.named_parameters() if param.is_meta}
+    if not meta_params:
+        return []
+
+    mlm_head_params = {
+        "cls.predictions.decoder.weight",
+        "cls.predictions.decoder.bias",
+    }
+    if any(name not in mlm_head_params for name in meta_params):
+        return list(meta_params)
+
+    named_params = dict(model.named_parameters())
+    replacements = {
+        "cls.predictions.decoder.weight": "bert.embeddings.word_embeddings.weight",
+        "cls.predictions.decoder.bias": "cls.predictions.bias",
+    }
+    for name, param in meta_params.items():
+        source = named_params.get(replacements[name])
+        if source is not None and not source.is_meta and tuple(source.shape) == tuple(param.shape):
+            tensor = source.detach().cpu().clone()
+        else:
+            tensor = torch.zeros(tuple(param.shape), dtype=param.dtype, device="cpu")
+        _replace_parameter(model, name, tensor, requires_grad=param.requires_grad)
+
+    return [name for name, param in model.named_parameters() if param.is_meta]
+
+
 class TextEmbeddingCache:
     def __init__(
         self,
@@ -107,14 +143,15 @@ class TextEmbeddingCache:
             trust_remote_code=True,
             low_cpu_mem_usage=False,
         )
-        meta_params = [name for name, param in self._model.named_parameters() if param.is_meta]
+        meta_params = _materialize_unused_cxrbert_meta_parameters(self._model)
         if meta_params:
             examples = ", ".join(meta_params[:5])
             suffix = "" if len(meta_params) <= 5 else f", ... ({len(meta_params)} total)"
             raise RuntimeError(
                 f"{self.text_model} loaded with meta tensor parameter(s): {examples}{suffix}. "
-                "Try a different transformers/torch version or set data.datamodule_cfg.text_embedding_device=cpu."
+                "Try a different transformers/torch version."
             )
+        print("[text-cache] materialized unused CXR-BERT MLM head parameters if needed", flush=True)
         self._model = self._model.to(self.device)
         self._model.eval()
 

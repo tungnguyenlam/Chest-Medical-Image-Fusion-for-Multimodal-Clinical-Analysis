@@ -1467,3 +1467,18 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** On Apple Silicon, `text_embedding_device: auto` resolves to `mps`. If this model later loads but fails during forward on MPS, set `data.datamodule_cfg.text_embedding_device: cpu` or override the config for the one-time cache build.
 
 **Follow-ups.** Re-run the Mac mini command after pulling this change. If it still fails, capture the new `[text-cache]` lines and any named meta parameters; that will point to a dependency-version or custom-model compatibility issue.
+
+## 2026-06-04 - tolerate unused CXR-BERT MLM head meta tensors
+
+**Goal.** Fix the Mac mini text embedding cache failure where `microsoft/BiomedVLP-CXR-BERT-specialized` loaded on CPU but left only `cls.predictions.decoder.weight` and `cls.predictions.decoder.bias` as meta tensors.
+
+**Changes.**
+- `src/utils/text_embedding_cache.py:35` - added a small helper to replace nested module parameters safely.
+- `src/utils/text_embedding_cache.py:43` - materialize the unused CXR-BERT MLM decoder weight/bias from the word embedding and prediction bias when possible, or CPU zeros as a fallback.
+- `src/utils/text_embedding_cache.py:125` - run the materialization before moving the model to the cache device, and keep the targeted meta-tensor error for any other parameter.
+
+**Reasoning.** The cache only uses `last_hidden_state[:, 0, :]`, so the MLM prediction head is irrelevant for clinical embedding generation. The custom CXR-BERT loader reports tied-weight warnings and leaves only that unused head on meta; replacing just those parameters is narrower than changing the training path or switching text models.
+
+**Gotchas.** This should not affect embedding values because the forward path for cached CLS embeddings does not read the MLM decoder head. If future code starts using MLM logits from this loaded model, this workaround would be wrong for that use case.
+
+**Follow-ups.** Re-run the Mac mini cache build after pulling this patch. If a different meta parameter appears, do not auto-materialize it without checking whether it participates in the hidden-state forward path.
