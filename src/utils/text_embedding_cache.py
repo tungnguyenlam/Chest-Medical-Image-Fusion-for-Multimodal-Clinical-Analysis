@@ -95,8 +95,27 @@ class TextEmbeddingCache:
     def _load_model(self) -> None:
         if self._model is not None:
             return
+        print(f"[text-cache] loading tokenizer: {self.text_model}", flush=True)
         self._tokenizer = AutoTokenizer.from_pretrained(self.text_model, trust_remote_code=True)
-        self._model = AutoModel.from_pretrained(self.text_model, trust_remote_code=True).to(self.device)
+        print(
+            f"[text-cache] loading model: {self.text_model} -> device={self.device} "
+            "(low_cpu_mem_usage=False)",
+            flush=True,
+        )
+        self._model = AutoModel.from_pretrained(
+            self.text_model,
+            trust_remote_code=True,
+            low_cpu_mem_usage=False,
+        )
+        meta_params = [name for name, param in self._model.named_parameters() if param.is_meta]
+        if meta_params:
+            examples = ", ".join(meta_params[:5])
+            suffix = "" if len(meta_params) <= 5 else f", ... ({len(meta_params)} total)"
+            raise RuntimeError(
+                f"{self.text_model} loaded with meta tensor parameter(s): {examples}{suffix}. "
+                "Try a different transformers/torch version or set data.datamodule_cfg.text_embedding_device=cpu."
+            )
+        self._model = self._model.to(self.device)
         self._model.eval()
 
     def unload_model(self) -> None:

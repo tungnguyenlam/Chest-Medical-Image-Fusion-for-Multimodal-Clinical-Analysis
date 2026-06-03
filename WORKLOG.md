@@ -1452,3 +1452,18 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** HuggingFace internals may still have quiet periods inside `create_commit()` or `hf_hub_download()`; these messages make the active phase visible but do not provide byte-level transfer progress beyond what the underlying library exposes.
 
 **Follow-ups.** If training logs are also too quiet, add similar start/end prints around checkpoint saves, validation, cache building, and dataloader construction in `training/common.py`.
+
+## 2026-06-04 - clarify CXR-BERT text cache model loading on Mac
+
+**Goal.** Diagnose the Mac mini failure after the HuggingFace model download completed and make the text embedding cache loader more transparent.
+
+**Changes.**
+- `src/utils/text_embedding_cache.py:98` - print the exact tokenizer/model being loaded and the selected device before CXR-BERT cache embedding starts.
+- `src/utils/text_embedding_cache.py:100` - pass `low_cpu_mem_usage=False` to `AutoModel.from_pretrained()` so the custom `microsoft/BiomedVLP-CXR-BERT-specialized` loader avoids the meta-tensor loading path that crashed on `.to(device)`.
+- `src/utils/text_embedding_cache.py:108` - detect any remaining meta tensor parameters and raise a targeted error with parameter examples instead of the opaque PyTorch `.to()` failure.
+
+**Reasoning.** The new trace showed the 439M `model.safetensors` download succeeded and the failure moved to `AutoModel.from_pretrained(...).to(self.device)`, so this was no longer an HF token/Xet transfer issue. The smallest fix is local to the text embedding cache loader: keep the custom CXR-BERT load eager, print the model/device, and fail clearly if the checkpoint still leaves meta tensors.
+
+**Gotchas.** On Apple Silicon, `text_embedding_device: auto` resolves to `mps`. If this model later loads but fails during forward on MPS, set `data.datamodule_cfg.text_embedding_device: cpu` or override the config for the one-time cache build.
+
+**Follow-ups.** Re-run the Mac mini command after pulling this change. If it still fails, capture the new `[text-cache]` lines and any named meta parameters; that will point to a dependency-version or custom-model compatibility issue.
