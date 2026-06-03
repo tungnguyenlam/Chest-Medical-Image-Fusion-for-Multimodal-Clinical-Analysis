@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dataloader.CaMCheXDataset import CaMCheXDataset
+from src.dataloader.CaMCheXVitalsDataset import CaMCheXVitalsDataset
 from src.dataloader.PriorAwareDataset import PriorAwareDataset
 from src.dataloader.SingleViewDataset import SingleViewDataset
 from src.dataloader.utils import get_transforms
@@ -285,6 +286,26 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     return train_loader, val_loader
 
 
+def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
+    from transformers import AutoTokenizer
+
+    data_cfg = data_cfg_from_config(cfg, args)
+    transforms_train, transforms_val = get_transforms(data_cfg["size"])
+    tokenizer = AutoTokenizer.from_pretrained(
+        data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
+        trust_remote_code=True,
+    )
+    train_ds = CaMCheXVitalsDataset(data_cfg, read_dataframe(data_cfg["train_df_path"]), transforms_train, tokenizer)
+    val_ds = CaMCheXVitalsDataset(data_cfg, read_dataframe(data_cfg["devel_df_path"]), transforms_val, tokenizer)
+    train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    print(f"[dataloader] train: {train_dl_args}")
+    print(f"[dataloader] val:   {val_dl_args}")
+    train_loader = DataLoader(train_ds, **train_dl_args)
+    val_loader = DataLoader(val_ds, **val_dl_args)
+    return train_loader, val_loader
+
+
 def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     """Build train/val loaders backed by the pre-generated prior-aware parquet."""
     data_cfg = data_cfg_from_config(cfg, args)
@@ -348,6 +369,22 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
     )
     df = read_dataframe(data_cfg["pred_df_path"])
     ds = CaMCheXDataset(data_cfg, df, transforms_val, tokenizer)
+    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    labels_available = all(c in df.columns for c in data_cfg["classes"])
+    return loader, labels_available
+
+
+def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
+    from transformers import AutoTokenizer
+
+    data_cfg = data_cfg_from_config(cfg, args)
+    _, transforms_val = get_transforms(data_cfg["size"])
+    tokenizer = AutoTokenizer.from_pretrained(
+        data_cfg.get("tokenizer") or "microsoft/BiomedVLP-CXR-BERT-specialized",
+        trust_remote_code=True,
+    )
+    df = read_dataframe(data_cfg["pred_df_path"])
+    ds = CaMCheXVitalsDataset(data_cfg, df, transforms_val, tokenizer)
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
     labels_available = all(c in df.columns for c in data_cfg["classes"])
     return loader, labels_available

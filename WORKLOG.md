@@ -1245,3 +1245,26 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** This commit only adds the model class; existing dataloaders do not yet produce the new numeric vitals tuple. The first validation avoided downloading CXR-BERT weights and checked syntax, the vitals projector shape, and the timm feature shape locally.
 
 **Follow-ups.** Add a dataset/loader path that emits normalized vital values and missing masks while leaving the old `CaMCheXDataset` tuple unchanged.
+
+## 2026-06-03 - add numeric vitals dataset path
+
+**Goal.** Add a dataset/loader path for the ConvNeXtV2 Nano vitals model without changing the existing `CaMCheXDataset` tuple used by old CaMCheX configs.
+
+**Changes.**
+- `src/dataloader/CaMCheXVitalsDataset.py:10` - defined the seven structured vital fields and default normalization stats.
+- `src/dataloader/CaMCheXVitalsDataset.py:22` - added `CaMCheXVitalsDataset`, mirroring the existing study-level image/text loading behavior but returning numeric vital values and missing masks instead of observation text tokens.
+- `src/dataloader/CaMCheXVitalsDataset.py:45` - normalizes vitals and encodes missing values as both a zero-filled value and a boolean mask bit.
+- `src/dataloader/CaMCheXVitalsDataset.py:121` - returns the new model tuple `(study_id, img, view_positions, clinical_input_ids, clinical_attention_mask, vital_values, vital_missing_mask)`.
+- `training/common.py:28` - imports the new dataset for additive loader helpers.
+- `training/common.py:289` - added `make_camchex_vitals_loaders` for training/validation.
+- `training/common.py:377` - added `make_camchex_vitals_eval_loader` for evaluation/prediction.
+
+**Reasoning.** Kept the original `CaMCheXDataset` untouched so older model classes, checkpoints, and configs do not see a changed batch structure. The new dataset converts vitals into structured numeric inputs because the new model projects them directly to tokens. Normalization stats live in config via `vital_stats` overrides, but defaults keep the path runnable before computed train-set stats exist.
+
+**Assumptions.**
+- Missing vitals should produce a normalized value of `0.0` plus `missing=True`, letting the model distinguish imputed values from observed values.
+- Gender is encoded as male `1.0`, female `0.0`, then normalized with the default gender mean/std unless overridden.
+
+**Gotchas.** The dataset still expects the normal image transform path to convert images to channel-first arrays, matching the legacy dataset behavior. A local contract test used a dummy transform/tokenizer and patched image decode rather than real JPG files.
+
+**Follow-ups.** Wire these loaders into a dedicated training/eval entrypoint and config for the new model variant.
