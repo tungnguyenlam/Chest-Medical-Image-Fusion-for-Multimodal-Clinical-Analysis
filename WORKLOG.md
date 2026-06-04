@@ -1482,3 +1482,26 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** This should not affect embedding values because the forward path for cached CLS embeddings does not read the MLM decoder head. If future code starts using MLM logits from this loaded model, this workaround would be wrong for that use case.
 
 **Follow-ups.** Re-run the Mac mini cache build after pulling this patch. If a different meta parameter appears, do not auto-materialize it without checking whether it participates in the hidden-state forward path.
+
+## 2026-06-04 - global epoch checkpoints and early stopping
+
+**Goal.** Replace shared trainer `best.pt`/`last.pt` checkpointing with per-epoch checkpoints, temporary mid-epoch recovery files, and global early stopping for all active training entrypoints that call `training/common.py::train_model()`.
+
+**Changes.**
+- `training/common.py:79` - added shared CLI/config controls for `checkpoint_every_steps` and early stopping (`monitor`, `mode`, `patience`, `min_delta`).
+- `training/common.py:568` - expanded checkpoint payloads with checkpoint kind, completed-epoch flag, best monitored value/epoch, and early-stop bad-epoch state while keeping `best_val_ap` compatibility for old/default AP resumes.
+- `training/common.py:627` - made resume distinguish completed epoch checkpoints from `_mid.pt` checkpoints, so `epoch_002.pt` resumes at epoch 3 while `epoch_002_step_..._mid.pt` resumes at epoch 2.
+- `training/common.py:755` - defaulted temporary mid-epoch checkpointing to every 1000 optimizer steps and early stopping to `val_ap`/`max`/patience 3.
+- `training/common.py:941` - save one temporary `_mid.pt` recovery checkpoint at the configured optimizer-step interval, deleting older temporary recovery files first.
+- `training/common.py:1001` - apply early stopping only after full epoch validation, save `checkpoints/epoch_{epoch:03d}.pt`, delete that epoch's temporary `_mid.pt`, and stop once patience is exhausted.
+
+**Reasoning.** The active training entrypoints already share `train_model()`, so implementing this once in `training/common.py` gives global behavior without touching model-specific scripts. Completed epoch checkpoints are durable history and temporary mid-epoch checkpoints are recovery-only; this avoids ambiguous `last.pt` semantics and prevents checkpoint clutter during long epochs. Early stopping monitors epoch validation rather than quick/interval validation so diagnostic probes do not change training control flow.
+
+**Assumptions.**
+- Epoch checkpoints should remain full training-state `.pt` files, not weights-only files, because resume needs optimizer, scheduler, scaler, and early-stop state.
+- `val_ap` in max mode with patience 3 is the global default; setting patience to 0 disables early stopping.
+- Existing old checkpoints without the new metadata should still resume as completed epoch checkpoints.
+
+**Gotchas.** A `_mid.pt` resume restores model/optimizer/scheduler/scaler/global step but restarts that epoch's dataloader from the beginning, matching the existing epoch-level resume granularity. Existing `best.pt` or `last.pt` files in old run directories are not deleted; the new trainer simply stops writing them.
+
+**Follow-ups.** Run a real active entrypoint smoke test on the target machine/data after dependency and dataset availability are confirmed, especially for MPS throughput and long-epoch recovery timing.

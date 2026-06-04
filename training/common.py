@@ -55,7 +55,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     )
     parser.add_argument(
         "--resume-from",
-        help="Train only: full resume from checkpoint (model + optimizer + scheduler + epoch + global_step + best_val_ap). Run dir is inferred from the checkpoint path.",
+        help="Train only: full resume from checkpoint (model + optimizer + scheduler + epoch + global_step + early-stop state). Run dir is inferred from the checkpoint path.",
     )
     parser.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
     parser.add_argument("--batch-size", type=int)
@@ -76,6 +76,15 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
     parser.add_argument("--val-check-interval", type=float)
     parser.add_argument("--log-every-n-steps", type=int, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
+    parser.add_argument(
+        "--checkpoint-every-steps",
+        type=int,
+        help="Save one temporary mid-epoch recovery checkpoint every N optimizer steps. Default 1000; set 0 to disable.",
+    )
+    parser.add_argument("--early-stop-monitor", help="Epoch validation metric to monitor for early stopping. Default val_ap.")
+    parser.add_argument("--early-stop-mode", choices=["min", "max"], help="Whether early-stop monitor should decrease or increase. Default max.")
+    parser.add_argument("--early-stop-patience", type=int, help="Stop after this many non-improving epochs. Default 3; set 0 to disable.")
+    parser.add_argument("--early-stop-min-delta", type=float, help="Minimum metric change required to count as an improvement. Default 0.0.")
     parser.add_argument(
         "--quick-val-every-steps",
         type=int,
@@ -556,20 +565,44 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
             model.train()
 
 
-def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, global_step: int, best_val_ap: float, classes: list[str], scaler=None) -> None:
+def save_checkpoint(
+    path: Path,
+    model,
+    optimizer,
+    scheduler,
+    epoch: int,
+    global_step: int,
+    classes: list[str],
+    scaler=None,
+    checkpoint_kind: str = "epoch",
+    best_monitor_value: float | None = None,
+    best_monitor_epoch: int | None = None,
+    early_stop_bad_epochs: int = 0,
+    early_stop_monitor: str = "val_ap",
+    early_stop_mode: str = "max",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     model_to_save = unwrap_compiled_model(model)
+    payload = {
+        "epoch": epoch,
+        "global_step": global_step,
+        "classes": classes,
+        "checkpoint_kind": checkpoint_kind,
+        "completed_epoch": checkpoint_kind == "epoch",
+        "best_monitor_value": best_monitor_value,
+        "best_monitor_epoch": best_monitor_epoch,
+        "early_stop_bad_epochs": early_stop_bad_epochs,
+        "early_stop_monitor": early_stop_monitor,
+        "early_stop_mode": early_stop_mode,
+        "model_state_dict": model_to_save.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+        "scaler_state_dict": scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
+    }
+    if early_stop_monitor == "val_ap" and best_monitor_value is not None:
+        payload["best_val_ap"] = best_monitor_value
     torch.save(
-        {
-            "epoch": epoch,
-            "global_step": global_step,
-            "best_val_ap": best_val_ap,
-            "classes": classes,
-            "model_state_dict": model_to_save.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
-            "scaler_state_dict": scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
-        },
+        payload,
         path,
     )
 
@@ -591,7 +624,7 @@ def append_metric_row(csv_path: Path, row: dict[str, Any], fieldnames: list[str]
         writer.writerow({k: serializable.get(k, "") for k in fields})
 
 
-def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path, scaler=None) -> tuple[int, int, float]:
+def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path, scaler=None) -> tuple[int, int, float | None, int, int | None]:
     checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
     load_model_state(model, checkpoint)
     if isinstance(checkpoint, dict) and "optimizer_state_dict" in checkpoint:
@@ -600,10 +633,21 @@ def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str |
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     if isinstance(checkpoint, dict) and scaler is not None and checkpoint.get("scaler_state_dict") is not None:
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
-    start_epoch = int(checkpoint.get("epoch", -1)) + 1 if isinstance(checkpoint, dict) else 0
-    global_step = int(checkpoint.get("global_step", 0)) if isinstance(checkpoint, dict) else 0
-    best_val_ap = float(checkpoint.get("best_val_ap", float("-inf"))) if isinstance(checkpoint, dict) else float("-inf")
-    return start_epoch, global_step, best_val_ap
+    if not isinstance(checkpoint, dict):
+        return 0, 0, None, 0, None
+    epoch = int(checkpoint.get("epoch", -1))
+    checkpoint_kind = str(checkpoint.get("checkpoint_kind", "epoch"))
+    completed_epoch = bool(checkpoint.get("completed_epoch", checkpoint_kind != "mid_epoch"))
+    start_epoch = epoch + 1 if completed_epoch else max(0, epoch)
+    global_step = int(checkpoint.get("global_step", 0))
+    best_monitor_value = checkpoint.get("best_monitor_value", checkpoint.get("best_val_ap"))
+    if best_monitor_value is not None:
+        best_monitor_value = float(best_monitor_value)
+    early_stop_bad_epochs = int(checkpoint.get("early_stop_bad_epochs", 0))
+    best_monitor_epoch = checkpoint.get("best_monitor_epoch")
+    if best_monitor_epoch is not None:
+        best_monitor_epoch = int(best_monitor_epoch)
+    return start_epoch, global_step, best_monitor_value, early_stop_bad_epochs, best_monitor_epoch
 
 
 def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_dir: Path, lr: float, classes: list[str], loss_init_args: dict[str, Any], cfg: dict[str, Any] | None = None):
@@ -640,10 +684,22 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
     start_epoch = 0
     global_step = 0
-    best_val_ap = float("-inf")
+    best_monitor_value: float | None = None
+    best_monitor_epoch: int | None = None
+    early_stop_bad_epochs = 0
     if args.resume_from:
-        start_epoch, global_step, best_val_ap = load_training_checkpoint(model, optimizer, scheduler, args.resume_from, scaler=scaler)
-        print(f"resumed from {args.resume_from} at epoch={start_epoch} global_step={global_step} best_val_ap={best_val_ap:.6f}")
+        (
+            start_epoch,
+            global_step,
+            best_monitor_value,
+            early_stop_bad_epochs,
+            best_monitor_epoch,
+        ) = load_training_checkpoint(model, optimizer, scheduler, args.resume_from, scaler=scaler)
+        best_label = "nan" if best_monitor_value is None else f"{best_monitor_value:.6f}"
+        print(
+            f"resumed from {args.resume_from} at epoch={start_epoch} global_step={global_step} "
+            f"best_monitor={best_label} bad_epochs={early_stop_bad_epochs}"
+        )
     elif args.checkpoint_path:
         load_weights(model, args.checkpoint_path)
         print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
@@ -696,6 +752,20 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         val_every_batches = max(1, int(len(train_loader) * val_interval)) if val_interval <= 1 else int(val_interval)
 
     log_every_n_steps = max(1, int(resolve_trainer_arg(args, cfg, "log_every_n_steps", 1) or 1))
+    checkpoint_every_steps = int(resolve_trainer_arg(args, cfg, "checkpoint_every_steps", 1000) or 0)
+    if checkpoint_every_steps < 0:
+        raise ValueError("checkpoint_every_steps must be >= 0")
+
+    early_stop_monitor = str(resolve_trainer_arg(args, cfg, "early_stop_monitor", "val_ap"))
+    early_stop_mode = str(resolve_trainer_arg(args, cfg, "early_stop_mode", "max")).lower()
+    if early_stop_mode not in {"min", "max"}:
+        raise ValueError("early_stop_mode must be 'min' or 'max'")
+    early_stop_patience = int(resolve_trainer_arg(args, cfg, "early_stop_patience", 3) or 0)
+    if early_stop_patience < 0:
+        raise ValueError("early_stop_patience must be >= 0")
+    early_stop_min_delta = float(resolve_trainer_arg(args, cfg, "early_stop_min_delta", 0.0) or 0.0)
+    if early_stop_min_delta < 0:
+        raise ValueError("early_stop_min_delta must be >= 0")
 
     quick_val_every_steps = resolve_trainer_arg(args, cfg, "quick_val_every_steps", None)
     quick_val_frac = float(resolve_trainer_arg(args, cfg, "quick_val_frac", 0.1) or 0.1)
@@ -711,11 +781,13 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         f"[train] device={device} precision={precision} scaler={use_scaler} "
         f"lr={lr:.2e} max_epochs={max_epochs} accumulate={accumulate_grad_batches} "
         f"grad_clip={grad_clip} val_every={val_every_batches} log_every={log_every_n_steps} "
+        f"checkpoint_every={checkpoint_every_steps or None} "
+        f"early_stop={early_stop_monitor}/{early_stop_mode}/patience={early_stop_patience or None}/min_delta={early_stop_min_delta:g} "
         f"quick_val_every={quick_val_every_steps} quick_val_batches={quick_val_max_batches} "
         f"run_dir={run_dir}"
     )
 
-    def _run_validation(epoch: int, gstep: int, trigger: str, train_loss_running: float, avg_grad_norm: float) -> float:
+    def _run_validation(epoch: int, gstep: int, trigger: str, train_loss_running: float, avg_grad_norm: float) -> dict[str, float]:
         metrics = validate_model(
             model,
             criterion,
@@ -736,7 +808,40 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         }
         append_metric_row(val_csv, row, fieldnames=val_fields)
         print_validation_summary(metrics, classes, header=f"epoch {epoch} | step {gstep} | {trigger}")
-        return float(metrics["val_ap"])
+        return metrics
+
+    def _is_improvement(current: float, best: float | None) -> bool:
+        if best is None:
+            return True
+        if early_stop_mode == "max":
+            return current > best + early_stop_min_delta
+        return current < best - early_stop_min_delta
+
+    def _mid_checkpoint_path(epoch: int, gstep: int) -> Path:
+        return checkpoint_dir / f"epoch_{epoch:03d}_step_{gstep:08d}_mid.pt"
+
+    def _delete_mid_checkpoints(epoch: int | None = None) -> None:
+        pattern = "*_mid.pt" if epoch is None else f"epoch_{epoch:03d}_step_*_mid.pt"
+        for path in checkpoint_dir.glob(pattern):
+            path.unlink(missing_ok=True)
+
+    def _save_training_checkpoint(path: Path, epoch: int, kind: str) -> None:
+        save_checkpoint(
+            path,
+            model,
+            optimizer,
+            scheduler,
+            epoch,
+            global_step,
+            classes,
+            scaler=scaler,
+            checkpoint_kind=kind,
+            best_monitor_value=best_monitor_value,
+            best_monitor_epoch=best_monitor_epoch,
+            early_stop_bad_epochs=early_stop_bad_epochs,
+            early_stop_monitor=early_stop_monitor,
+            early_stop_mode=early_stop_mode,
+        )
 
     quick_val_fields = [
         "epoch",
@@ -833,6 +938,11 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
                 stepped = True
+                if checkpoint_every_steps and global_step % checkpoint_every_steps == 0:
+                    _delete_mid_checkpoints()
+                    mid_path = _mid_checkpoint_path(epoch, global_step)
+                    _save_training_checkpoint(mid_path, epoch, "mid_epoch")
+                    tqdm.write(f"[checkpoint] saved temporary mid-epoch checkpoint: {mid_path}")
 
             loss_value = float(loss.detach().cpu())
             epoch_loss += loss_value
@@ -882,15 +992,40 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
         train_loss = epoch_loss / max(1, epoch_batches)
         avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
-        val_ap = _run_validation(epoch, global_step, "epoch", train_loss, avg_grad_norm)
+        metrics = _run_validation(epoch, global_step, "epoch", train_loss, avg_grad_norm)
+        val_ap = float(metrics["val_ap"])
         tqdm.write(
             f"epoch={epoch} train_loss={train_loss:.6f} val_ap={val_ap:.6f} grad_norm={avg_grad_norm:.4f}"
         )
 
-        if val_ap > best_val_ap:
-            best_val_ap = val_ap
-            save_checkpoint(checkpoint_dir / "best.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes, scaler=scaler)
-        save_checkpoint(checkpoint_dir / "last.pt", model, optimizer, scheduler, epoch, global_step, best_val_ap, classes, scaler=scaler)
+        if early_stop_monitor not in metrics:
+            raise KeyError(f"early_stop_monitor={early_stop_monitor!r} was not found in validation metrics")
+        monitor_value = float(metrics[early_stop_monitor])
+        improved = _is_improvement(monitor_value, best_monitor_value)
+        if improved:
+            best_monitor_value = monitor_value
+            best_monitor_epoch = epoch
+            early_stop_bad_epochs = 0
+        else:
+            early_stop_bad_epochs += 1
+        best_label = "nan" if best_monitor_value is None else f"{best_monitor_value:.6f}"
+        tqdm.write(
+            f"[early-stop] monitor={early_stop_monitor} current={monitor_value:.6f} "
+            f"best={best_label} best_epoch={best_monitor_epoch} "
+            f"bad_epochs={early_stop_bad_epochs}/{early_stop_patience or 'disabled'}"
+        )
+
+        epoch_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"
+        _save_training_checkpoint(epoch_path, epoch, "epoch")
+        _delete_mid_checkpoints(epoch)
+        tqdm.write(f"[checkpoint] saved epoch checkpoint: {epoch_path}")
+
+        if early_stop_patience and early_stop_bad_epochs >= early_stop_patience:
+            tqdm.write(
+                f"[early-stop] stopping at epoch={epoch}: {early_stop_monitor} did not improve "
+                f"for {early_stop_bad_epochs} epoch(s)"
+            )
+            break
 
         if args.fast_dev_run:
             break
