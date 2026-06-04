@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Iterable
 from pathlib import Path
@@ -92,6 +93,7 @@ class TextEmbeddingCache:
         self.embedding_dir.mkdir(parents=True, exist_ok=True)
         self._tokenizer = None
         self._model = None
+        self._mem: dict[str, np.ndarray] = {}
         self._write_metadata()
 
     def _write_metadata(self) -> None:
@@ -119,6 +121,28 @@ class TextEmbeddingCache:
 
     def _embedding_path(self, key: str) -> Path:
         return self.embedding_dir / key[:2] / f"{key}.npy"
+
+    def _existing_keys(self, prefixes: Iterable[str]) -> set[str]:
+        """Collect cached keys by scanning each shard dir once.
+
+        The cache is sharded into ``<key[:2]>/`` subdirs. Listing each needed
+        shard with one ``scandir`` is dramatically faster than a per-key
+        ``Path.exists()`` (one ``stat`` syscall each) on slow filesystems such
+        as WSL's ``/mnt/<drive>`` drvfs mount, where thousands of stat calls can
+        take minutes.
+        """
+        existing: set[str] = set()
+        for prefix in set(prefixes):
+            shard = self.embedding_dir / prefix
+            try:
+                with os.scandir(shard) as it:
+                    for entry in it:
+                        name = entry.name
+                        if name.endswith(".npy"):
+                            existing.add(name[:-4])
+            except FileNotFoundError:
+                continue
+        return existing
 
     def _save_embedding(self, key: str, embedding: torch.Tensor) -> None:
         path = self._embedding_path(key)
@@ -164,10 +188,11 @@ class TextEmbeddingCache:
     def ensure_texts(self, texts: Iterable[str], max_length: int, desc: str = "text embeddings") -> None:
         texts = ["" if text is None else str(text) for text in texts]
         keys = [self._key(text, max_length) for text in texts]
+        existing = self._existing_keys(key[:2] for key in keys)
         missing_by_key = {
             key: text
             for key, text in zip(keys, texts)
-            if not self._embedding_path(key).exists()
+            if key not in existing
         }
         missing = list(missing_by_key.items())
 
@@ -188,14 +213,28 @@ class TextEmbeddingCache:
                     cls = self._model(**enc).last_hidden_state[:, 0, :].detach().cpu().float()
                     for (key, _), emb in zip(batch, cls):
                         self._save_embedding(key, emb)
+                        # keep the freshly computed vector in RAM (no disk roundtrip)
+                        self._mem[key] = np.array(emb.numpy(), dtype=np.float32)
+
+        # Preload every requested embedding into RAM once. The full set is tiny
+        # (~3KB each) and this turns the per-sample disk read in __getitem__ into
+        # a dict lookup -- essential on slow filesystems (WSL /mnt/<drive> drvfs).
+        to_load = [key for key in dict.fromkeys(keys) if key not in self._mem]
+        for key in tqdm(to_load, desc=f"{desc} (load to RAM)", dynamic_ncols=True, disable=not to_load):
+            self._mem[key] = np.load(self._embedding_path(key)).astype(np.float32, copy=False)
 
     def get_embedding(self, text: str, max_length: int) -> np.ndarray:
         text = "" if text is None else str(text)
         key = self._key(text, max_length)
+        cached = self._mem.get(key)
+        if cached is not None:
+            return cached
         path = self._embedding_path(key)
         if not path.exists():
             raise KeyError(f"Text embedding cache miss for key {key} in {self.cache_dir}")
-        return np.load(path).astype(np.float32, copy=False)
+        arr = np.load(path).astype(np.float32, copy=False)
+        self._mem[key] = arr
+        return arr
 
     def embed_texts(self, texts: list[str], max_length: int, desc: str = "text embeddings") -> np.ndarray:
         texts = ["" if text is None else str(text) for text in texts]
