@@ -241,6 +241,37 @@ The cache is keyed by resolved image path. Moving the cache to a machine with
 different absolute paths may cause misses; the dataset falls back to JPEG decode
 on a miss.
 
+## Augmentation
+
+Train-time augmentations live in `src/dataloader/utils.py::get_transforms`. The
+rotation/shift/scale step uses `A.Affine`, which replaced the deprecated
+`A.ShiftScaleRotate`. The current parameters are a faithful 1:1 of the old
+`ShiftScaleRotate` defaults, so the augmentation distribution is unchanged:
+
+```python
+A.Affine(
+    translate_percent=(-0.0625, 0.0625),  # = shift_limit 0.0625
+    scale=(0.9, 1.1),                      # = scale_limit 0.1
+    rotate=(-45, 45),                      # = rotate_limit 45
+    border_mode=cv2.BORDER_REFLECT_101,
+    p=0.5,
+)
+```
+
+### Planned ablation: rotation range
+
+The baseline keeps `rotate=(-45, 45)` to match the original CaMCheX recipe. This
+is far wider than clinically realistic — frontal/lateral CXRs are acquired
+near-upright, and most MIMIC-CXR / CheXpert pipelines use `±5°–±15°`. `±45°`
+forces rotation invariance the model never needs at test time, and with
+`BORDER_REFLECT_101` fill it synthesizes anatomically impossible mirrored tissue
+in the corners, which can hurt rare-class signal in this long-tailed (26-class)
+setting.
+
+**Ablation to run:** swap `rotate=(-45, 45)` for `rotate=(-10, 10)` (keep all
+else fixed) and compare val/test `AP`. Run the baseline first so the effect is
+measured, not silently changed.
+
 ## Compatibility Notes
 
 - Existing CaMCheX train/eval scripts are unchanged.
