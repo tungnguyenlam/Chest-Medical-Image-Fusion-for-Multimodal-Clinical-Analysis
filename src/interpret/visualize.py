@@ -1,10 +1,11 @@
 """Render an AttributionResult as separate, inspect-by-hand images.
 
-Three files per class (each gets its own room instead of one cramped figure):
+Four files per class (each gets its own room instead of one cramped figure):
 
-    <class>/image.png    one row per CXR view: original | Grad-CAM overlay
-    <class>/text.png     indication tokens coloured by grad x embedding
-    <class>/vitals.png   signed grad x value per vital + modality share
+    <class>/image.png     one row per CXR view: original | Grad-CAM overlay
+    <class>/text.png      indication tokens coloured by grad x embedding
+    <class>/vitals.png    signed grad x value per vital (name + value on each label)
+    <class>/modality.png  % of signal from image / text / vitals (heuristic)
 
 ``render_attribution_split(result, out_dir)`` writes all three and returns the paths.
 ``render_attribution(result, path)`` still produces the old single combined figure if wanted.
@@ -37,6 +38,7 @@ def render_attribution_split(result: AttributionResult, out_dir: str | Path, tok
         render_images(result, out_dir / "image.png"),
         render_text(result, out_dir / "text.png", tokens_per_row=tokens_per_row),
         render_vitals(result, out_dir / "vitals.png"),
+        render_modality(result, out_dir / "modality.png"),
     ]
     return paths
 
@@ -101,18 +103,24 @@ def render_images(result: AttributionResult, out_path: str | Path) -> Path:
 # text: token chips coloured by grad x embedding
 # --------------------------------------------------------------------------- #
 def render_text(result: AttributionResult, out_path: str | Path, tokens_per_row: int = 10) -> Path:
-    out_path = Path(out_path)
-    tokens, scores = result.tokens, result.token_scores
-    n_rows = max(1, math.ceil(len(tokens) / tokens_per_row)) if tokens else 1
+    """Token chips packed left-to-right like running text (width-aware), then wrapped.
 
-    fig = plt.figure(figsize=(1.25 * tokens_per_row + 1.0, 1.4 + 0.75 * n_rows))
-    gs = gridspec.GridSpec(2, 1, height_ratios=[max(1, n_rows), 0.4], hspace=0.45)
-    ax = fig.add_subplot(gs[0])
-    ax.set_title(f"{result.class_name} — clinical indication (grad × embedding)", fontsize=12, loc="left")
-    ax.axis("off")
+    ``tokens_per_row`` only sets the figure width (how many average tokens fit per
+    line); chips themselves are placed by their measured width so short words sit
+    close together instead of each occupying an equal-width column.
+    """
+    out_path = Path(out_path)
+    tokens = [t.replace("##", "") for t in (result.tokens or [])]
+    scores = result.token_scores
+    title = f"{result.class_name} — clinical indication (grad × embedding)"
+    fig_w = 1.0 * tokens_per_row + 1.0
+    fontsize = 13
 
     if not tokens:
-        ax.text(0.5, 0.5, "(no text)", ha="center", va="center")
+        fig, ax = plt.subplots(figsize=(fig_w, 1.8))
+        ax.axis("off")
+        ax.set_title(title, fontsize=12, loc="left")
+        ax.text(0.5, 0.5, "(no text)", ha="center", va="center", transform=ax.transAxes)
         fig.savefig(out_path, dpi=140, bbox_inches="tight")
         plt.close(fig)
         return out_path
@@ -120,21 +128,50 @@ def render_text(result: AttributionResult, out_path: str | Path, tokens_per_row:
     vmax = float(np.abs(scores).max()) + 1e-8
     norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
     cmap = plt.get_cmap("coolwarm")
-    for i, (tok, sc) in enumerate(zip(tokens, scores)):
-        row, col = divmod(i, tokens_per_row)
-        x = (col + 0.5) / tokens_per_row
-        y = 1.0 - (row + 0.5) / n_rows
+
+    # pass 1: measure each chip's width as a fraction of the figure width
+    meas = plt.figure(figsize=(fig_w, 2.0))
+    meas.canvas.draw()
+    renderer = meas.canvas.get_renderer()
+    inv = meas.transFigure.inverted()
+    box_pad = 0.6 * fontsize / 72.0 / fig_w  # round-box padding, both sides
+    widths = []
+    for tok in tokens:
+        t = meas.text(0, 0, tok, fontsize=fontsize)
+        bb = t.get_window_extent(renderer)
+        widths.append(inv.transform((bb.width, 0))[0] - inv.transform((0, 0))[0] + box_pad)
+        t.remove()
+    plt.close(meas)
+
+    # pack chips left-to-right, wrapping when the current row is full
+    x_lo, x_hi, gap = 0.02, 0.98, 0.012
+    placed, x, row = [], x_lo, 0
+    for tok, sc, w in zip(tokens, scores, widths):
+        if x + w > x_hi and x > x_lo:
+            row += 1
+            x = x_lo
+        placed.append((tok, sc, row, x + w / 2.0))
+        x += w + gap
+    n_rows = row + 1
+
+    # pass 2: lay out for real, figure height scaled to the packed rows
+    row_h, title_h, cbar_h = 0.42, 0.55, 0.62
+    H = title_h + n_rows * row_h + cbar_h
+    fig = plt.figure(figsize=(fig_w, H))
+    fig.text(0.02, 1.0 - 0.32 / H, title, fontsize=12, ha="left", va="center", fontweight="bold")
+
+    band_top = (cbar_h + n_rows * row_h) / H
+    for tok, sc, rr, xc in placed:
+        y = band_top - (rr + 0.5) * row_h / H
         color = cmap(norm(sc))
         lum = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
-        ax.text(
-            x, y, tok.replace("##", ""),
-            fontsize=12, va="center", ha="center",
+        fig.text(
+            xc, y, tok, fontsize=fontsize, ha="center", va="center",
             color="white" if lum < 0.5 else "black",
             bbox=dict(boxstyle="round,pad=0.3", fc=color, ec="0.6", lw=0.5),
-            transform=ax.transAxes,
         )
 
-    cax = fig.add_subplot(gs[1])
+    cax = fig.add_axes([0.2, 0.45 * cbar_h / H, 0.6, 0.16 * cbar_h / H])
     cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), cax=cax, orientation="horizontal")
     cb.set_label("← pushes away from class            pushes toward class →", fontsize=9)
     fig.savefig(out_path, dpi=140, bbox_inches="tight")
@@ -147,41 +184,57 @@ def render_text(result: AttributionResult, out_path: str | Path, tokens_per_row:
 # --------------------------------------------------------------------------- #
 def render_vitals(result: AttributionResult, out_path: str | Path) -> Path:
     out_path = Path(out_path)
-    fig = plt.figure(figsize=(11, 4.6))
-    gs = gridspec.GridSpec(1, 2, width_ratios=[2.2, 1.0], wspace=0.3)
+    fig, ax = plt.subplots(figsize=(9, 4.6))
 
-    ax = fig.add_subplot(gs[0])
     names, scores = result.vital_names, result.vital_scores
     y = np.arange(len(names))
     colors = ["#d62728" if s >= 0 else "#1f77b4" for s in scores]
     ax.barh(y, scores, color=colors)
+
+    # each tick label shows the vital name plus its actual (de-normalized) value
     ax.set_yticks(y)
-    ax.set_yticklabels(names)
+    labels = ax.set_yticklabels(
+        [f"{n}\n{d}{'  (missing)' if m else ''}"
+         for n, d, m in zip(names, result.vital_display, result.vital_missing)]
+    )
+    for lbl, miss in zip(labels, result.vital_missing):
+        lbl.set_fontsize(9)
+        if miss:
+            lbl.set_color("gray")
+
     ax.invert_yaxis()
     ax.axvline(0, color="k", lw=0.8)
     ax.set_title(f"{result.class_name} — vitals (grad × value, red = toward class)", fontsize=12, loc="left")
-    span = float(np.abs(scores).max()) + 1e-8
-    for yi, (sc, disp, miss) in enumerate(zip(scores, result.vital_display, result.vital_missing)):
-        ax.text(
-            sc + math.copysign(0.02 * span, sc or 1.0), yi,
-            f"{disp}{'  (missing)' if miss else ''}",
-            va="center", ha="left" if sc >= 0 else "right", fontsize=9,
-            color="gray" if miss else "black",
-        )
-    ax.margins(x=0.28)
+    ax.set_xlabel("signed grad × value")
+    ax.margins(x=0.1)
 
-    ax2 = fig.add_subplot(gs[1])
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    return out_path
+
+
+# --------------------------------------------------------------------------- #
+# modality share: where did the signal come from (own plot, with headroom)
+# --------------------------------------------------------------------------- #
+def render_modality(result: AttributionResult, out_path: str | Path) -> Path:
+    out_path = Path(out_path)
+    fig, ax = plt.subplots(figsize=(5.5, 4.6))
+
     mc = result.modality_contrib
     keys = ["image", "text", "vitals"]
     vals = [100.0 * mc[k] for k in keys]
-    ax2.bar(keys, vals, color=["#2ca02c", "#9467bd", "#ff7f0e"])
-    ax2.set_ylim(0, 100)
-    ax2.set_ylabel("% of |grad × input|")
-    ax2.set_title("Modality share (heuristic)", fontsize=11, loc="left")
+    ax.bar(keys, vals, color=["#2ca02c", "#9467bd", "#ff7f0e"])
+    ax.set_ylim(0, 110)  # headroom so a ~99% bar (and its label) don't hit the ceiling
+    ax.set_ylabel("% of |grad × input|")
+    ax.set_title(f"{result.class_name} — modality share (heuristic)", fontsize=12, loc="left")
     for i, val in enumerate(vals):
-        ax2.text(i, val + 1, f"{val:.0f}%", ha="center", fontsize=9)
+        ax.text(i, val + 2, f"{val:.0f}%", ha="center", fontsize=11, fontweight="bold")
 
-    fig.tight_layout()
+    fig.text(0.5, 0.01,
+             "Rough share of total |grad × input| at each modality's native input — comparable-ish, not exact.",
+             ha="center", fontsize=8, color="0.45")
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
     return out_path

@@ -25,6 +25,7 @@ This is an additive CaMCheX variant. It does not change the legacy
 | Eval script | `training/camchex_v2nano_vitals/camchex_v2nano_vitals_eval.py` |
 | Config | `training/camchex_v2nano_vitals/config.yaml` |
 | Decoded image cache script | `scripts/precompute_image_cache.py` |
+| Grad-CAM / attribution | `src/interpret/{attribution,visualize,run_gradcam}.py` |
 
 ## Token layout
 
@@ -110,6 +111,55 @@ Predictions default to:
 output/camchex_v2nano_vitals/predictions.csv
 output/camchex_v2nano_vitals/metrics.json
 ```
+
+## Grad-CAM / Attribution
+
+Per-class attribution panels show *where* a prediction came from across all three
+modalities from a single `logit.backward()`:
+
+- image: Grad-CAM heatmap on each CXR view's ConvNeXtV2 feature map,
+- text: grad x input-embedding per CXR-BERT token (per-word highlighting),
+- vitals: signed grad x value per vital, plus a rough modality-share bar.
+
+Each class writes three PNGs you can inspect by hand:
+`<Class>/{image,text,vitals}.png`.
+
+### During training (default: on, every epoch)
+
+After each epoch's validation, the trainer reuses the validation logits (no extra
+scan) to pick, per class, two representative studies and dumps panels to:
+
+```text
+<run_dir>/gradcam/epoch_<N>/
+  best/<Class>/{image,text,vitals}.png    # highest-confidence true positive (varies per epoch)
+  first/<Class>/{image,text,vitals}.png   # first true positive in val order (FIXED across epochs)
+```
+
+Flip through `epoch_*/first/<Class>/image.png` to watch one fixed study's heatmap
+evolve as training progresses. Control with:
+
+```bash
+# default is every epoch; restrict, disable, or move off CPU as needed
+python training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py \
+  --gradcam-epochs 0,4,9   # or 'all' (default) / 'none'
+  --gradcam-device cuda    # default cpu (the dump runs in a subprocess to protect GPU memory)
+```
+
+The dump forces the live CXR-BERT path (cache off, grads on) so per-word text
+attribution works even if you train with cached embeddings; predictions are identical.
+
+### Standalone (any checkpoint)
+
+```bash
+python -m src.interpret.run_gradcam \
+  --config training/camchex_v2nano_vitals/config.yaml \
+  --checkpoint-path output/camchex_v2nano_vitals/runs/<run>/checkpoints/best.pt \
+  --split val --scan-limit 800
+```
+
+Here it scans the split for the highest-confidence true positive per class. A study
+with multiple findings gets a class-conditional panel under each class it is positive
+for; the panel header lists the co-occurring labels.
 
 ## Optional Clinical Embedding Cache
 

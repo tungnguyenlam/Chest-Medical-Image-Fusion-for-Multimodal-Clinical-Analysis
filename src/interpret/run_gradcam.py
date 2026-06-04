@@ -1,18 +1,33 @@
-"""Dump one Grad-CAM / attribution panel per class from a checkpoint.
+"""Dump per-class Grad-CAM / attribution panels from a checkpoint.
 
-For each of the 26 classes it picks the *highest-confidence true positive* study in the
-chosen split, runs gradient attribution (image + text tokens + vitals), and saves a single
-combined PNG you can inspect by hand.
+For each class it runs gradient attribution (image Grad-CAM + text-token grad x embedding
++ per-vital grad x value) on one study and writes, by default, three inspect-by-hand PNGs —
+``<Class>/{image,text,vitals}.png`` (``--layout combined`` gives the old single panel).
 
-Example:
+Two ways to pick the study per class:
+
+* default (standalone): scan the split and take the *highest-confidence true positive*
+  for each class. ``--scan-limit N`` caps how many studies are scanned.
+* ``--studies-json``: skip the scan and attribute preselected studies. Accepts either a
+  flat ``{class: study_id}`` map (-> panels in the output dir) or a nested
+  ``{set_name: {class: study_id}}`` map (-> one subfolder per set). The trainer uses the
+  nested form to emit two sets reusing its validation logits (no scan):
+  ``best`` (highest-confidence TP, varies per epoch) and ``first`` (first TP in val order,
+  fixed across epochs so you can watch a single study's heatmap evolve).
+
+Multilabel: attribution is class-conditional (one logit backprops per panel), so a study
+with several findings gets a separate panel under each class; the header lists co-positives.
+
+Standalone example:
     python -m src.interpret.run_gradcam \
         --config training/camchex_v2nano_vitals/config.yaml \
         --checkpoint-path output/camchex_v2nano_vitals/runs/<run>/checkpoints/best.pt \
         --split val --gradcam-epoch 1 --scan-limit 800
 
-Note: this forces the *live* CXR-BERT text path (cache off, grads on) so per-word
-attribution is possible, even if the checkpoint was trained with cached embeddings.
-The CLS vector — and therefore the predictions — are identical either way.
+During training this runs automatically every epoch (see ``--gradcam-epochs`` in the
+trainer). It forces the *live* CXR-BERT text path (cache off, grads on) so per-word
+attribution is possible even if the checkpoint was trained with cached embeddings — the
+CLS vector, and therefore the predictions, are identical either way.
 """
 
 from __future__ import annotations
