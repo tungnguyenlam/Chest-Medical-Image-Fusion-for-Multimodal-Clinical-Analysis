@@ -16,3 +16,6 @@ jsonargparse[signatures]>=4.27.7
 pyarrow
 positional-encodings
 albumentations
+python-dotenv
+huggingface_hub
+datasets

@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import math
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -101,6 +102,12 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--backbone-name")
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--fast-dev-run", action="store_true")
+    parser.add_argument(
+        "--gradcam-epochs",
+        help="When to dump per-class Grad-CAM panels: 'all' (default, every epoch — it's cheap), "
+             "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). Vitals model only.",
+    )
+    parser.add_argument("--gradcam-device", help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: cpu.")
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -527,9 +534,17 @@ def train_step(model, criterion, batch, device: torch.device, precision: str | N
 
 
 @torch.inference_mode()
-def validate_model(model, criterion, loader, classes: list[str], device: torch.device, precision: str | None, max_batches: int | None = None, desc: str = "val"):
+def validate_model(model, criterion, loader, classes: list[str], device: torch.device, precision: str | None, max_batches: int | None = None, desc: str = "val", selection_out: dict[str, dict] | None = None):
+    """Run validation. If ``selection_out`` is provided, fill it in-place per class with
+    {study_id (highest-confidence true positive), prob, first_study_id (first true positive
+    in loader order — stable across epochs for progression views)}, reusing the predictions
+    already computed here (no extra forward pass)."""
     was_training = model.training
     model.eval()
+    n_classes = len(classes)
+    sel_prob = [-1.0] * n_classes if selection_out is not None else None
+    sel_sid: list[str | None] = [None] * n_classes if selection_out is not None else []
+    sel_first: list[str | None] = [None] * n_classes if selection_out is not None else []
     try:
         losses: list[float] = []
         preds: list[torch.Tensor] = []
@@ -542,10 +557,32 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
                     break
                 loss, pred, label = train_step(model, criterion, batch, device, precision)
                 losses.append(float(loss.detach().cpu()))
-                preds.append(torch.sigmoid(pred.detach()).cpu())
+                prob = torch.sigmoid(pred.detach()).cpu()
+                preds.append(prob)
                 labels.append(label.detach().cpu())
+                if selection_out is not None:
+                    study_ids = batch[0][0]  # data[0] = collated study_id list (len B)
+                    lab = label.detach().cpu()
+                    for bi in range(prob.shape[0]):
+                        for c in range(n_classes):
+                            if lab[bi, c] != 1:
+                                continue
+                            if sel_first[c] is None:
+                                sel_first[c] = str(study_ids[bi])
+                            if prob[bi, c] > sel_prob[c]:
+                                sel_prob[c] = float(prob[bi, c])
+                                sel_sid[c] = str(study_ids[bi])
         finally:
             pbar.close()
+
+        if selection_out is not None:
+            for c in range(n_classes):
+                if sel_sid[c] is not None:
+                    selection_out[classes[c]] = {
+                        "study_id": sel_sid[c],
+                        "prob": sel_prob[c],
+                        "first_study_id": sel_first[c],
+                    }
 
         if not losses:
             raise RuntimeError("Validation loader produced no batches")
@@ -787,7 +824,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         f"run_dir={run_dir}"
     )
 
-    def _run_validation(epoch: int, gstep: int, trigger: str, train_loss_running: float, avg_grad_norm: float) -> dict[str, float]:
+    def _run_validation(epoch: int, gstep: int, trigger: str, train_loss_running: float, avg_grad_norm: float, selection_out: dict | None = None) -> dict[str, float]:
         metrics = validate_model(
             model,
             criterion,
@@ -797,6 +834,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             precision,
             max_batches=1 if args.fast_dev_run else None,
             desc=f"val @ {trigger} step {gstep}",
+            selection_out=selection_out,
         )
         row = {
             "epoch": epoch,
@@ -842,6 +880,58 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             early_stop_monitor=early_stop_monitor,
             early_stop_mode=early_stop_mode,
         )
+
+    def _should_gradcam(epoch: int) -> bool:
+        # Default: dump every epoch (it's cheap). Disable with 'none'/'off'/''; or pass
+        # a comma list of 0-indexed epochs (e.g. '0,4,9') to restrict.
+        raw = str(resolve_trainer_arg(args, cfg, "gradcam_epochs", "all")).strip().lower()
+        if raw in {"none", "off", "false", "-1", ""}:
+            return False
+        if raw in {"all", "every", "true"}:
+            return True
+        return epoch in {int(tok) for tok in raw.replace(" ", "").split(",") if tok != ""}
+
+    def _maybe_dump_gradcam(epoch: int, epoch_path: Path, selection: dict[str, dict] | None) -> None:
+        if not _should_gradcam(epoch):
+            return
+        model_name = type(unwrap_compiled_model(model)).__name__
+        if model_name != "CaMCheXV2NanoVitalsModel":
+            tqdm.write(f"[gradcam] skipping: --gradcam-epochs only supports CaMCheXV2NanoVitalsModel, got {model_name}")
+            return
+        if not selection:
+            tqdm.write("[gradcam] no per-class true-positive selection captured during validation; skipping.")
+            return
+        # Reuse the studies chosen from this epoch's validation logits — no extra scan.
+        #   best  = highest-confidence true positive per class (varies across epochs)
+        #   first = first true positive per class in val order (fixed -> progression view)
+        gradcam_dir = run_dir / "gradcam" / f"epoch_{epoch}"
+        gradcam_dir.mkdir(parents=True, exist_ok=True)
+        sel_path = gradcam_dir / "selection.json"
+        sets = {
+            "best": {cls: info["study_id"] for cls, info in selection.items()},
+            "first": {cls: info["first_study_id"] for cls, info in selection.items() if info.get("first_study_id")},
+        }
+        with open(sel_path, "w") as f:
+            json.dump(sets, f, indent=2)
+        gradcam_device = str(resolve_trainer_arg(args, cfg, "gradcam_device", "cpu") or "cpu")
+        cmd = [
+            sys.executable, "-m", "src.interpret.run_gradcam",
+            "--config", str(args.config),
+            "--checkpoint-path", str(epoch_path),
+            "--split", "val",
+            "--gradcam-epoch", str(epoch),
+            "--studies-json", str(sel_path),
+            "--device", gradcam_device,
+        ]
+        if getattr(args, "val_df_path", None):
+            cmd += ["--val-df-path", str(args.val_df_path)]
+        if getattr(args, "image_size", None):
+            cmd += ["--image-size", str(args.image_size)]
+        tqdm.write(f"[gradcam] dumping {len(selection)} per-class panels after epoch {epoch} (device={gradcam_device})...")
+        try:
+            subprocess.run(cmd, cwd=str(ROOT), check=True)
+        except subprocess.CalledProcessError as exc:
+            tqdm.write(f"[gradcam] subprocess failed (rc={exc.returncode}); continuing training.")
 
     quick_val_fields = [
         "epoch",
@@ -992,7 +1082,8 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
         train_loss = epoch_loss / max(1, epoch_batches)
         avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
-        metrics = _run_validation(epoch, global_step, "epoch", train_loss, avg_grad_norm)
+        gradcam_selection: dict[str, dict] | None = {} if _should_gradcam(epoch) else None
+        metrics = _run_validation(epoch, global_step, "epoch", train_loss, avg_grad_norm, selection_out=gradcam_selection)
         val_ap = float(metrics["val_ap"])
         tqdm.write(
             f"epoch={epoch} train_loss={train_loss:.6f} val_ap={val_ap:.6f} grad_norm={avg_grad_norm:.4f}"
@@ -1019,6 +1110,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         _save_training_checkpoint(epoch_path, epoch, "epoch")
         _delete_mid_checkpoints(epoch)
         tqdm.write(f"[checkpoint] saved epoch checkpoint: {epoch_path}")
+        _maybe_dump_gradcam(epoch, epoch_path, gradcam_selection)
 
         if early_stop_patience and early_stop_bad_epochs >= early_stop_patience:
             tqdm.write(
