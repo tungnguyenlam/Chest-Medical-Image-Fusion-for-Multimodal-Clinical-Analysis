@@ -43,9 +43,13 @@ class ConvNeXtV2NanoImageEncoder(nn.Module):
         frontal_mask = view_positions_nonzero == 1
         lateral_mask = view_positions_nonzero == 2
         if frontal_mask.any():
-            feats[frontal_mask] = self.frontal_encoder(x_nonzero[frontal_mask])
+            feats[frontal_mask] = self.frontal_encoder(
+                x_nonzero[frontal_mask]
+            ).to(feats.dtype)
         if lateral_mask.any():
-            feats[lateral_mask] = self.lateral_encoder(x_nonzero[lateral_mask])
+            feats[lateral_mask] = self.lateral_encoder(
+                x_nonzero[lateral_mask]
+            ).to(feats.dtype)
         return feats, nonzero_mask
 
 
