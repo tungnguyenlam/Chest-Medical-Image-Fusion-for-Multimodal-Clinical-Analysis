@@ -88,7 +88,16 @@ def precompute_channel_cache(data_cfg: dict[str, Any], dfs: list[pd.DataFrame], 
     """
     mode = data_cfg.get("channel_mode")
     cache_dir = data_cfg.get("image_channel_cache_dir")
-    if not mode or not cache_dir:
+    if not mode:
+        print(f"[precompute] {desc}: skipped -- channel_mode not set (legacy ImageNet RGB)", flush=True)
+        return
+    if not cache_dir:
+        print(
+            f"[precompute] {desc}: skipped -- image_channel_cache_dir not set in config; "
+            "channels will be rebuilt on the fly every epoch (no cache). Set it to enable "
+            "the shared cache + this prebuild.",
+            flush=True,
+        )
         return
 
     preprocess_cfg = make_preprocess_config(data_cfg)
