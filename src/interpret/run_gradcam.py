@@ -88,7 +88,7 @@ def build_dataset(cfg, args) -> CaMCheXVitalsDataset:
     # Strip any cache hints so CaMCheXVitalsDataset takes the tokenizer branch.
     for key in ("clinical_embeddings", "clinical_embedding_cache"):
         data_cfg.pop(key, None)
-    _, transforms_val = get_transforms(data_cfg["size"])
+    _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     df = read_dataframe(data_cfg[SPLIT_KEY[args.split]])
     tokenizer = AutoTokenizer.from_pretrained(
         data_cfg.get("tokenizer") or cfg["model"].get("text_model"),

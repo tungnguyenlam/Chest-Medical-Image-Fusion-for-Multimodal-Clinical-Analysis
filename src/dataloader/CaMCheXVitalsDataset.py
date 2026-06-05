@@ -6,7 +6,13 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from src.dataloader.utils import _safe_decode_jpeg, load_cached_rgb, resolve_preferred_image_path
+from src.dataloader.utils import (
+    _safe_decode_jpeg,
+    load_cached_rgb,
+    load_or_build_channels,
+    make_preprocess_config,
+    resolve_preferred_image_path,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +39,9 @@ class CaMCheXVitalsDataset(Dataset):
         self.clinical_embeddings = self._load_clinical_embeddings(cfg.get("clinical_embeddings"))
         self.clinical_embedding_cache = cfg.get("clinical_embedding_cache")
         self.image_cache_dir = cfg.get("image_cache_dir")
+        self.channel_mode = cfg.get("channel_mode")
+        self.channel_cache_dir = cfg.get("image_channel_cache_dir")
+        self.channel_cfg = make_preprocess_config(cfg) if self.channel_mode else None
 
     def _resolve_path(self, path):
         p = Path(path)
@@ -121,9 +130,12 @@ class CaMCheXVitalsDataset(Dataset):
             path = df.iloc[i]["path"]
             path = resolve_preferred_image_path(path)
 
-            img = load_cached_rgb(self.image_cache_dir, path)
-            if img is None:
-                img = _safe_decode_jpeg(path)
+            if self.channel_mode:
+                img = load_or_build_channels(path, self.channel_mode, self.channel_cfg, self.channel_cache_dir)
+            else:
+                img = load_cached_rgb(self.image_cache_dir, path)
+                if img is None:
+                    img = _safe_decode_jpeg(path)
             if img is None:
                 warnings.warn(f"Skipping unreadable image {path} in study {study_id}")
                 continue

@@ -155,6 +155,15 @@ data:
     save_dir: ../output/camchex
     val_split: 0.1
     size: 512
+    # 3-channel CXR representation. null -> legacy ImageNet RGB (decode as-is).
+    # Set to a mode in image_channel_preprocessing.CHANNEL_MODES (e.g.
+    # raw_clahe_histeq) to build deterministic raw+CLAHE+histeq channels and
+    # normalize with that mode's precomputed per-channel stats.
+    channel_mode: raw_clahe_histeq
+    # Shared on-disk cache for built channels (uint8, keyed by path+mode+cfg).
+    # Built lazily on first access and reused across models/runs. null -> rebuild
+    # on the fly every epoch (no caching).
+    image_channel_cache_dir: ../cache/channels
     classes:
       - Atelectasis
       - Calcification of the Aorta

@@ -23,7 +23,7 @@ class CaMCheXDataModule():
             self.chexpert_df = pd.read_csv(self.cfg["chexpert_train_df_path"])
 
     def setup(self, stage):
-        transforms_train, transforms_val = get_transforms(self.cfg["size"])
+        transforms_train, transforms_val = get_transforms(self.cfg["size"], self.cfg.get("channel_mode"))
         if stage in ('fit', 'validate'):
             train_df = self.train_df
             val_df = self.devel_df

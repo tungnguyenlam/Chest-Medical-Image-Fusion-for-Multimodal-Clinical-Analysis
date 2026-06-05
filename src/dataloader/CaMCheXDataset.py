@@ -4,7 +4,12 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 
-from src.dataloader.utils import _safe_decode_jpeg, resolve_preferred_image_path
+from src.dataloader.utils import (
+    _safe_decode_jpeg,
+    load_or_build_channels,
+    make_preprocess_config,
+    resolve_preferred_image_path,
+)
 
 
 class CaMCheXDataset(Dataset):
@@ -15,6 +20,9 @@ class CaMCheXDataset(Dataset):
         self.tokenizer = tokenizer
         self.df = df.groupby("study_id")
         self.study_ids = list(self.df.groups.keys())
+        self.channel_mode = cfg.get("channel_mode")
+        self.channel_cache_dir = cfg.get("image_channel_cache_dir")
+        self.channel_cfg = make_preprocess_config(cfg) if self.channel_mode else None
 
     def __len__(self):
         return len(self.study_ids)
@@ -36,7 +44,10 @@ class CaMCheXDataset(Dataset):
             path = df.iloc[i]["path"]
             path = resolve_preferred_image_path(path)
 
-            img = _safe_decode_jpeg(path)
+            if self.channel_mode:
+                img = load_or_build_channels(path, self.channel_mode, self.channel_cfg, self.channel_cache_dir)
+            else:
+                img = _safe_decode_jpeg(path)
             if img is None:
                 warnings.warn(f"Skipping unreadable image {path} in study {study_id}")
                 continue

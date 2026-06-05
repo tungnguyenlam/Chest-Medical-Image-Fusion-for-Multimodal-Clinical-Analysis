@@ -19,3 +19,6 @@ albumentations
 python-dotenv
 huggingface_hub
 datasets
+scikit-image
+matplotlib
+seaborn
