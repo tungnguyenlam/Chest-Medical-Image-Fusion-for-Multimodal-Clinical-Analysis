@@ -24,7 +24,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-# albumentations A.Normalize() defaults (ImageNet) -- used to de-normalize for display.
+from src.dataloader.image_channel_preprocessing import CHANNEL_MODES, CHANNEL_STATS
+
+# albumentations A.Normalize() defaults (ImageNet) -- used to de-normalize for display
+# on the legacy RGB path (channel_mode is None).
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
@@ -37,10 +40,12 @@ class ViewAttribution:
 
     slot: int
     view_position: int          # 0 unknown / 1 frontal / 2 lateral
-    image: np.ndarray           # (H, W) grayscale, 0..1, for display
+    image: np.ndarray           # (H, W) grayscale, 0..1 -- Grad-CAM overlay background
     cam: np.ndarray             # (H, W) heatmap, 0..1
     encoded: bool               # False when the view was not fed to an encoder (vp == 0)
     contribution: float         # raw Grad-CAM mass, used for the per-view share
+    channels: Optional[np.ndarray] = None       # (H, W, C) de-normalized input planes, 0..1
+    channel_names: Optional[list[str]] = None    # per-plane labels (e.g. raw/clahe/hist_eq)
 
 
 @dataclasses.dataclass
@@ -70,13 +75,27 @@ class AttributionResult:
 class CaMCheXAttributor:
     """Wraps a (loaded, in-eval) model and produces an AttributionResult per sample."""
 
-    def __init__(self, model, tokenizer, classes, device, vital_fields, vital_stats):
+    def __init__(self, model, tokenizer, classes, device, vital_fields, vital_stats, channel_mode=None):
         self.model = model.to(device).eval()
         self.tokenizer = tokenizer
         self.classes = list(classes)
         self.device = device
         self.vital_fields = list(vital_fields)
         self.vital_stats = vital_stats
+
+        # De-normalization must mirror the training transform. With channel_mode set
+        # the dataset used A.Normalize(CHANNEL_STATS[mode], max_pixel_value=1.0); the
+        # legacy RGB path used ImageNet stats. Same inverse formula, different stats.
+        self.channel_mode = channel_mode
+        if channel_mode:
+            stats = CHANNEL_STATS[channel_mode]
+            self._denorm_mean = np.asarray(stats["mean"], dtype=np.float32)
+            self._denorm_std = np.asarray(stats["std"], dtype=np.float32)
+            self._channel_names = list(CHANNEL_MODES[channel_mode])
+        else:
+            self._denorm_mean = IMAGENET_MEAN
+            self._denorm_std = IMAGENET_STD
+            self._channel_names = None
 
         enc = model.image_encoder
         self._modules = {
@@ -191,7 +210,8 @@ class CaMCheXAttributor:
         for slot in range(len(vp_np)):
             if not nonzero[slot]:
                 continue
-            gray = self._denorm_gray(img_np[slot])
+            channels = self._denorm_channels(img_np[slot])
+            gray = self._overlay_background(channels)
             cam = cams.get(slot)
             encoded = cam is not None
             if cam is None:
@@ -206,6 +226,8 @@ class CaMCheXAttributor:
                     cam=norm,
                     encoded=encoded,
                     contribution=contribution,
+                    channels=channels if self.channel_mode else None,
+                    channel_names=self._channel_names,
                 )
             )
         return views
@@ -236,9 +258,20 @@ class CaMCheXAttributor:
         return mass
 
     # -- formatting ------------------------------------------------------------
-    def _denorm_gray(self, chw):
-        hwc = np.transpose(chw, (1, 2, 0)) * IMAGENET_STD + IMAGENET_MEAN
-        return np.clip(hwc, 0.0, 1.0).mean(axis=-1)
+    def _denorm_channels(self, chw):
+        """Invert the training normalization -> HWC planes in [0, 1]."""
+        hwc = np.transpose(chw, (1, 2, 0)) * self._denorm_std + self._denorm_mean
+        return np.clip(hwc, 0.0, 1.0)
+
+    def _overlay_background(self, channels):
+        """Single (H, W) grayscale background for the Grad-CAM overlay.
+
+        Channel mode -> the raw plane (channel 0, most anatomically readable);
+        legacy RGB -> the channel mean (the old behavior).
+        """
+        if self.channel_mode:
+            return channels[..., 0]
+        return channels.mean(axis=-1)
 
     def _format_vitals(self, values, missing):
         out = []

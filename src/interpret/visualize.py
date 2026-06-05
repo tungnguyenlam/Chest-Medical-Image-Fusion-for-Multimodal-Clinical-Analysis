@@ -64,7 +64,15 @@ def render_images(result: AttributionResult, out_path: str | Path) -> Path:
     n = max(1, len(views))
     total = sum(v.contribution for v in views) + 1e-8
 
-    fig, axes = plt.subplots(n, 2, figsize=(8.5, 4.2 * n), squeeze=False)
+    # When the model was fed deterministic multi-channel inputs (e.g.
+    # raw_clahe_histeq), show every input plane, then the Grad-CAM overlay. The
+    # heatmap is per-view (identical across planes), so it is drawn once over the
+    # raw plane. Legacy RGB inputs keep the 2-column original | overlay layout.
+    chan_names = next((v.channel_names for v in views if v.channels is not None), None)
+    n_chan = len(chan_names) if chan_names else 0
+    ncols = n_chan + 1 if n_chan else 2
+
+    fig, axes = plt.subplots(n, ncols, figsize=(4.2 * ncols, 4.2 * n), squeeze=False)
     fig.suptitle(_header(result), fontsize=13, fontweight="bold")
 
     if not views:
@@ -74,14 +82,19 @@ def render_images(result: AttributionResult, out_path: str | Path) -> Path:
 
     for row, v in enumerate(views):
         name = VIEW_NAMES.get(v.view_position, "?")
-        ax_o, ax_h = axes[row, 0], axes[row, 1]
-        for ax in (ax_o, ax_h):
+        for ax in axes[row]:
             ax.set_xticks([])
             ax.set_yticks([])
 
-        ax_o.imshow(v.image, cmap="gray", vmin=0, vmax=1)
-        ax_o.set_title(f"{name} — original", fontsize=11)
+        if v.channels is not None and n_chan:
+            for c in range(n_chan):
+                axes[row, c].imshow(v.channels[..., c], cmap="gray", vmin=0, vmax=1)
+                axes[row, c].set_title(f"{name} — {chan_names[c]}", fontsize=11)
+        else:
+            axes[row, 0].imshow(v.image, cmap="gray", vmin=0, vmax=1)
+            axes[row, 0].set_title(f"{name} — original", fontsize=11)
 
+        ax_h = axes[row, ncols - 1]
         ax_h.imshow(v.image, cmap="gray", vmin=0, vmax=1)
         if v.encoded:
             hm = ax_h.imshow(v.cam, cmap="jet", alpha=0.45, vmin=0, vmax=1)
