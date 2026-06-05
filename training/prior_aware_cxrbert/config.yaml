@@ -89,6 +89,13 @@ data:
     train_df_path: data/data-camchex/prior_aware_train.parquet
     devel_df_path: data/data-camchex/prior_aware_development.parquet
     pred_df_path: data/data-camchex/prior_aware_test.parquet
+    # Shared on-disk cache for built 3-channel images (uint8, keyed by
+    # path+mode+cfg). Reused across models/runs and prebuilt before training.
+    image_channel_cache_dir: ../cache/channels
+    # 3-channel CXR representation: raw + CLAHE + a third channel. Set null (or
+    # pass --channel-mode none) to go back to the plain direct JPEG decode, i.e.
+    # the normal grayscale-duplicated-to-3-channels image.
+    channel_mode: raw_clahe_histeq
     size: 512
     classes: *classes
     label_dropout_p: 0.3

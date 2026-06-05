@@ -6,8 +6,11 @@ import functools
 import json
 import math
 import multiprocessing
+import os
 import subprocess
 import sys
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 from datetime import datetime
 from pathlib import Path
@@ -61,10 +64,21 @@ assert all(m in CHANNEL_MODES for m in ENABLED_CHANNEL_MODES), (
     f"{[m for m in ENABLED_CHANNEL_MODES if m not in CHANNEL_MODES]}"
 )
 
-# Fraction of CPU cores used to precompute the 3-channel image cache before
-# training. Matches src/prepare/01_make_dataset.py: half the cores by default so
-# the build leaves headroom and does not get OOM/CPU-killed on a shared server.
+# Default fraction of CPU cores used to precompute the 3-channel image cache
+# before training. Matches src/prepare/01_make_dataset.py: half the cores by
+# default so the build leaves headroom and is not OOM/CPU-killed on a shared
+# server. Override per-run with --cpu-fraction (see resolve_cpu_fraction).
 CPU_FRACTION = 0.5
+
+
+def resolve_cpu_fraction(args: argparse.Namespace | None) -> float:
+    """CPU fraction for image precompute: --cpu-fraction if given, else CPU_FRACTION."""
+    frac = getattr(args, "cpu_fraction", None)
+    if frac is None:
+        return CPU_FRACTION
+    if frac <= 0:
+        raise ValueError(f"--cpu-fraction must be > 0, got {frac}")
+    return frac
 
 
 def _build_channel_cache_entry(image_path, mode, preprocess_cfg, cache_dir):
@@ -77,15 +91,19 @@ def _build_channel_cache_entry(image_path, mode, preprocess_cfg, cache_dir):
     return arr is not None
 
 
-def precompute_channel_cache(data_cfg: dict[str, Any], dfs: list[pd.DataFrame], desc: str = "channels") -> None:
-    """Build the 3-channel cache for every image up front (default before training).
+def precompute_channels_for_paths(
+    data_cfg: dict[str, Any], raw_paths: Iterable[str], desc: str = "channels", cpu_fraction: float | None = None
+) -> None:
+    """Build the 3-channel cache for the given image paths up front.
 
-    Runs in parallel over CPU_FRACTION of cores so the first epoch reads a warm
-    cache instead of paying decode+filter on every miss. No-op unless both a
-    ``channel_mode`` and an ``image_channel_cache_dir`` are configured (legacy RGB
-    or cache-disabled runs have nothing to prebuild). Already-cached images are
-    skipped, so re-runs are cheap.
+    Both phases are parallel: the cache-miss scan runs on a thread pool (the
+    per-path work is filesystem ``stat``, which releases the GIL, so threads help
+    on slow WSL drvfs), and the build runs on a process pool. Both pools are sized
+    from ``cpu_fraction`` of the cores (default CPU_FRACTION). No-op unless both a
+    ``channel_mode`` and an ``image_channel_cache_dir`` are configured. Already-cached
+    images are skipped, so re-runs are cheap.
     """
+    frac = cpu_fraction if cpu_fraction is not None else CPU_FRACTION
     mode = data_cfg.get("channel_mode")
     cache_dir = data_cfg.get("image_channel_cache_dir")
     if not mode:
@@ -101,40 +119,46 @@ def precompute_channel_cache(data_cfg: dict[str, Any], dfs: list[pd.DataFrame], 
         return
 
     preprocess_cfg = make_preprocess_config(data_cfg)
-    # Dedup on the raw path first (cheap, no I/O) so we resolve+stat each image once.
-    raw_paths: list[str] = []
-    seen_raw: set[str] = set()
-    for df in dfs:
-        if "path" not in df.columns:
-            continue
-        for raw in df["path"].tolist():
-            if raw not in seen_raw:
-                seen_raw.add(raw)
-                raw_paths.append(raw)
+    # Dedup raw paths first (cheap, no I/O) so each image is resolved/stat'd once.
+    unique_raw = list(dict.fromkeys(str(p) for p in raw_paths))
 
-    # The scan below stats the filesystem twice per image (preferred-path lookup +
-    # cache-hit check). On a slow/WSL disk over 100k+ images that is minutes of
-    # work, so show progress instead of hanging silently.
+    # Existing cache files: one directory listing of the mode shard instead of a
+    # per-image ``Path.exists()`` stat. scandir is a single cheap call even when
+    # the shard holds 100k+ files, which matters a lot on WSL /mnt drvfs.
+    existing_digests: set[str] = set()
+    try:
+        with os.scandir(Path(cache_dir) / mode) as it:
+            for entry in it:
+                if entry.name.endswith(".npy"):
+                    existing_digests.add(entry.name[:-4])
+    except FileNotFoundError:
+        pass  # shard not created yet -> everything is a miss
+
     print(
-        f"[precompute] {desc}: scanning {len(raw_paths)} unique image paths for cache misses "
+        f"[precompute] {desc}: scanning {len(unique_raw)} unique image paths for cache misses "
         f"(mode={mode}, cache={cache_dir})...",
         flush=True,
     )
+    # resolve_preferred_image_path is stat-bound; fan it out across threads.
+    n_scan = max(4, min(32, int(cpu_count() * frac) * 4))
     todo: list[str] = []
     seen_resolved: set[str] = set()
-    for raw in tqdm(raw_paths, desc=f"{desc} scan"):
-        resolved = resolve_preferred_image_path(raw)
-        if resolved in seen_resolved:
-            continue
-        seen_resolved.add(resolved)
-        if not channel_cache_path(cache_dir, resolved, mode, preprocess_cfg).exists():
-            todo.append(resolved)
+    with ThreadPoolExecutor(max_workers=n_scan) as ex:
+        for resolved in tqdm(
+            ex.map(resolve_preferred_image_path, unique_raw), total=len(unique_raw), desc=f"{desc} scan"
+        ):
+            if resolved in seen_resolved:
+                continue
+            seen_resolved.add(resolved)
+            digest = channel_cache_path(cache_dir, resolved, mode, preprocess_cfg).stem
+            if digest not in existing_digests:
+                todo.append(resolved)
 
     if not todo:
         print(f"[precompute] {desc}: all {len(seen_resolved)} images already cached in {cache_dir}", flush=True)
         return
 
-    n_workers = max(1, int(cpu_count() * CPU_FRACTION))
+    n_workers = max(1, int(cpu_count() * frac))
     print(
         f"[precompute] {desc}: building {len(todo)}/{len(seen_resolved)} channel images "
         f"(mode={mode}) with {n_workers} workers -> {cache_dir}",
@@ -151,6 +175,31 @@ def precompute_channel_cache(data_cfg: dict[str, Any], dfs: list[pd.DataFrame], 
                 failures += 1
     if failures:
         print(f"[precompute] {desc}: {failures}/{len(todo)} images were unreadable and skipped")
+
+
+def precompute_channel_cache(
+    data_cfg: dict[str, Any], dfs: list[pd.DataFrame], desc: str = "channels", cpu_fraction: float | None = None
+) -> None:
+    """Prebuild channels for every image in a ``path``-column dataframe (camchex/singleview)."""
+    raw_paths: list[str] = []
+    for df in dfs:
+        if "path" in df.columns:
+            raw_paths.extend(df["path"].tolist())
+    precompute_channels_for_paths(data_cfg, raw_paths, desc, cpu_fraction=cpu_fraction)
+
+
+def _prior_aware_image_paths(dfs: list[pd.DataFrame]) -> list[str]:
+    """Flatten every current/prior image path out of prior-aware parquet frames."""
+    raw_paths: list[str] = []
+    for df in dfs:
+        for col in ("img_paths", "prior_img_paths"):
+            if col not in df.columns:
+                continue
+            for lst in df[col].tolist():
+                if lst is None:
+                    continue
+                raw_paths.extend(str(p) for p in lst)
+    return raw_paths
 
 
 def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None) -> None:
@@ -183,6 +232,16 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "histogram equalization). 'none' = legacy ImageNet RGB. Overrides "
             "data.datamodule_cfg.channel_mode; the on-disk cache "
             "(image_channel_cache_dir) stays shared across models via config."
+        ),
+    )
+    parser.add_argument(
+        "--cpu-fraction",
+        type=float,
+        help=(
+            "Fraction of CPU cores used to precompute the image channel cache "
+            "(threads for the scan, processes for the build). "
+            f"Default {CPU_FRACTION}. e.g. 0.25 to be gentle on a shared box, "
+            "1.0 to use all cores."
         ),
     )
     parser.add_argument("--max-epochs", type=int)
@@ -394,10 +453,10 @@ def filter_single_view(df: pd.DataFrame, view_position: str) -> pd.DataFrame:
 
 def make_single_view_loaders(cfg: dict[str, Any], args: argparse.Namespace, view_position: str):
     data_cfg = data_cfg_from_config(cfg, args)
-    transforms_train, transforms_val = get_transforms(data_cfg["size"])
+    transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     train_df = filter_single_view(read_dataframe(data_cfg["train_df_path"]), view_position)
     val_df = filter_single_view(read_dataframe(data_cfg["devel_df_path"]), view_position)
-    precompute_channel_cache(data_cfg, [train_df, val_df], desc="singleview channels")
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="singleview channels", cpu_fraction=resolve_cpu_fraction(args))
     train_ds = SingleViewDataset(data_cfg, train_df, transforms_train)
     val_ds = SingleViewDataset(data_cfg, val_df, transforms_val)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
@@ -413,14 +472,14 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
-    transforms_train, transforms_val = get_transforms(data_cfg["size"])
+    transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     tokenizer = AutoTokenizer.from_pretrained(
         data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1",
         trust_remote_code=True,
     )
     train_df = read_dataframe(data_cfg["train_df_path"])
     val_df = read_dataframe(data_cfg["devel_df_path"])
-    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex channels")
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex channels", cpu_fraction=resolve_cpu_fraction(args))
     train_ds = CaMCheXDataset(data_cfg, train_df, transforms_train, tokenizer)
     val_ds = CaMCheXDataset(data_cfg, val_df, transforms_val, tokenizer)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
@@ -491,10 +550,10 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
-    transforms_train, transforms_val = get_transforms(data_cfg["size"])
+    transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     train_df = read_dataframe(data_cfg["train_df_path"])
     val_df = read_dataframe(data_cfg["devel_df_path"])
-    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex_vitals channels")
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex_vitals channels", cpu_fraction=resolve_cpu_fraction(args))
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [train_df, val_df], args=args)
     tokenizer = None
     if "clinical_embedding_cache" not in data_cfg and "clinical_embeddings" not in data_cfg:
@@ -516,7 +575,7 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
 def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     """Build train/val loaders backed by the pre-generated prior-aware parquet."""
     data_cfg = data_cfg_from_config(cfg, args)
-    transforms_train, transforms_val = get_transforms(data_cfg["size"])
+    transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     label_dropout_p = float(data_cfg.get("label_dropout_p", 0.3))
 
     train_ds = PriorAwareDataset(
@@ -524,12 +583,18 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         image_size=data_cfg["size"],
         transform=transforms_train,
         label_dropout_p=label_dropout_p,
+        cfg=data_cfg,
     )
     val_ds = PriorAwareDataset(
         parquet_path=str(resolve_path(data_cfg["devel_df_path"])),
         image_size=data_cfg["size"],
         transform=transforms_val,
         label_dropout_p=0.0,
+        cfg=data_cfg,
+    )
+    precompute_channels_for_paths(
+        data_cfg, _prior_aware_image_paths([train_ds.df, val_ds.df]), desc="prior_aware channels",
+        cpu_fraction=resolve_cpu_fraction(args),
     )
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
     val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
@@ -542,12 +607,13 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
 
 def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
     data_cfg = data_cfg_from_config(cfg, args)
-    _, transforms_val = get_transforms(data_cfg["size"])
+    _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     ds = PriorAwareDataset(
         parquet_path=str(resolve_path(data_cfg["pred_df_path"])),
         image_size=data_cfg["size"],
         transform=transforms_val,
         label_dropout_p=0.0,
+        cfg=data_cfg,
     )
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
     labels_available = True  # label column is always present in the pregenerated parquet
@@ -556,7 +622,7 @@ def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
 
 def make_single_view_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, view_position: str):
     data_cfg = data_cfg_from_config(cfg, args)
-    _, transforms_val = get_transforms(data_cfg["size"])
+    _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     df = filter_single_view(read_dataframe(data_cfg["pred_df_path"]), view_position)
     ds = SingleViewDataset(data_cfg, df, transforms_val)
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
@@ -569,7 +635,7 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
-    _, transforms_val = get_transforms(data_cfg["size"])
+    _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     tokenizer = AutoTokenizer.from_pretrained(
         data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1",
         trust_remote_code=True,
@@ -585,7 +651,7 @@ def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespac
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
-    _, transforms_val = get_transforms(data_cfg["size"])
+    _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     df = read_dataframe(data_cfg["pred_df_path"])
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [df], args=args)
     tokenizer = None

@@ -22,3 +22,4 @@ datasets
 scikit-image
 matplotlib
 seaborn
+tqdm

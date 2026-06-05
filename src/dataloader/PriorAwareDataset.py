@@ -15,7 +15,12 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from src.dataloader.utils import _safe_decode_jpeg
+from src.dataloader.utils import (
+    _safe_decode_jpeg,
+    load_or_build_channels,
+    make_preprocess_config,
+    resolve_preferred_image_path,
+)
 
 MAX_VIEWS = 4
 N_CLASSES = 26
@@ -45,19 +50,46 @@ def _zero_image_block(size: int) -> np.ndarray:
 
 
 class PriorAwareDataset(Dataset):
-    def __init__(self, parquet_path: str, image_size: int, transform=None, label_dropout_p: float = 0.0):
+    def __init__(
+        self,
+        parquet_path: str,
+        image_size: int,
+        transform=None,
+        label_dropout_p: float = 0.0,
+        cfg: dict | None = None,
+    ):
         """
         Args:
             parquet_path: path to a prior_aware_*.parquet built by the script.
             image_size: HxW the transform pipeline resizes to (matches data_cfg["size"]).
             transform: Albumentations Compose for image augmentation. Applied per-image.
             label_dropout_p: training-only probability to drop the entire prior block.
+            cfg: datamodule cfg. ``channel_mode`` selects the 3-channel CXR build
+                (raw+CLAHE+third channel) shared with the other datasets; left
+                unset (or ``--channel-mode none``) it keeps the legacy direct JPEG
+                decode -- i.e. the plain grayscale-duplicated-to-3-channels image.
         """
         super().__init__()
         self.df = pd.read_parquet(parquet_path).reset_index(drop=True)
         self.size = int(image_size)
         self.transform = transform
         self.label_dropout_p = float(label_dropout_p)
+        cfg = cfg or {}
+        self.channel_mode = cfg.get("channel_mode")
+        self.channel_cache_dir = cfg.get("image_channel_cache_dir")
+        self.channel_cfg = make_preprocess_config(cfg) if self.channel_mode else None
+
+    def _decode(self, path: str):
+        """Decode one image: built 3-channel array when channel_mode is set, else
+        the legacy direct RGB decode (plain 3-channel duplicate)."""
+        if self.channel_mode:
+            return load_or_build_channels(
+                resolve_preferred_image_path(path),
+                self.channel_mode,
+                self.channel_cfg,
+                self.channel_cache_dir,
+            )
+        return _safe_decode_jpeg(path)
 
     def __len__(self) -> int:
         return len(self.df)
@@ -68,7 +100,7 @@ class PriorAwareDataset(Dataset):
         imgs = []
         view_codes = []
         for path, vp in zip(paths, views):
-            img = _safe_decode_jpeg(path)
+            img = self._decode(path)
             if img is None:
                 warnings.warn(f"Skipping unreadable image {path}")
                 continue
