@@ -154,7 +154,11 @@ def precompute_channels_for_paths(
     failures = 0
     mp_ctx = multiprocessing.get_context("fork")
     with mp_ctx.Pool(n_workers) as pool:
-        for ok in tqdm(pool.imap_unordered(worker, todo, chunksize=32), total=len(todo), desc=desc):
+        # chunksize=1: each build is ~1s of I/O on a slow mount, so per-item
+        # dispatch costs nothing and the bar moves per image (chunking would
+        # batch results and make it look frozen for ~chunksize seconds) and load
+        # balances better when some images are slower to read than others.
+        for ok in tqdm(pool.imap_unordered(worker, todo, chunksize=1), total=len(todo), desc=desc):
             if not ok:
                 failures += 1
     if failures:

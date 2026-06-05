@@ -131,6 +131,49 @@ python training/camchex/camchex_train.py \
 
 Full list: `python training/camchex/camchex_train.py --help`.
 
+## Image preprocessing, caching, and flash attention
+
+These behaviors are shared across every training/eval script (wired in
+`training/common.py`) and default-on; no model-specific code is involved.
+
+**3-channel CXR build (`--channel-mode`).** Each CXR is turned into a deterministic
+3-channel image — raw + CLAHE + histogram-equalization (`raw_clahe_histeq`, the
+default) — and normalized with precomputed per-channel stats. Override per run:
+
+```bash
+--channel-mode raw_clahe_histeq   # default (config: data.datamodule_cfg.channel_mode)
+--channel-mode none               # legacy ImageNet RGB (plain grayscale-duplicated decode)
+```
+
+Prior-aware models support this too; `--channel-mode none` reverts them to the plain
+decode. New modes are gated by `ENABLED_CHANNEL_MODES` in `training/common.py` — append
+a name there (e.g. `raw_clahe_sobel`) to expose it on the CLI.
+
+**Shared channel cache + automatic prebuild.** Built channels are cached as uint8 `.npy`
+under `image_channel_cache_dir` (default `../cache/channels`), keyed by
+`(raw path string, mode, preprocessing fingerprint)` — shared across models/runs and
+self-invalidating. Before training, every channel-using script **prebuilds the whole
+cache up front** so the first epoch reads a warm cache; the build runs in parallel and
+skips already-cached images. The key is the raw path *string*, so cache hits never stat
+the source filesystem — essential when images live on a slow mount (e.g. WSL
+`/mnt/<drive>`). Resolution + decode happen only on a cache miss.
+
+```bash
+--cpu-fraction 0.5   # default: fraction of cores used for the prebuild
+--cpu-fraction 2.0   # oversubscribe when the build is I/O-bound on a slow mount (idle CPU)
+```
+
+**Shared text-embedding cache.** With `--use-precomputed-text-embeddings`, the frozen
+text encoder's CLS embeddings are cached under `text_embedding_cache_dir` (default
+`../cache/text_embeddings`), content-addressed per model, and never recomputed for texts
+already present. Both caches live under one `../cache/` tree (native disk, outside the
+repo), reused across runs.
+
+**Flash attention (automatic).** Text encoders load with the best available attention
+backend: `flash_attention_2` when the `flash-attn` package and an Ampere+ GPU are both
+present, otherwise PyTorch SDPA (which dispatches to the flash kernel on compatible CUDA
+under fp16/bf16), falling back to eager on CPU/MPS. No flag needed.
+
 ## ConvNeXtV2 Nano + Numeric Vitals Variant
 
 The isolated variant in `training/camchex_v2nano_vitals/` uses ConvNeXtV2 Nano,
