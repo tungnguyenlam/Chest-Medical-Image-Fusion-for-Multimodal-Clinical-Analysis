@@ -12,6 +12,8 @@ import torch
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+from src.utils.attention import from_pretrained_best_attention
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -162,7 +164,8 @@ class TextEmbeddingCache:
             "(low_cpu_mem_usage=False)",
             flush=True,
         )
-        self._model = AutoModel.from_pretrained(
+        self._model = from_pretrained_best_attention(
+            AutoModel,
             self.text_model,
             trust_remote_code=True,
             low_cpu_mem_usage=False,

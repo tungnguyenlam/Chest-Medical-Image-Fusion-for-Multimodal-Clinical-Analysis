@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import functools
 import json
 import math
+import multiprocessing
 import subprocess
 import sys
+from multiprocessing import cpu_count
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -30,7 +33,13 @@ from src.dataloader.CaMCheXVitalsDataset import CaMCheXVitalsDataset
 from src.dataloader.PriorAwareDataset import PriorAwareDataset
 from src.dataloader.SingleViewDataset import SingleViewDataset
 from src.dataloader.image_channel_preprocessing import CHANNEL_MODES
-from src.dataloader.utils import get_transforms
+from src.dataloader.utils import (
+    channel_cache_path,
+    get_transforms,
+    load_or_build_channels,
+    make_preprocess_config,
+    resolve_preferred_image_path,
+)
 from src.loss.AsymetricLoss import AsymetricLoss
 from src.optimizer import build_adamw_optimizer
 from src.scheduler import build_warmup_cosine_scheduler
@@ -51,6 +60,71 @@ assert all(m in CHANNEL_MODES for m in ENABLED_CHANNEL_MODES), (
     "ENABLED_CHANNEL_MODES has names not in CHANNEL_MODES: "
     f"{[m for m in ENABLED_CHANNEL_MODES if m not in CHANNEL_MODES]}"
 )
+
+# Fraction of CPU cores used to precompute the 3-channel image cache before
+# training. Matches src/prepare/01_make_dataset.py: half the cores by default so
+# the build leaves headroom and does not get OOM/CPU-killed on a shared server.
+CPU_FRACTION = 0.5
+
+
+def _build_channel_cache_entry(image_path, mode, preprocess_cfg, cache_dir):
+    """Pool worker: build+cache one image's channels. Returns a small bool.
+
+    We deliberately return a bool (not the array) so the worker keeps the
+    512x512x3 buffer to itself instead of pickling it back to the parent.
+    """
+    arr = load_or_build_channels(image_path, mode, preprocess_cfg, cache_dir)
+    return arr is not None
+
+
+def precompute_channel_cache(data_cfg: dict[str, Any], dfs: list[pd.DataFrame], desc: str = "channels") -> None:
+    """Build the 3-channel cache for every image up front (default before training).
+
+    Runs in parallel over CPU_FRACTION of cores so the first epoch reads a warm
+    cache instead of paying decode+filter on every miss. No-op unless both a
+    ``channel_mode`` and an ``image_channel_cache_dir`` are configured (legacy RGB
+    or cache-disabled runs have nothing to prebuild). Already-cached images are
+    skipped, so re-runs are cheap.
+    """
+    mode = data_cfg.get("channel_mode")
+    cache_dir = data_cfg.get("image_channel_cache_dir")
+    if not mode or not cache_dir:
+        return
+
+    preprocess_cfg = make_preprocess_config(data_cfg)
+    seen: set[str] = set()
+    paths: list[str] = []
+    for df in dfs:
+        if "path" not in df.columns:
+            continue
+        for raw in df["path"].tolist():
+            resolved = resolve_preferred_image_path(raw)
+            if resolved not in seen:
+                seen.add(resolved)
+                paths.append(resolved)
+
+    todo = [p for p in paths if not channel_cache_path(cache_dir, p, mode, preprocess_cfg).exists()]
+    if not todo:
+        print(f"[precompute] {desc}: all {len(paths)} images already cached in {cache_dir}")
+        return
+
+    n_workers = max(1, int(cpu_count() * CPU_FRACTION))
+    print(
+        f"[precompute] {desc}: building {len(todo)}/{len(paths)} channel images "
+        f"(mode={mode}) with {n_workers} workers -> {cache_dir}",
+        flush=True,
+    )
+    worker = functools.partial(
+        _build_channel_cache_entry, mode=mode, preprocess_cfg=preprocess_cfg, cache_dir=cache_dir
+    )
+    failures = 0
+    mp_ctx = multiprocessing.get_context("fork")
+    with mp_ctx.Pool(n_workers) as pool:
+        for ok in tqdm(pool.imap_unordered(worker, todo, chunksize=32), total=len(todo), desc=desc):
+            if not ok:
+                failures += 1
+    if failures:
+        print(f"[precompute] {desc}: {failures}/{len(todo)} images were unreadable and skipped")
 
 
 def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None) -> None:
@@ -297,6 +371,7 @@ def make_single_view_loaders(cfg: dict[str, Any], args: argparse.Namespace, view
     transforms_train, transforms_val = get_transforms(data_cfg["size"])
     train_df = filter_single_view(read_dataframe(data_cfg["train_df_path"]), view_position)
     val_df = filter_single_view(read_dataframe(data_cfg["devel_df_path"]), view_position)
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="singleview channels")
     train_ds = SingleViewDataset(data_cfg, train_df, transforms_train)
     val_ds = SingleViewDataset(data_cfg, val_df, transforms_val)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
@@ -317,8 +392,11 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         data_cfg.get("tokenizer") or "dmis-lab/biobert-v1.1",
         trust_remote_code=True,
     )
-    train_ds = CaMCheXDataset(data_cfg, read_dataframe(data_cfg["train_df_path"]), transforms_train, tokenizer)
-    val_ds = CaMCheXDataset(data_cfg, read_dataframe(data_cfg["devel_df_path"]), transforms_val, tokenizer)
+    train_df = read_dataframe(data_cfg["train_df_path"])
+    val_df = read_dataframe(data_cfg["devel_df_path"])
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex channels")
+    train_ds = CaMCheXDataset(data_cfg, train_df, transforms_train, tokenizer)
+    val_ds = CaMCheXDataset(data_cfg, val_df, transforms_val, tokenizer)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
     val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
     print(f"[dataloader] train: {train_dl_args}")
@@ -390,6 +468,7 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     transforms_train, transforms_val = get_transforms(data_cfg["size"])
     train_df = read_dataframe(data_cfg["train_df_path"])
     val_df = read_dataframe(data_cfg["devel_df_path"])
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex_vitals channels")
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [train_df, val_df], args=args)
     tokenizer = None
     if "clinical_embedding_cache" not in data_cfg and "clinical_embeddings" not in data_cfg:
