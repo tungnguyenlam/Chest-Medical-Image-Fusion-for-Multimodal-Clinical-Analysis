@@ -29,6 +29,7 @@ from src.dataloader.CaMCheXDataset import CaMCheXDataset
 from src.dataloader.CaMCheXVitalsDataset import CaMCheXVitalsDataset
 from src.dataloader.PriorAwareDataset import PriorAwareDataset
 from src.dataloader.SingleViewDataset import SingleViewDataset
+from src.dataloader.image_channel_preprocessing import CHANNEL_MODES
 from src.dataloader.utils import get_transforms
 from src.loss.AsymetricLoss import AsymetricLoss
 from src.optimizer import build_adamw_optimizer
@@ -40,6 +41,16 @@ VIEW_ALIASES = {
     "frontal": {"AP", "PA", "FRONTAL"},
     "lateral": {"LATERAL", "LL"},
 }
+
+# 3-channel CXR modes exposed on the CLI. Every mode in CHANNEL_MODES is
+# raw + CLAHE + a third channel -- only the third varies (hist_eq / sobel /
+# laplacian / log / lbp). We only enable hist-eq for now; to allow another,
+# append its mode name here (e.g. "raw_clahe_sobel") -- no other change needed.
+ENABLED_CHANNEL_MODES = ["raw_clahe_histeq"]
+assert all(m in CHANNEL_MODES for m in ENABLED_CHANNEL_MODES), (
+    "ENABLED_CHANNEL_MODES has names not in CHANNEL_MODES: "
+    f"{[m for m in ENABLED_CHANNEL_MODES if m not in CHANNEL_MODES]}"
+)
 
 
 def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None) -> None:
@@ -62,6 +73,18 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--image-size", type=int)
+    parser.add_argument(
+        "--channel-mode",
+        choices=ENABLED_CHANNEL_MODES + ["none"],
+        help=(
+            "3-channel CXR representation. Each mode is raw + CLAHE + a third "
+            "channel; only the third varies. Enabled: "
+            f"{ENABLED_CHANNEL_MODES} (raw_clahe_histeq = raw + CLAHE + "
+            "histogram equalization). 'none' = legacy ImageNet RGB. Overrides "
+            "data.datamodule_cfg.channel_mode; the on-disk cache "
+            "(image_channel_cache_dir) stays shared across models via config."
+        ),
+    )
     parser.add_argument("--max-epochs", type=int)
     parser.add_argument("--lr", type=float)
     parser.add_argument("--accelerator", default=None)
@@ -198,6 +221,8 @@ def data_cfg_from_config(cfg: dict[str, Any], args: argparse.Namespace) -> dict[
     data_cfg["classes"] = classes_from_config(cfg)
     if args.image_size is not None:
         data_cfg["size"] = args.image_size
+    if getattr(args, "channel_mode", None) is not None:
+        data_cfg["channel_mode"] = None if args.channel_mode == "none" else args.channel_mode
     if args.train_df_path:
         data_cfg["train_df_path"] = args.train_df_path
     if args.val_df_path:
