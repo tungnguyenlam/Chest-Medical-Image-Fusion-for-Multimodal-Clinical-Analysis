@@ -89,7 +89,10 @@ data:
     devel_df_path: data/data-camchex/03_mimic_development.csv
     pred_df_path: data/data-camchex/03_mimic_test.csv
     use_text_embedding_cache: false
-    text_embedding_cache_dir: data/text_embeddings
+    # Shared on-disk cache for frozen text embeddings, like image_channel_cache_dir.
+    # Content-addressed (sha1 of model|max_length|text) under a per-model subdir, so
+    # it is reused across models/runs and never rebuilt for texts already present.
+    text_embedding_cache_dir: ../cache/text_embeddings
     text_embedding_batch_size: 32
     text_embedding_device: auto
     image_cache_dir: null

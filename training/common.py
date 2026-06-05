@@ -476,7 +476,7 @@ def maybe_add_camchex_vitals_text_embeddings(
     )
     cache = TextEmbeddingCache(
         text_model=text_model,
-        cache_root=getattr(args, "text_embedding_cache_dir", None) or data_cfg.get("text_embedding_cache_dir", "data/text_embeddings"),
+        cache_root=getattr(args, "text_embedding_cache_dir", None) or data_cfg.get("text_embedding_cache_dir", "../cache/text_embeddings"),
         batch_size=int(data_cfg.get("text_embedding_batch_size", 32) or 32),
         device=data_cfg.get("text_embedding_device", "auto"),
     )

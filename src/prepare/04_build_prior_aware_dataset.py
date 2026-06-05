@@ -303,7 +303,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--embedding-batch-size", type=int, default=32)
     p.add_argument(
         "--text-embedding-cache-dir",
-        default="data/text_embeddings",
+        default="../cache/text_embeddings",
         help="Shared cache root for frozen text embeddings, grouped by embedding model.",
     )
     p.add_argument("--device", default="auto", help="Device for --precompute-text-embeddings: auto, cpu, cuda, etc.")

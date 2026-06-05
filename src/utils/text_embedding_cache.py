@@ -81,7 +81,7 @@ class TextEmbeddingCache:
     def __init__(
         self,
         text_model: str,
-        cache_root: str | Path = "data/text_embeddings",
+        cache_root: str | Path = "../cache/text_embeddings",
         batch_size: int = 32,
         device: str = "auto",
     ):
