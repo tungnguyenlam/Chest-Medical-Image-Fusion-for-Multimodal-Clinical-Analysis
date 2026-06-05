@@ -136,7 +136,7 @@ def precompute_channel_cache(data_cfg: dict[str, Any], dfs: list[pd.DataFrame], 
 
     n_workers = max(1, int(cpu_count() * CPU_FRACTION))
     print(
-        f"[precompute] {desc}: building {len(todo)}/{len(paths)} channel images "
+        f"[precompute] {desc}: building {len(todo)}/{len(seen_resolved)} channel images "
         f"(mode={mode}) with {n_workers} workers -> {cache_dir}",
         flush=True,
     )
