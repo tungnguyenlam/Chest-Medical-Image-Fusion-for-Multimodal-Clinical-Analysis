@@ -101,20 +101,37 @@ def precompute_channel_cache(data_cfg: dict[str, Any], dfs: list[pd.DataFrame], 
         return
 
     preprocess_cfg = make_preprocess_config(data_cfg)
-    seen: set[str] = set()
-    paths: list[str] = []
+    # Dedup on the raw path first (cheap, no I/O) so we resolve+stat each image once.
+    raw_paths: list[str] = []
+    seen_raw: set[str] = set()
     for df in dfs:
         if "path" not in df.columns:
             continue
         for raw in df["path"].tolist():
-            resolved = resolve_preferred_image_path(raw)
-            if resolved not in seen:
-                seen.add(resolved)
-                paths.append(resolved)
+            if raw not in seen_raw:
+                seen_raw.add(raw)
+                raw_paths.append(raw)
 
-    todo = [p for p in paths if not channel_cache_path(cache_dir, p, mode, preprocess_cfg).exists()]
+    # The scan below stats the filesystem twice per image (preferred-path lookup +
+    # cache-hit check). On a slow/WSL disk over 100k+ images that is minutes of
+    # work, so show progress instead of hanging silently.
+    print(
+        f"[precompute] {desc}: scanning {len(raw_paths)} unique image paths for cache misses "
+        f"(mode={mode}, cache={cache_dir})...",
+        flush=True,
+    )
+    todo: list[str] = []
+    seen_resolved: set[str] = set()
+    for raw in tqdm(raw_paths, desc=f"{desc} scan"):
+        resolved = resolve_preferred_image_path(raw)
+        if resolved in seen_resolved:
+            continue
+        seen_resolved.add(resolved)
+        if not channel_cache_path(cache_dir, resolved, mode, preprocess_cfg).exists():
+            todo.append(resolved)
+
     if not todo:
-        print(f"[precompute] {desc}: all {len(paths)} images already cached in {cache_dir}")
+        print(f"[precompute] {desc}: all {len(seen_resolved)} images already cached in {cache_dir}", flush=True)
         return
 
     n_workers = max(1, int(cpu_count() * CPU_FRACTION))
