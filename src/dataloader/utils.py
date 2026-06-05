@@ -142,13 +142,20 @@ def make_preprocess_config(cfg):
 
 
 def channel_cache_path(cache_dir, image_path, mode, preprocess_cfg):
-    """Cache path keyed by (resolved image path, mode, preprocessing fingerprint).
+    """Cache path keyed by (raw path string, mode, preprocessing fingerprint).
 
-    The fingerprint makes the cache shared across models yet self-invalidating:
-    change the mode, output size, or any filter parameter and the key changes.
+    The key is derived from the path STRING only -- no ``Path.resolve()`` / stat --
+    so a cache hit never touches the source filesystem. That matters enormously
+    when the images live on a slow mount (e.g. WSL ``/mnt/<drive>`` drvfs): both
+    this precompute scan and every training epoch can decide "already cached?"
+    without a single cross-boundary stat. Resolution to the real on-disk file
+    happens only on a miss, inside :func:`load_or_build_channels`.
+
+    Callers must pass a *stable* path string (the same one each epoch) -- the raw
+    ``path``/``img_paths`` value straight from the dataframe/parquet. The
+    fingerprint keeps the cache self-invalidating on mode/size/filter changes.
     """
-    resolved = str(Path(image_path).resolve(strict=False))
-    key = f"{resolved}|{mode}|{preprocess_cfg.fingerprint()}"
+    key = f"{os.path.normpath(str(image_path))}|{mode}|{preprocess_cfg.fingerprint()}"
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()
     return Path(cache_dir) / mode / f"{digest}.npy"
 
@@ -168,11 +175,15 @@ def _atomic_save_uint8(path, arr):
 def load_or_build_channels(image_path, mode, preprocess_cfg, cache_dir=None):
     """Return an HWC float32 [0, 1] 3-channel array for ``mode`` (or None).
 
-    With ``cache_dir`` set: cache hit -> load uint8 and de-quantize; miss ->
-    decode, build channels, quantize to uint8, store atomically. The uint8
-    round-trip is applied on the build path too so cached/uncached epochs are
-    numerically identical. Without ``cache_dir`` the channels are built fresh
-    each call (no quantization).
+    ``image_path`` is the raw (dataframe) path string. With ``cache_dir`` set:
+    cache hit -> load uint8 and de-quantize (no source-FS access); miss -> resolve
+    the preferred on-disk file, decode, build channels, quantize to uint8, store
+    atomically. The uint8 round-trip is applied on the build path too so
+    cached/uncached epochs are numerically identical. Without ``cache_dir`` the
+    channels are built fresh each call (no quantization).
+
+    Resolution (stat-heavy on slow mounts) is deferred to the miss path, so warm
+    epochs and the precompute scan never stat the source filesystem.
     """
     if mode not in CHANNEL_MODES:
         raise ValueError(f"Unknown channel_mode {mode!r}; expected one of {sorted(CHANNEL_MODES)}")
@@ -186,7 +197,7 @@ def load_or_build_channels(image_path, mode, preprocess_cfg, cache_dir=None):
             except (ValueError, OSError):
                 pass  # corrupt / partially-written file -> rebuild below
 
-    rgb = _safe_decode_jpeg(image_path)
+    rgb = _safe_decode_jpeg(resolve_preferred_image_path(image_path))
     if rgb is None:
         return None
     channels = build_channels(rgb, mode, preprocess_cfg)  # float32 [0, 1]

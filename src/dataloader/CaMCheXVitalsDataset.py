@@ -128,14 +128,16 @@ class CaMCheXVitalsDataset(Dataset):
         view_positions = []
         for i in range(len(df)):
             path = df.iloc[i]["path"]
-            path = resolve_preferred_image_path(path)
 
             if self.channel_mode:
+                # Pass the raw path: a cache hit is keyed on the string alone and
+                # never stats the (slow) source FS; resolution happens on a miss.
                 img = load_or_build_channels(path, self.channel_mode, self.channel_cfg, self.channel_cache_dir)
             else:
-                img = load_cached_rgb(self.image_cache_dir, path)
+                resolved = resolve_preferred_image_path(path)
+                img = load_cached_rgb(self.image_cache_dir, resolved)
                 if img is None:
-                    img = _safe_decode_jpeg(path)
+                    img = _safe_decode_jpeg(resolved)
             if img is None:
                 warnings.warn(f"Skipping unreadable image {path} in study {study_id}")
                 continue

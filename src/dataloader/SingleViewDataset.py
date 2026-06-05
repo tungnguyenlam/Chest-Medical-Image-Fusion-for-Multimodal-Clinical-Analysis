@@ -30,12 +30,12 @@ class SingleViewDataset(Dataset):
             label = np.zeros(len(self.cfg['classes']))
 
         path = self.df.iloc[index]["path"]
-        path = resolve_preferred_image_path(path)
 
         if self.channel_mode:
+            # Raw path -> cache hit is string-keyed, no source-FS stat.
             img = load_or_build_channels(path, self.channel_mode, self.channel_cfg, self.channel_cache_dir)
         else:
-            img = _safe_decode_jpeg(path)
+            img = _safe_decode_jpeg(resolve_preferred_image_path(path))
         if img is None:
             warnings.warn(f"Skipping unreadable image at index {index} ({path}); using neighbor sample")
             return self.__getitem__((index + 1) % len(self))

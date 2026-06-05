@@ -42,12 +42,12 @@ class CaMCheXDataset(Dataset):
         view_positions = []
         for i in range(len(df)):
             path = df.iloc[i]["path"]
-            path = resolve_preferred_image_path(path)
 
             if self.channel_mode:
+                # Raw path -> cache hit is string-keyed, no source-FS stat.
                 img = load_or_build_channels(path, self.channel_mode, self.channel_cfg, self.channel_cache_dir)
             else:
-                img = _safe_decode_jpeg(path)
+                img = _safe_decode_jpeg(resolve_preferred_image_path(path))
             if img is None:
                 warnings.warn(f"Skipping unreadable image {path} in study {study_id}")
                 continue

@@ -10,7 +10,6 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 from datetime import datetime
 from pathlib import Path
@@ -41,7 +40,6 @@ from src.dataloader.utils import (
     get_transforms,
     load_or_build_channels,
     make_preprocess_config,
-    resolve_preferred_image_path,
 )
 from src.loss.AsymetricLoss import AsymetricLoss
 from src.optimizer import build_adamw_optimizer
@@ -119,12 +117,12 @@ def precompute_channels_for_paths(
         return
 
     preprocess_cfg = make_preprocess_config(data_cfg)
-    # Dedup raw paths first (cheap, no I/O) so each image is resolved/stat'd once.
+    # Dedup raw paths (cheap, no I/O).
     unique_raw = list(dict.fromkeys(str(p) for p in raw_paths))
 
-    # Existing cache files: one directory listing of the mode shard instead of a
-    # per-image ``Path.exists()`` stat. scandir is a single cheap call even when
-    # the shard holds 100k+ files, which matters a lot on WSL /mnt drvfs.
+    # Existing cache files: one directory listing of the mode shard. The cache key
+    # is derived from the path string alone (see channel_cache_path), so the whole
+    # miss scan is pure CPU -- no per-image stat on the (slow) source filesystem.
     existing_digests: set[str] = set()
     try:
         with os.scandir(Path(cache_dir) / mode) as it:
@@ -134,34 +132,20 @@ def precompute_channels_for_paths(
     except FileNotFoundError:
         pass  # shard not created yet -> everything is a miss
 
-    print(
-        f"[precompute] {desc}: scanning {len(unique_raw)} unique image paths for cache misses "
-        f"(mode={mode}, cache={cache_dir})...",
-        flush=True,
-    )
-    # resolve_preferred_image_path is stat-bound; fan it out across threads.
-    n_scan = max(4, min(32, int(cpu_count() * frac) * 4))
-    todo: list[str] = []
-    seen_resolved: set[str] = set()
-    with ThreadPoolExecutor(max_workers=n_scan) as ex:
-        for resolved in tqdm(
-            ex.map(resolve_preferred_image_path, unique_raw), total=len(unique_raw), desc=f"{desc} scan"
-        ):
-            if resolved in seen_resolved:
-                continue
-            seen_resolved.add(resolved)
-            digest = channel_cache_path(cache_dir, resolved, mode, preprocess_cfg).stem
-            if digest not in existing_digests:
-                todo.append(resolved)
+    todo = [
+        raw for raw in unique_raw
+        if channel_cache_path(cache_dir, raw, mode, preprocess_cfg).stem not in existing_digests
+    ]
 
     if not todo:
-        print(f"[precompute] {desc}: all {len(seen_resolved)} images already cached in {cache_dir}", flush=True)
+        print(f"[precompute] {desc}: all {len(unique_raw)} images already cached in {cache_dir}", flush=True)
         return
 
     n_workers = max(1, int(cpu_count() * frac))
     print(
-        f"[precompute] {desc}: building {len(todo)}/{len(seen_resolved)} channel images "
-        f"(mode={mode}) with {n_workers} workers -> {cache_dir}",
+        f"[precompute] {desc}: building {len(todo)}/{len(unique_raw)} channel images "
+        f"(mode={mode}) with {n_workers} workers -> {cache_dir} "
+        f"(resolve+decode happens in the workers, on misses only)",
         flush=True,
     )
     worker = functools.partial(

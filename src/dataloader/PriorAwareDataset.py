@@ -19,7 +19,6 @@ from src.dataloader.utils import (
     _safe_decode_jpeg,
     load_or_build_channels,
     make_preprocess_config,
-    resolve_preferred_image_path,
 )
 
 MAX_VIEWS = 4
@@ -83,11 +82,10 @@ class PriorAwareDataset(Dataset):
         """Decode one image: built 3-channel array when channel_mode is set, else
         the legacy direct RGB decode (plain 3-channel duplicate)."""
         if self.channel_mode:
+            # Raw path -> cache hit is string-keyed, no source-FS stat; the file
+            # is resolved + decoded only on a miss inside load_or_build_channels.
             return load_or_build_channels(
-                resolve_preferred_image_path(path),
-                self.channel_mode,
-                self.channel_cfg,
-                self.channel_cache_dir,
+                path, self.channel_mode, self.channel_cfg, self.channel_cache_dir
             )
         return _safe_decode_jpeg(path)
 
