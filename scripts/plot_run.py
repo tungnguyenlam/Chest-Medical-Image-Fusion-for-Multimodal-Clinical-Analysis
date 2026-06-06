@@ -178,6 +178,43 @@ def plot_val_summary(val_df: pd.DataFrame | None, metric: str, out: Path, dpi: i
     _save(fig, out / f"val_{metric}.png")
 
 
+def plot_quick_val(quick_df: pd.DataFrame | None, full_df: pd.DataFrame | None, out: Path, dpi: int) -> None:
+    """Plot the in-epoch quick (partial) validation curves from val_quick.csv.
+
+    Quick validation only logs summary metrics (loss + mean/head/medium/tail AP & AUROC),
+    so this draws three stacked panels: loss, AP, AUROC. The full per-epoch validation is
+    overlaid where available to gauge how well the partial estimate tracks the real metric.
+    """
+    if quick_df is None:
+        return
+    panels = [
+        ("loss", ["val/loss"], None),
+        ("ap", ["val/ap", "val/ap_head", "val/ap_medium", "val/ap_tail"], (0.0, 1.0)),
+        ("auroc", ["val/auroc", "val/auroc_head", "val/auroc_medium", "val/auroc_tail"], (0.0, 1.0)),
+    ]
+    styles = ["o-", "s--", "d--", "v--"]
+    fig, axes = plt.subplots(len(panels), 1, figsize=(10, 11), dpi=dpi, sharex=True)
+    x = quick_df["global_step"]
+    for ax, (title, cols, ylim) in zip(axes, panels):
+        for col, style in zip(cols, styles):
+            if col not in quick_df.columns:
+                continue
+            label = col[len("val/"):].replace("_", " ") if "_" in col else col[len("val/"):]
+            ax.plot(x, quick_df[col], style, markersize=3, linewidth=1.4, label=f"quick {label}")
+        # Overlay the full per-epoch validation for the mean metric as a reference.
+        mean_col = f"val/{title}"
+        if full_df is not None and mean_col in full_df.columns:
+            ax.plot(full_df["global_step"], full_df[mean_col], "x-", color="black", alpha=0.6, markersize=6, label=f"full {title}")
+        ax.set_ylabel(title.upper())
+        ax.set_title(f"quick validation {title.upper()}")
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        ax.grid(alpha=0.3)
+        ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8)
+    axes[-1].set_xlabel("global step")
+    _save(fig, out / "quick_val.png")
+
+
 def plot_per_class(val_df: pd.DataFrame | None, metric: str, out: Path, dpi: int) -> None:
     if val_df is None:
         return
@@ -244,7 +281,9 @@ def plot_run(run_dir: Path, output_dir: Path | None, smooth: int, dpi: int) -> N
     print(f"[plot] {run_dir} -> {out}")
     train_df = _read_csv(logs_dir / "train_steps.csv")
     val_df = _read_csv(logs_dir / "val_epochs.csv")
+    quick_val_df = _read_csv(logs_dir / "val_quick.csv")
     plot_loss(train_df, val_df, smooth, out, dpi)
+    plot_quick_val(quick_val_df, val_df, out, dpi)
     plot_lr(train_df, out, dpi)
     plot_grad_norm(train_df, out, dpi)
     plot_scaler_scale(train_df, out, dpi)
