@@ -1700,3 +1700,29 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** `AutoModel.from_config(..., trust_remote_code=True)` for cached CXR-BERT still tries remote-code HEAD requests unless Hugging Face offline mode is set in the process. Passing `local_files_only=True` through `from_config` is not viable because the custom CXR-BERT constructor receives it and raises an unexpected-kwarg error.
 
 **Verification.** Ran `python -m py_compile scripts/model_summary.py`, `python scripts/model_summary.py --help`, all seven `--model ... --depth 1` shortcuts, cached-text smoke tests for both v2nano variants, and `python scripts/model_summary.py --config training/camchex_v2nano_vitals/config.yaml --depth 1 --format markdown`.
+
+## 2026-06-07 - Add CaMCheX v3 Nano single-token clinical/vitals variant
+
+**Goal.** Create a `camchex_v3nano` training variant that keeps the `camchex_v2nano_vitals` architecture and data path except for the fusion token layout: replace the repeated 64-token clinical CLS block and 64-token vitals block with one clinical token and one vital token, reducing the default sequence from 384 to 258 tokens.
+
+**Changes.**
+- `src/model/CaMCheXV3NanoModel.py:11` - added the v3 model class, reusing the v2 ConvNeXtV2 Nano image router and `VitalsTokenProjector` helpers while preserving CXR-BERT/cached-CLS support, segment embeddings, fusion transformer, and ML-Decoder head.
+- `src/model/CaMCheXV3NanoModel.py:49` - configured `VitalsTokenProjector` with `grid_size=1`, so numeric vitals emit `B x 1 x 768` instead of `B x 64 x 768`.
+- `src/model/CaMCheXV3NanoModel.py:129` - kept clinical text as one CLS token, `B x 1 x 768`, rather than expanding it over the image grid.
+- `src/model/CaMCheXV3NanoModel.py:140` - concatenated `img_tokens`, `clin_token`, and the single vital token; the padding mask now adds only two always-valid non-image tokens at `src/model/CaMCheXV3NanoModel.py:147`.
+- `training/camchex_v3nano/camchex_v3nano_train.py:11` and `training/camchex_v3nano/camchex_v3nano_eval.py:12` - added v3 train/eval entrypoints that instantiate `CaMCheXV3NanoModel` and default to `training/camchex_v3nano/config.yaml` / `output/camchex_v3nano`.
+- `training/camchex_v3nano/config.yaml:2` - copied the v2 Nano vitals config and added `model.arch: camchex_v3nano` so tooling can distinguish the checkpoint architecture.
+- `training/camchex_v3nano/README.md:1` - documented the 258-token layout, files, and basic train/eval commands.
+- `src/interpret/run_gradcam.py:102` - made the shared Grad-CAM runner instantiate `CaMCheXV3NanoModel` when the config declares `model.arch: camchex_v3nano`; v2 remains the default for existing configs.
+- `src/interpret/attribution.py:1` - generalized the attribution module docstring from v2-specific to Nano-vitals variants.
+
+**Reasoning.** This is an additive ablation variant rather than a change to v2, because the current v2 behavior is a useful baseline and checkpoint shape. Reusing the existing dataset, backbones, text-cache path, optimizer defaults, and ML-Decoder isolates the requested hypothesis: whether 64 repeated/expanded non-image tokens are helpful or just extra transformer memory. For vitals, using `VitalsTokenProjector(grid_size=1)` keeps the same MLP style but changes only the output token count. A larger alternative, such as projecting clinical CLS through a learned 8x8 expansion, was intentionally left out because the request was specifically for one clinical token and one vital token.
+
+**Assumptions.**
+- `camchex_v3nano` should be directly comparable to `camchex_v2nano_vitals`, so learning rate, class counts, timm backbone, CXR-BERT model, channel preprocessing, cache options, and trainer defaults were copied unchanged.
+- Clinical cached embeddings remain CLS vectors of shape `B x 768`; v3 changes only how they enter fusion.
+- The shared Grad-CAM runner should continue to work for v3 training runs, so it now selects the model class from config metadata.
+
+**Gotchas.** The v3 checkpoint is not shape-compatible with v2 for `vitals_projector.proj.3.*` because the final vitals projection is now `768` outputs instead of `64 * 768`. Do not load v2 checkpoints into v3 with strict expectations. The Grad-CAM runner still defaults to v2 when `model.arch` is absent, preserving old configs but making the `arch` field important for v3.
+
+**Follow-ups.** Train v2 and v3 under the same split/seed and compare AUROC/AP, wall-clock, memory, and attribution modality shares. If one-token clinical underperforms but repeated CLS is still wasteful, the next ablation could replace straight repetition with a learned `768 -> 768 x 8 x 8` expansion.

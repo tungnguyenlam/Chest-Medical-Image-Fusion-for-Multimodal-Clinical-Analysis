@@ -18,7 +18,7 @@ Two ways to pick the study per class:
 Multilabel: attribution is class-conditional (one logit backprops per panel), so a study
 with several findings gets a separate panel under each class; the header lists co-positives.
 
-Standalone example:
+Standalone v2 example:
     python -m src.interpret.run_gradcam \
         --config training/camchex_v2nano_vitals/config.yaml \
         --checkpoint-path output/camchex_v2nano_vitals/runs/<run>/checkpoints/best.pt \
@@ -49,6 +49,7 @@ from src.dataloader.utils import get_transforms
 from src.interpret.attribution import CaMCheXAttributor
 from src.interpret.visualize import render_attribution, render_attribution_split
 from src.model.CaMCheXV2NanoVitalsModel import CaMCheXV2NanoVitalsModel
+from src.model.CaMCheXV3NanoModel import CaMCheXV3NanoModel
 from training.common import (
     add_common_args,
     classes_from_config,
@@ -66,7 +67,7 @@ SPLIT_KEY = {"val": "devel_df_path", "test": "pred_df_path", "train": "train_df_
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Per-class Grad-CAM / attribution panels for CaMCheX vitals model.")
+    parser = argparse.ArgumentParser(description="Per-class Grad-CAM / attribution panels for CaMCheX Nano vitals models.")
     add_common_args(parser, model_name="camchex_v2nano_vitals")
     parser.add_argument("--split", choices=["val", "test", "train"], default="val")
     parser.add_argument("--gradcam-out", help="Output dir. Default: <run_dir>/gradcam/epoch_<n> next to the checkpoint.")
@@ -98,13 +99,21 @@ def build_dataset(cfg, args) -> CaMCheXVitalsDataset:
     return ds, tokenizer
 
 
-def build_model(cfg, args, device) -> CaMCheXV2NanoVitalsModel:
+def _model_class_from_config(cfg):
+    arch = str(cfg.get("model", {}).get("arch", "camchex_v2nano_vitals")).lower()
+    if arch == "camchex_v3nano":
+        return CaMCheXV3NanoModel
+    return CaMCheXV2NanoVitalsModel
+
+
+def build_model(cfg, args, device):
     timm_args = timm_args_from_config(cfg, args)
     timm_args["pretrained"] = False  # checkpoint supplies the weights
     init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
     init_args["use_precomputed_text_embeddings"] = False  # force live BERT
     init_args["freeze_text_encoder"] = False              # let gradients flow into embeddings
-    model = CaMCheXV2NanoVitalsModel(
+    model_cls = _model_class_from_config(cfg)
+    model = model_cls(
         timm_init_args=timm_args,
         text_model=cfg["model"].get("text_model", "microsoft/BiomedVLP-CXR-BERT-specialized"),
         **init_args,

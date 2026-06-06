@@ -1,0 +1,123 @@
+model:
+  arch: camchex_v3nano
+  lr: 3.0e-5
+  classes: &classes
+    - Atelectasis
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fracture
+    - Hernia
+    - Infiltration
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - No Finding
+    - Nodule
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+  loss_init_args:
+    class_instance_nums:
+      - 67597
+      - 4361
+      - 76900
+      - 16038
+      - 38574
+      - 4255
+      - 30119
+      - 1158
+      - 11883
+      - 4049
+      - 10218
+      - 2533
+      - 79931
+      - 5529
+      - 41869
+      - 7663
+      - 69240
+      - 675
+      - 3369
+      - 788
+      - 48093
+      - 543
+      - 14983
+      - 2453
+      - 89140
+      - 3499
+    total_instance_num: 264849
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 26
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
+    pretrained: true
+    drop_path_rate: 0.0
+  model_init_args:
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/03_mimic_train.csv
+    devel_df_path: data/data-camchex/03_mimic_development.csv
+    pred_df_path: data/data-camchex/03_mimic_test.csv
+    use_text_embedding_cache: false
+    # Shared on-disk cache for frozen text embeddings, like image_channel_cache_dir.
+    # Content-addressed (sha1 of model|max_length|text) under a per-model subdir, so
+    # it is reused across models/runs and never rebuilt for texts already present.
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
+    image_cache_dir: null
+    # Shared on-disk cache for built 3-channel images (uint8, keyed by
+    # path+mode+cfg). Reused across models/runs and prebuilt before training when
+    # channel_mode is set. null -> rebuild on the fly every epoch (no cache).
+    image_channel_cache_dir: ../cache/channels
+    # 3-channel CXR representation: raw + CLAHE + a third channel. null -> legacy
+    # ImageNet RGB. Override per-run with --channel-mode (e.g. none to ablate).
+    channel_mode: raw_clahe_histeq
+    size: 512
+    classes: *classes
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 1
+  grad_clip: 1.0
+  precision: 16-mixed
+  compile_model: false
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  # Fraction-of-epoch validation schedule (batch-size independent); end-of-epoch full val always runs.
+  full_val_fracs: [0.5]
+  quick_val_fracs: [0.2, 0.4, 0.6, 0.8]
+  quick_val_frac: 0.1
+  seed: null
+  accelerator: null

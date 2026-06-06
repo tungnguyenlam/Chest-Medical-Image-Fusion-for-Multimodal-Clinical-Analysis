@@ -1,4 +1,4 @@
-"""Gradient-based attribution for CaMCheXV2NanoVitalsModel.
+"""Gradient-based attribution for CaMCheX Nano vitals models.
 
 A single backward pass from one class logit gives a coherent, per-modality story:
 
