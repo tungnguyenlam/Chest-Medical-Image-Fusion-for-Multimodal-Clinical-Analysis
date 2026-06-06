@@ -42,8 +42,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = load_config(args.config)
     run_dir = prepare_run_dir(args)
+    cfg = load_config(args.config)
     write_resolved_config(run_dir, args, cfg)
 
     train_loader, val_loader = make_camchex_vitals_loaders(cfg, args)

@@ -337,7 +337,7 @@ def resume_run_dir(checkpoint_path: str | Path) -> Path:
     return resolved.resolve().parents[1]
 
 
-def _checkpoint_sort_key(path: Path) -> tuple[float, int, str]:
+def _checkpoint_sort_key(path: Path) -> tuple[int, float, str]:
     stem = path.stem
     epoch = -1
     if stem.startswith("epoch_"):
@@ -349,7 +349,15 @@ def _checkpoint_sort_key(path: Path) -> tuple[float, int, str]:
         mtime = path.stat().st_mtime
     except OSError:
         mtime = 0.0
-    return mtime, epoch, str(path)
+    return epoch, mtime, str(path)
+
+
+def _run_sort_key(path: Path) -> tuple[str, float]:
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return path.name, mtime
 
 
 def find_quick_continue_checkpoint(args: argparse.Namespace) -> Path:
@@ -361,31 +369,116 @@ def find_quick_continue_checkpoint(args: argparse.Namespace) -> Path:
         exact = base_dir / str(args.run_id)
         run_dirs = [exact] if exact.is_dir() else sorted(
             [p for p in base_dir.glob(f"{args.run_id}-*") if p.is_dir()],
-            key=lambda p: p.stat().st_mtime,
+            key=_run_sort_key,
             reverse=True,
         )
     else:
         run_dirs = sorted(
             [p for p in base_dir.iterdir() if p.is_dir()],
-            key=lambda p: p.stat().st_mtime,
+            key=_run_sort_key,
             reverse=True,
         )
 
-    candidates: list[Path] = []
+    saw_checkpoint_dir = False
     for run_dir in run_dirs:
         ckpt_dir = run_dir / "checkpoints"
         if not ckpt_dir.exists():
             continue
+        saw_checkpoint_dir = True
         run_candidates = list(ckpt_dir.glob("epoch_*.pt"))
         if not run_candidates:
             run_candidates = list(ckpt_dir.glob("*.pt"))
-        candidates.extend(run_candidates)
+        if run_candidates:
+            return max(run_candidates, key=_checkpoint_sort_key).resolve()
 
-    if not candidates:
+    if not saw_checkpoint_dir:
         scope = f"run_id={args.run_id}" if getattr(args, "run_id", None) else "all runs"
-        raise FileNotFoundError(f"--quick-continue found no checkpoints under {base_dir} ({scope})")
+        raise FileNotFoundError(f"--quick-continue found no checkpoint dirs under {base_dir} ({scope})")
+    scope = f"run_id={args.run_id}" if getattr(args, "run_id", None) else "all runs"
+    raise FileNotFoundError(f"--quick-continue found no checkpoints under {base_dir} ({scope})")
 
-    return max(candidates, key=_checkpoint_sort_key).resolve()
+
+def _explicit_cli_dests(argv: list[str] | None = None) -> set[str]:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    dests: set[str] = set()
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        option = token.split("=", 1)[0]
+        dests.add(option.removeprefix("--").replace("-", "_"))
+    return dests
+
+
+def _restore_quick_continue_args(args: argparse.Namespace, run_dir: Path) -> None:
+    config_path = run_dir / "config.resolved.json"
+    if not config_path.exists():
+        print(f"[quick-continue] no {config_path}; using current CLI/config defaults", flush=True)
+        return
+
+    try:
+        with open(config_path, "r") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[quick-continue] could not read {config_path}: {exc}; using current CLI/config defaults", flush=True)
+        return
+    saved_args = payload.get("args") if isinstance(payload, dict) else None
+    if not isinstance(saved_args, dict):
+        print(f"[quick-continue] {config_path} has no saved args; using current CLI/config defaults", flush=True)
+        return
+    if saved_args.get("quick_continue"):
+        print(
+            f"[quick-continue] {config_path} looks like it was written by a previous resume attempt; "
+            "not restoring those args",
+            flush=True,
+        )
+        return
+
+    explicit = _explicit_cli_dests()
+    protected = {"quick_continue", "resume_from", "checkpoint_path"}
+    restored: list[str] = []
+    for key, value in saved_args.items():
+        if key in protected or key in explicit:
+            continue
+        if hasattr(args, key):
+            setattr(args, key, value)
+            restored.append(key)
+
+    if restored:
+        preview = ", ".join(sorted(restored)[:12])
+        suffix = "" if len(restored) <= 12 else f", ... ({len(restored)} total)"
+        print(f"[quick-continue] restored saved args: {preview}{suffix}", flush=True)
+
+
+def _infer_quick_continue_model_args(args: argparse.Namespace, checkpoint_path: Path) -> None:
+    if not hasattr(args, "use_precomputed_text_embeddings"):
+        return
+    if getattr(args, "use_precomputed_text_embeddings", False):
+        return
+
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    except Exception as exc:
+        print(f"[quick-continue] could not inspect checkpoint for model args: {exc}", flush=True)
+        return
+
+    state_dict = checkpoint
+    if isinstance(checkpoint, dict):
+        state_dict = checkpoint.get("model_state_dict") or checkpoint.get("state_dict") or {}
+    if not isinstance(state_dict, dict):
+        return
+
+    keys = list(state_dict.keys())
+    has_model_keys = any(k.startswith(("image_encoder.", "head.", "transformer_encoder.")) for k in keys)
+    has_text_encoder = any("text_encoder." in k for k in keys)
+    if has_model_keys and not has_text_encoder:
+        args.use_precomputed_text_embeddings = True
+        if hasattr(args, "freeze_text_encoder"):
+            args.freeze_text_encoder = True
+        print(
+            "[quick-continue] inferred --use-precomputed-text-embeddings from checkpoint "
+            "(no text_encoder weights present)",
+            flush=True,
+        )
 
 
 def prepare_run_dir(args: argparse.Namespace) -> Path:
@@ -395,9 +488,13 @@ def prepare_run_dir(args: argparse.Namespace) -> Path:
         if getattr(args, "checkpoint_path", None):
             raise ValueError("--quick-continue cannot be combined with --checkpoint-path")
         checkpoint = find_quick_continue_checkpoint(args)
+        run_dir = resume_run_dir(checkpoint)
+        _restore_quick_continue_args(args, run_dir)
+        _infer_quick_continue_model_args(args, checkpoint)
         args.resume_from = str(checkpoint)
         args.checkpoint_path = str(checkpoint)
         print(f"[quick-continue] selected checkpoint: {checkpoint}", flush=True)
+        return run_dir
     if getattr(args, "resume_from", None):
         return resume_run_dir(args.resume_from)
     return make_run_dir(args.output_dir, args.run_name, args.run_id)
@@ -418,7 +515,8 @@ def set_seed(seed: int | None) -> None:
 
 def write_resolved_config(run_dir: Path, args: argparse.Namespace, cfg: dict[str, Any]) -> None:
     payload = {"args": vars(args), "config": cfg}
-    with open(run_dir / "config.resolved.json", "w") as f:
+    path = run_dir / ("config.resume.json" if getattr(args, "resume_from", None) else "config.resolved.json")
+    with open(path, "w") as f:
         json.dump(payload, f, indent=2)
 
 

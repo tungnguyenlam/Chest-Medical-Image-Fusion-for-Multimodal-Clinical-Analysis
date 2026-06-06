@@ -1641,3 +1641,39 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** Run directories are named `<run_id>-<run_name>`, so requiring both values for quick resume would still force manual lookup in the case the user knows only the timestamp/run id. Matching `<run_id>-*` preserves the ability to force a run without needing the suffix.
 
 **Gotchas.** If two folders share the same run-id prefix, quick-continue considers checkpoints from both and still picks the newest checkpoint by modification time. That should not happen with timestamp run ids, but the behavior is deterministic enough if it does.
+
+## 2026-06-07 - quick-continue restores original run args
+
+**Goal.** Fix `--quick-continue` after a crashed CaMCheX v2nano vitals run failed to resume because the resumed process rebuilt a different model/optimizer than the original run.
+
+**Changes.**
+- `training/common.py:391` - added CLI override detection so quick-continue can replay saved run args while still respecting flags explicitly supplied on the resume command.
+- `training/common.py:402` - restores saved args from the selected run's `config.resolved.json`, with guards for missing, malformed, or resume-clobbered config files.
+- `training/common.py:438` - inspects the checkpoint when saved args are unavailable/untrusted and infers `--use-precomputed-text-embeddings` when the model state has no text encoder weights.
+- `training/common.py:470` - quick-continue now resolves the run dir, restores/infer args, then sets `resume_from`/`checkpoint_path` for a full optimizer/scheduler resume.
+- `training/common.py:502` - resume attempts write `config.resume.json` instead of overwriting the original `config.resolved.json`.
+- `training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py:45` and the other train entrypoints - moved `prepare_run_dir(args)` before `load_config(args.config)` so restored args, including `--config`, are applied before config/model construction.
+
+**Reasoning.** The observed optimizer parameter-group mismatch came from quick-continue only finding a checkpoint. It did not restore the original flags, so the resume command defaulted to live CXR-BERT instead of precomputed text embeddings and built a different parameter set. Replaying the saved args is the correct general behavior for `--quick-continue`; checkpoint inference is a fallback for the exact bad state created when a failed resume has already overwritten `config.resolved.json` with defaults.
+
+**Assumptions.**
+- `config.resolved.json` from the original run remains the canonical source of launch args when `quick_continue` is false or absent.
+- If a saved config says `quick_continue: true`, it is treated as a resume attempt snapshot and is not trusted for original training args.
+- A checkpoint with core model keys but no `text_encoder.` keys means the run used precomputed/frozen text embeddings.
+
+**Gotchas.** If the original `config.resolved.json` was already overwritten by the failed resume, exact runtime-only args such as `batch_size=16` and `num_workers=3` may not be recoverable from the checkpoint; the code can still infer the model-shaping precomputed-text setting to avoid the optimizer mismatch. In that case the user can pass `--batch-size 16 --num-workers 3` alongside `--quick-continue`.
+
+**Follow-ups.** A future improvement would be saving a small immutable `run.args.json` at run creation time, independent of resolved config output, so resume metadata cannot be clobbered by any later command.
+
+## 2026-06-07 - quick-continue selects newest run by name
+
+**Goal.** Tighten the `--quick-continue` resolver so it matches the intended "last run, last weight" behavior before push.
+
+**Changes.**
+- `training/common.py:355` - added run sorting by directory name first and mtime second, matching timestamped run dirs like `YYYYMMDD-HHMMSS-baseline` instead of trusting filesystem mtime alone.
+- `training/common.py:364` - changed checkpoint sorting to prefer the highest parsed `epoch_*.pt` number before mtime.
+- `training/common.py:380` - quick-continue now returns the best checkpoint from the newest matching run directory that actually has checkpoints, rather than taking the newest checkpoint across all runs.
+
+**Reasoning.** Filesystem mtimes can be changed by copying, failed resume attempts, or writing metadata into an old run directory. The run directory name already encodes the launch timestamp, so it is a better primary signal for "last run." Within a run, the highest epoch checkpoint is the training continuation point users expect.
+
+**Gotchas.** Custom non-timestamp run ids still sort lexicographically by folder name, with mtime only as a tiebreaker. Timestamp-style run ids remain the assumed normal path.
