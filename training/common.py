@@ -247,11 +247,6 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
     parser.add_argument("--val-check-interval", type=float)
     parser.add_argument("--log-every-n-steps", type=int, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
-    parser.add_argument(
-        "--checkpoint-every-steps",
-        type=int,
-        help="Save one temporary mid-epoch recovery checkpoint every N optimizer steps. Default 1000; set 0 to disable.",
-    )
     parser.add_argument("--early-stop-monitor", help="Epoch validation metric to monitor for early stopping. Default val_ap.")
     parser.add_argument("--early-stop-mode", choices=["min", "max"], help="Whether early-stop monitor should decrease or increase. Default max.")
     parser.add_argument("--early-stop-patience", type=int, help="Stop after this many non-improving epochs. Default 3; set 0 to disable.")
@@ -878,9 +873,9 @@ def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str |
     if not isinstance(checkpoint, dict):
         return 0, 0, None, 0, None
     epoch = int(checkpoint.get("epoch", -1))
-    checkpoint_kind = str(checkpoint.get("checkpoint_kind", "epoch"))
-    completed_epoch = bool(checkpoint.get("completed_epoch", checkpoint_kind != "mid_epoch"))
-    start_epoch = epoch + 1 if completed_epoch else max(0, epoch)
+    # Checkpoints are only ever written at epoch boundaries, so resume always continues
+    # at the next epoch.
+    start_epoch = epoch + 1
     global_step = int(checkpoint.get("global_step", 0))
     best_monitor_value = checkpoint.get("best_monitor_value", checkpoint.get("best_val_ap"))
     if best_monitor_value is not None:
@@ -994,9 +989,6 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         val_every_batches = max(1, int(len(train_loader) * val_interval)) if val_interval <= 1 else int(val_interval)
 
     log_every_n_steps = max(1, int(resolve_trainer_arg(args, cfg, "log_every_n_steps", 1) or 1))
-    checkpoint_every_steps = int(resolve_trainer_arg(args, cfg, "checkpoint_every_steps", 1000) or 0)
-    if checkpoint_every_steps < 0:
-        raise ValueError("checkpoint_every_steps must be >= 0")
 
     early_stop_monitor = str(resolve_trainer_arg(args, cfg, "early_stop_monitor", "val_ap"))
     early_stop_mode = str(resolve_trainer_arg(args, cfg, "early_stop_mode", "max")).lower()
@@ -1048,7 +1040,6 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         f"[train] device={device} precision={precision} scaler={use_scaler} "
         f"lr={lr:.2e} max_epochs={max_epochs} accumulate={accumulate_grad_batches} "
         f"grad_clip={grad_clip} val_every={val_every_batches} log_every={log_every_n_steps} "
-        f"checkpoint_every={checkpoint_every_steps or None} "
         f"early_stop={early_stop_monitor}/{early_stop_mode}/patience={early_stop_patience or None}/min_delta={early_stop_min_delta:g} "
         f"quick_val_every={quick_val_every_steps} quick_val_batches={quick_val_max_batches} "
         f"full_val@batches={sorted(full_val_batches) or None} quick_val@batches={sorted(quick_val_batches) or None} "
@@ -1085,14 +1076,6 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         if early_stop_mode == "max":
             return current > best + early_stop_min_delta
         return current < best - early_stop_min_delta
-
-    def _mid_checkpoint_path(epoch: int, gstep: int) -> Path:
-        return checkpoint_dir / f"epoch_{epoch:03d}_step_{gstep:08d}_mid.pt"
-
-    def _delete_mid_checkpoints(epoch: int | None = None) -> None:
-        pattern = "*_mid.pt" if epoch is None else f"epoch_{epoch:03d}_step_*_mid.pt"
-        for path in checkpoint_dir.glob(pattern):
-            path.unlink(missing_ok=True)
 
     def _save_training_checkpoint(path: Path, epoch: int, kind: str) -> None:
         save_checkpoint(
@@ -1222,6 +1205,9 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     for epoch in range(start_epoch, max_epochs):
         model.train()
         optimizer.zero_grad(set_to_none=True)
+        # TEMP vram probe: reset per-epoch peak so the postfix shows this epoch's true high-water.
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
         epoch_loss = 0.0
         epoch_batches = 0
         running_grad_norm = 0.0
@@ -1264,11 +1250,6 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
                 stepped = True
-                if checkpoint_every_steps and global_step % checkpoint_every_steps == 0:
-                    _delete_mid_checkpoints()
-                    mid_path = _mid_checkpoint_path(epoch, global_step)
-                    _save_training_checkpoint(mid_path, epoch, "mid_epoch")
-                    tqdm.write(f"[checkpoint] saved temporary mid-epoch checkpoint: {mid_path}")
 
             loss_value = float(loss.detach().cpu())
             epoch_loss += loss_value
@@ -1279,12 +1260,23 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             epoch_loss_avg = epoch_loss / max(1, epoch_batches)
             running_loss_avg = running_loss_total / max(1, running_batches_total)
 
+            # TEMP vram probe: alloc=live tensors, peak=epoch max alloc, resv=what nvidia-smi sees.
+            if device.type == "cuda":
+                vram = (
+                    f"{torch.cuda.memory_allocated(device)/1e9:.1f}/"
+                    f"{torch.cuda.max_memory_allocated(device)/1e9:.1f}/"
+                    f"{torch.cuda.memory_reserved(device)/1e9:.1f}"
+                )
+            else:
+                vram = "n/a"
+
             pbar.set_postfix(
                 loss=f"{epoch_loss_avg:.4f}",
                 run_loss=f"{running_loss_avg:.4f}",
                 lr=f"{current_lr:.2e}",
                 grad_norm=f"{last_grad_norm:.3f}",
                 step=global_step,
+                vram=vram,
             )
 
             if stepped and (global_step % log_every_n_steps == 0):
@@ -1345,7 +1337,6 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
         epoch_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"
         _save_training_checkpoint(epoch_path, epoch, "epoch")
-        _delete_mid_checkpoints(epoch)
         tqdm.write(f"[checkpoint] saved epoch checkpoint: {epoch_path}")
         _maybe_dump_gradcam(epoch, epoch_path, gradcam_selection)
 
