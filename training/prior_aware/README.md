@@ -31,8 +31,9 @@ still appears as a row, but its prior branch is masked.
 
 ## Build The Parquet
 
-Default behavior stores token ids and attention masks. The text backbone remains
-trainable during model training.
+The builder stores token ids/attention masks plus raw text columns for the
+training-time embedding cache. It no longer writes frozen CLS embeddings into
+the parquet.
 
 ```bash
 python src/prepare/04_build_prior_aware_dataset.py \
@@ -46,33 +47,33 @@ python src/prepare/04_build_prior_aware_dataset.py \
   --tokenizer microsoft/BiomedVLP-CXR-BERT-specialized
 ```
 
-## Tokenized Versus Pre-Embedded
+## Tokenized Versus Cached
 
-Default tokenized parquet:
+Default live text path:
 
 ```text
 CSV text
 -> tokenizer during parquet build
--> input_ids + attention_mask stored
+-> input_ids + attention mask stored in parquet
 -> model loads and runs BioBERT/CXR-BERT during training
 ```
 
-Optional pre-embedded parquet:
+Optional frozen cached path:
 
 ```text
-CSV text
--> tokenizer + frozen BioBERT/CXR-BERT during parquet build
--> CLS embeddings stored
+CSV text stored in parquet
+-> training loader fills shared TextEmbeddingCache misses
+-> dataset streams CLS embeddings per sample
 -> model does not load BioBERT/CXR-BERT during training
 ```
 
-Pre-embedding is only appropriate when the text backbone is frozen. If the text
+Caching is only appropriate when the text backbone is frozen. If the text
 backbone is trainable, embeddings must be recomputed every update, so cached
 embeddings would be stale.
 
-## Precompute Text Embeddings
+## Train With Cached Text Embeddings
 
-Prior-aware rows need four text streams embedded into the parquet itself:
+Prior-aware rows need four text streams cached:
 
 ```text
 current clinical
@@ -81,7 +82,7 @@ prior clinical
 prior observation/vitals text
 ```
 
-The parquet builder uses the shared frozen text embedding cache under
+The training and eval loaders use the shared frozen text embedding cache under
 `data/text_embeddings/<embedding-model-name>-<model-hash>/`, with one `.npy`
 file per cached text key. Repeated runs and other model variants reuse
 already-computed CLS embeddings for the same text model, max token length, and
@@ -90,70 +91,22 @@ raw text.
 BioBERT:
 
 ```bash
-python src/prepare/04_build_prior_aware_dataset.py \
-  --tokenizer dmis-lab/biobert-v1.1 \
-  --precompute-text-embeddings \
-  --text-embedding-cache-dir data/text_embeddings \
-  --out-prefix prior_aware_biobert_embedded_
+python training/prior_aware/prior_aware_train.py \
+  --use-precomputed-text-embeddings \
+  --text-embedding-cache-dir data/text_embeddings
 ```
 
 CXR-BERT:
 
 ```bash
-python src/prepare/04_build_prior_aware_dataset.py \
-  --tokenizer microsoft/BiomedVLP-CXR-BERT-specialized \
-  --precompute-text-embeddings \
-  --text-embedding-cache-dir data/text_embeddings \
-  --out-prefix prior_aware_cxrbert_embedded_
-```
-
-This writes columns named:
-
-```text
-clin_embedding
-obs_embedding
-prior_clin_embedding
-prior_obs_embedding
-```
-
-instead of:
-
-```text
-clin_input_ids
-clin_attn_mask
-obs_input_ids
-obs_attn_mask
-prior_clin_input_ids
-prior_clin_attn_mask
-prior_obs_input_ids
-prior_obs_attn_mask
-```
-
-## Train With Precomputed Embeddings
-
-Point the config or CLI paths at the embedded parquet files and enable the
-model flag:
-
-```bash
-python training/prior_aware/prior_aware_train.py \
-  --train-df-path data/data-camchex/prior_aware_biobert_embedded_train.parquet \
-  --val-df-path data/data-camchex/prior_aware_biobert_embedded_development.parquet \
-  --test-df-path data/data-camchex/prior_aware_biobert_embedded_test.parquet \
-  --use-precomputed-text-embeddings
-```
-
-CXR-BERT version:
-
-```bash
 python training/prior_aware_cxrbert/prior_aware_train.py \
-  --train-df-path data/data-camchex/prior_aware_cxrbert_embedded_train.parquet \
-  --val-df-path data/data-camchex/prior_aware_cxrbert_embedded_development.parquet \
-  --test-df-path data/data-camchex/prior_aware_cxrbert_embedded_test.parquet \
-  --use-precomputed-text-embeddings
+  --use-precomputed-text-embeddings \
+  --text-embedding-cache-dir data/text_embeddings
 ```
 
 `--use-precomputed-text-embeddings` also implies frozen text behavior and the
-model skips constructing the text encoder.
+model skips constructing the text encoder. The parquet paths stay the normal
+`prior_aware_{train,development,test}.parquet` paths.
 
 ## Freeze Without Pre-Embedding
 
@@ -229,10 +182,11 @@ by the stage-3 `PreviousStudy` column.
 | `prior_label` | Prior study's 26-label vector. Zeroed when no prior is used. | `B x 26` |
 | `days_since_prior` | Current study time minus prior study time, in days. Zeroed when no prior is used. | `B` |
 
-If the parquet was built with `--precompute-text-embeddings`, the text fields
-are already CLS vectors instead of token ids. In that mode the clinical and
-vitals tensors are `B x 768`, attention masks are dummy arrays, and the model
-does not instantiate BioBERT/CXR-BERT.
+If `--use-precomputed-text-embeddings` or `use_text_embedding_cache: true` is
+enabled at train/eval time, the dataset streams cached CLS vectors instead of
+token ids for the configured text streams. In that mode the relevant text
+tensors are `B x 768`, attention masks are dummy arrays, and the model does not
+instantiate BioBERT/CXR-BERT.
 
 ### Image Tokens
 
@@ -379,12 +333,15 @@ label. The prior label is only context.
 ### Biobert Versus CXR-BERT Variants
 
 `training/prior_aware/` and `training/prior_aware_cxrbert/` use the same model
-class and data contract. The main differences are config choices:
+class and data contract. `training/prior_aware_v2nano/` is a separate v2nano
+assembly that uses numeric vitals instead of observation-text tokens. The main
+differences are config choices:
 
-| Folder | Text model | Image backbone |
-|---|---|---|
-| `training/prior_aware/` | `dmis-lab/biobert-v1.1` | `convnext_small.fb_in22k_ft_in1k` |
-| `training/prior_aware_cxrbert/` | `microsoft/BiomedVLP-CXR-BERT-specialized` | `convnext_tiny.fb_in22k_ft_in1k` |
+| Folder | Text model | Image backbone | Vitals path |
+|---|---|---|---|
+| `training/prior_aware/` | `dmis-lab/biobert-v1.1` | `convnext_small.fb_in22k_ft_in1k` | observation text |
+| `training/prior_aware_cxrbert/` | `microsoft/BiomedVLP-CXR-BERT-specialized` | `convnext_tiny.fb_in22k_ft_in1k` | observation text |
+| `training/prior_aware_v2nano/` | `microsoft/BiomedVLP-CXR-BERT-specialized` | `convnextv2_nano.fcmae_ft_in22k_in1k_384` | numeric vital tokens |
 
-Both variants keep `d_model=768`, two fusion transformer layers, eight attention
+All variants keep `d_model=768`, two fusion transformer layers, eight attention
 heads, and 26 output classes by default.

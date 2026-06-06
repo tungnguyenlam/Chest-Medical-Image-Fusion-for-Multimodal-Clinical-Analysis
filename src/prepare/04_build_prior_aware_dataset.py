@@ -7,8 +7,11 @@ at the chosen image source) and emits:
 
   data/data-camchex/prior_aware_{train,development,test}.parquet
 
-One row per study. All groupby/fillna/path-resolution/tokenizer work happens
-here so the runtime Dataset only has to decode JPEGs and apply transforms.
+One row per study. Groupby/path-resolution/tokenizer work happens here so the
+runtime Dataset only has to decode JPEGs, apply transforms, and optionally read
+frozen text embeddings from the shared training-time cache. Raw text and numeric
+vital arrays are kept in the parquet for cache construction and v2nano-style
+prior-aware variants.
 
 Defaults to the `mimic` source (03_mimic_*.csv) to match training/camchex/config.yaml.
 Use --in-prefix 03_kaggle_ to build from the kaggle-hosted images instead.
@@ -31,8 +34,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dataloader.utils import resolve_preferred_image_path
-from src.utils.text_embedding_cache import TextEmbeddingCache
-
 CLASSES = [
     "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation",
     "Edema", "Emphysema", "Enlarged Cardiomediastinum", "Fibrosis", "Fracture",
@@ -88,6 +89,24 @@ def _obs_text(row: pd.Series) -> str:
     ])
 
 
+def _vital_vector(row: pd.Series) -> np.ndarray:
+    out = np.zeros(len(OBS_FIELDS), dtype=np.float32)
+    out.fill(np.nan)
+    for i, field in enumerate(OBS_FIELDS):
+        raw_value = row.get(field)
+        if field == "gender" and not pd.isna(raw_value):
+            raw = str(raw_value).strip().upper()
+            if raw in {"M", "MALE"}:
+                out[i] = 1.0
+            elif raw in {"F", "FEMALE"}:
+                out[i] = 0.0
+            continue
+        value = pd.to_numeric(raw_value, errors="coerce")
+        if not pd.isna(value):
+            out[i] = float(value)
+    return out
+
+
 def _clin_text(row: pd.Series) -> str:
     text = row.get("clinical_indication", "")
     if pd.isna(text) or not isinstance(text, str) or text.strip() == "":
@@ -138,7 +157,6 @@ def build_split(
     out_path: Path,
     tokenizer,
     batch_size: int = 256,
-    text_cache: TextEmbeddingCache | None = None,
 ) -> None:
     print(f"[build] reading {csv_path}")
     df = pd.read_csv(csv_path, low_memory=False)
@@ -150,8 +168,6 @@ def build_split(
     lookup = studies.set_index("study_id")
     has_prev = studies["PreviousStudy"].notna()
     studies["_prior_id"] = studies["PreviousStudy"].where(has_prev, other=-1).astype(np.int64)
-
-    precompute_embeddings = text_cache is not None
 
     print("[build] preparing current clinical_indication...")
     clin_texts = studies.apply(_clin_text, axis=1).tolist()
@@ -179,24 +195,14 @@ def build_split(
             ]))
             prior_has_text.append(False)
 
-    if precompute_embeddings:
-        print("[build] embedding current clinical_indication...")
-        clin_emb = text_cache.embed_texts(clin_texts, CLIN_MAX_LEN, desc="current clinical embeddings")
-        print("[build] embedding current vitals...")
-        obs_emb = text_cache.embed_texts(obs_texts, OBS_MAX_LEN, desc="current vitals embeddings")
-        print("[build] embedding prior clinical_indication...")
-        prior_clin_emb = text_cache.embed_texts(prior_clin_texts, CLIN_MAX_LEN, desc="prior clinical embeddings")
-        print("[build] embedding prior vitals...")
-        prior_obs_emb = text_cache.embed_texts(prior_obs_texts, OBS_MAX_LEN, desc="prior vitals embeddings")
-    else:
-        print("[build] tokenizing current clinical_indication...")
-        clin_ids, clin_mask = _tokenize_batch(tokenizer, clin_texts, CLIN_MAX_LEN)
-        print("[build] tokenizing current vitals...")
-        obs_ids, obs_mask = _tokenize_batch(tokenizer, obs_texts, OBS_MAX_LEN)
-        print("[build] tokenizing prior clinical_indication...")
-        prior_clin_ids, prior_clin_mask = _tokenize_batch(tokenizer, prior_clin_texts, CLIN_MAX_LEN)
-        print("[build] tokenizing prior vitals...")
-        prior_obs_ids, prior_obs_mask = _tokenize_batch(tokenizer, prior_obs_texts, OBS_MAX_LEN)
+    print("[build] tokenizing current clinical_indication...")
+    clin_ids, clin_mask = _tokenize_batch(tokenizer, clin_texts, CLIN_MAX_LEN)
+    print("[build] tokenizing current vitals...")
+    obs_ids, obs_mask = _tokenize_batch(tokenizer, obs_texts, OBS_MAX_LEN)
+    print("[build] tokenizing prior clinical_indication...")
+    prior_clin_ids, prior_clin_mask = _tokenize_batch(tokenizer, prior_clin_texts, CLIN_MAX_LEN)
+    print("[build] tokenizing prior vitals...")
+    prior_obs_ids, prior_obs_mask = _tokenize_batch(tokenizer, prior_obs_texts, OBS_MAX_LEN)
 
     # Per-row resolved paths + views (current + prior), label vectors, time delta.
     print("[build] resolving paths and assembling rows...")
@@ -205,6 +211,7 @@ def build_split(
     cur_paths, cur_views = [], []
     prv_paths, prv_views = [], []
     cur_labels, prv_labels = [], []
+    cur_vitals, prv_vitals = [], []
     has_prior, days_since = [], []
     prior_has_image = []
 
@@ -214,6 +221,7 @@ def build_split(
         cur_paths.append(p)
         cur_views.append(v)
         cur_labels.append(_label_vector(row))
+        cur_vitals.append(_vital_vector(row))
 
         pid = int(row["_prior_id"])
         if pid >= 0 and pid in lookup.index:
@@ -224,6 +232,7 @@ def build_split(
             prv_paths.append(pp)
             prv_views.append(pv)
             prv_labels.append(_label_vector(prow))
+            prv_vitals.append(_vital_vector(prow))
             prior_has_image.append(len(pp) > 0)
             has_prior.append(True)
             cur_dt = row["StudyDateTime"]
@@ -237,6 +246,7 @@ def build_split(
             prv_paths.append([])
             prv_views.append([])
             prv_labels.append(np.zeros(len(CLASSES), dtype=np.float32))
+            prv_vitals.append(np.full(len(OBS_FIELDS), np.nan, dtype=np.float32))
             prior_has_image.append(False)
             has_prior.append(False)
             days_since.append(float("nan"))
@@ -247,31 +257,29 @@ def build_split(
         "img_paths": cur_paths,
         "view_positions": cur_views,
         "label": cur_labels,
+        "vital_values_raw": cur_vitals,
         "has_prior": np.array(has_prior, dtype=bool),
         "prior_has_image": np.array(prior_has_image, dtype=bool),
         "days_since_prior": np.array(days_since, dtype=np.float32),
         "prior_img_paths": prv_paths,
         "prior_view_positions": prv_views,
         "prior_label": prv_labels,
+        "prior_vital_values_raw": prv_vitals,
+        "clin_text": clin_texts,
+        "obs_text": obs_texts,
+        "prior_clin_text": prior_clin_texts,
+        "prior_obs_text": prior_obs_texts,
     }
-    if precompute_embeddings:
-        payload.update({
-            "clin_embedding": list(clin_emb),
-            "obs_embedding": list(obs_emb),
-            "prior_clin_embedding": list(prior_clin_emb),
-            "prior_obs_embedding": list(prior_obs_emb),
-        })
-    else:
-        payload.update({
-            "clin_input_ids": list(clin_ids),
-            "clin_attn_mask": list(clin_mask),
-            "obs_input_ids": list(obs_ids),
-            "obs_attn_mask": list(obs_mask),
-            "prior_clin_input_ids": list(prior_clin_ids),
-            "prior_clin_attn_mask": list(prior_clin_mask),
-            "prior_obs_input_ids": list(prior_obs_ids),
-            "prior_obs_attn_mask": list(prior_obs_mask),
-        })
+    payload.update({
+        "clin_input_ids": list(clin_ids),
+        "clin_attn_mask": list(clin_mask),
+        "obs_input_ids": list(obs_ids),
+        "obs_attn_mask": list(obs_mask),
+        "prior_clin_input_ids": list(prior_clin_ids),
+        "prior_clin_attn_mask": list(prior_clin_mask),
+        "prior_obs_input_ids": list(prior_obs_ids),
+        "prior_obs_attn_mask": list(prior_obs_mask),
+    })
     out_df = pd.DataFrame(payload)
 
     print(f"[build] writing {out_path} ({len(out_df)} studies)")
@@ -295,18 +303,6 @@ def parse_args() -> argparse.Namespace:
         help="Input CSV filename prefix. Default 03_mimic_ matches the output of src/prepare/03_filter_existing_images.py with --subset mimic.",
     )
     p.add_argument("--out-prefix", default="prior_aware_")
-    p.add_argument(
-        "--precompute-text-embeddings",
-        action="store_true",
-        help="Store frozen text CLS embeddings instead of token ids/attention masks.",
-    )
-    p.add_argument("--embedding-batch-size", type=int, default=32)
-    p.add_argument(
-        "--text-embedding-cache-dir",
-        default="../cache/text_embeddings",
-        help="Shared cache root for frozen text embeddings, grouped by embedding model.",
-    )
-    p.add_argument("--device", default="auto", help="Device for --precompute-text-embeddings: auto, cpu, cuda, etc.")
     return p.parse_args()
 
 
@@ -316,17 +312,7 @@ def main() -> None:
     args = parse_args()
     in_dir = (ROOT / args.in_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
-    tokenizer = None
-    text_cache = None
-    if args.precompute_text_embeddings:
-        text_cache = TextEmbeddingCache(
-            text_model=args.tokenizer,
-            cache_root=args.text_embedding_cache_dir,
-            batch_size=args.embedding_batch_size,
-            device=args.device,
-        )
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
 
     for split in args.splits:
         csv_path = in_dir / f"{args.in_prefix}{split}.csv"
@@ -335,7 +321,6 @@ def main() -> None:
             csv_path,
             out_path,
             tokenizer,
-            text_cache=text_cache,
         )
 
 

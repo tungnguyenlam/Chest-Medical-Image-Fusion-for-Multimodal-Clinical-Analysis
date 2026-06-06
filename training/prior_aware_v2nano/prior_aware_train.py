@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model.PriorAwareCaMCheXModel import PriorAwareCaMCheXModel
+from src.model.PriorAwareV2NanoModel import PriorAwareV2NanoModel
 from training.common import (
     add_common_args,
     classes_from_config,
@@ -25,13 +25,13 @@ from training.common import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the prior-aware CaMCheX model.")
-    add_common_args(parser, model_name="prior_aware")
+    parser = argparse.ArgumentParser(description="Train prior-aware CaMCheX with ConvNeXtV2 Nano, CXR-BERT, and numeric vitals.")
+    add_common_args(parser, model_name="prior_aware_v2nano")
     parser.add_argument("--frontal-pretrained-path", help="Stage-1 frontal timm backbone state_dict.")
     parser.add_argument("--lateral-pretrained-path", help="Stage-1 lateral timm backbone state_dict.")
     parser.add_argument("--text-model", help="Override model.text_model from config.")
     parser.add_argument("--freeze-text-encoder", action="store_true", help="Freeze BioBERT/CXR-BERT if token ids are used.")
-    parser.add_argument("--use-precomputed-text-embeddings", action="store_true", help="Use the shared frozen text embedding cache and do not load BioBERT/CXR-BERT.")
+    parser.add_argument("--use-precomputed-text-embeddings", action="store_true", help="Use the shared frozen text embedding cache and do not load CXR-BERT.")
     parser.add_argument("--text-embedding-cache-dir", help="Override the shared text embedding cache root.")
     return parser.parse_args()
 
@@ -45,7 +45,7 @@ def main() -> None:
     train_loader, val_loader = make_prior_aware_loaders(cfg, args)
     frontal_pretrained_path = str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None
     lateral_pretrained_path = str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None
-    text_model = args.text_model or cfg.get("model", {}).get("text_model") or "dmis-lab/biobert-v1.1"
+    text_model = args.text_model or cfg.get("model", {}).get("text_model") or "microsoft/BiomedVLP-CXR-BERT-specialized"
     model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
     if args.freeze_text_encoder:
         model_init_args["freeze_text_encoder"] = True
@@ -53,7 +53,7 @@ def main() -> None:
     if args.use_precomputed_text_embeddings or data_cfg.get("use_text_embedding_cache", False):
         model_init_args["use_precomputed_text_embeddings"] = True
         model_init_args["freeze_text_encoder"] = True
-    model = PriorAwareCaMCheXModel(
+    model = PriorAwareV2NanoModel(
         timm_init_args=timm_args_from_config(cfg, args),
         frontal_pretrained_path=frontal_pretrained_path,
         lateral_pretrained_path=lateral_pretrained_path,

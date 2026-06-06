@@ -31,7 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lateral-pretrained-path")
     parser.add_argument("--text-model", help="Override model.text_model from config.")
     parser.add_argument("--freeze-text-encoder", action="store_true", help="Freeze BioBERT/CXR-BERT if token ids are used.")
-    parser.add_argument("--use-precomputed-text-embeddings", action="store_true", help="Use embedding columns from parquet and do not load BioBERT/CXR-BERT.")
+    parser.add_argument("--use-precomputed-text-embeddings", action="store_true", help="Use the shared frozen text embedding cache and do not load BioBERT/CXR-BERT.")
+    parser.add_argument("--text-embedding-cache-dir", help="Override the shared text embedding cache root.")
     parser.add_argument("--output-csv", default="predictions.csv")
     return parser.parse_args()
 
@@ -47,7 +48,8 @@ def main() -> None:
     model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
     if args.freeze_text_encoder:
         model_init_args["freeze_text_encoder"] = True
-    if args.use_precomputed_text_embeddings:
+    data_cfg = cfg.get("data", {}).get("datamodule_cfg", {}) or {}
+    if args.use_precomputed_text_embeddings or data_cfg.get("use_text_embedding_cache", False):
         model_init_args["use_precomputed_text_embeddings"] = True
         model_init_args["freeze_text_encoder"] = True
     model = PriorAwareCaMCheXModel(

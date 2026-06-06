@@ -286,7 +286,8 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     parser.add_argument(
         "--gradcam-epochs",
         help="When to dump per-class Grad-CAM panels: 'all' (default, every epoch — it's cheap), "
-             "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). Vitals model only.",
+             "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). "
+             "Only models that define gradcam_runner_module emit panels.",
     )
     parser.add_argument("--gradcam-device", help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: cpu.")
 
@@ -545,6 +546,70 @@ def maybe_add_camchex_vitals_text_embeddings(
     return data_cfg
 
 
+def maybe_add_prior_aware_text_embeddings(
+    cfg: dict[str, Any],
+    data_cfg: dict[str, Any],
+    dfs: list[pd.DataFrame],
+    args: argparse.Namespace | None = None,
+) -> dict[str, Any]:
+    model_cfg = cfg.get("model", {}) or {}
+    model_init_args = dict(model_cfg.get("model_init_args", {}) or {})
+    use_cache = bool(
+        data_cfg.get("use_text_embedding_cache", False)
+        or model_init_args.get("use_precomputed_text_embeddings", False)
+        or getattr(args, "use_precomputed_text_embeddings", False)
+    )
+    if not use_cache:
+        return data_cfg
+
+    required = {"clin_text", "obs_text", "prior_clin_text", "prior_obs_text"}
+    missing = sorted({col for df in dfs for col in required if col not in df.columns})
+    if missing:
+        raise KeyError(
+            "Prior-aware training-time text embedding cache requires raw text columns "
+            f"{sorted(required)}; missing {missing}. Rebuild parquet with "
+            "src/prepare/04_build_prior_aware_dataset.py."
+        )
+
+    streams = set(data_cfg.get("text_embedding_streams") or required)
+    unknown_streams = streams - required
+    if unknown_streams:
+        raise ValueError(f"Unknown prior-aware text_embedding_streams entries: {sorted(unknown_streams)}")
+
+    clinical_texts: list[str] = []
+    obs_texts: list[str] = []
+    for df in dfs:
+        if "clin_text" in streams:
+            clinical_texts.extend(df["clin_text"].fillna("No clinical history available.").astype(str).tolist())
+        if "prior_clin_text" in streams:
+            clinical_texts.extend(df["prior_clin_text"].fillna("No clinical history available.").astype(str).tolist())
+        if "obs_text" in streams:
+            obs_texts.extend(df["obs_text"].fillna("").astype(str).tolist())
+        if "prior_obs_text" in streams:
+            obs_texts.extend(df["prior_obs_text"].fillna("").astype(str).tolist())
+
+    text_model = (
+        getattr(args, "text_model", None)
+        or model_cfg.get("text_model")
+        or data_cfg.get("tokenizer")
+        or "microsoft/BiomedVLP-CXR-BERT-specialized"
+    )
+    cache = TextEmbeddingCache(
+        text_model=text_model,
+        cache_root=getattr(args, "text_embedding_cache_dir", None) or data_cfg.get("text_embedding_cache_dir", "../cache/text_embeddings"),
+        batch_size=int(data_cfg.get("text_embedding_batch_size", 32) or 32),
+        device=data_cfg.get("text_embedding_device", "auto"),
+    )
+    if clinical_texts:
+        cache.ensure_texts(list(dict.fromkeys(clinical_texts)), max_length=384, desc=f"{text_model} prior clinical embeddings")
+    if obs_texts:
+        cache.ensure_texts(list(dict.fromkeys(obs_texts)), max_length=128, desc=f"{text_model} prior observation embeddings")
+    cache.unload_model()
+    data_cfg = dict(data_cfg)
+    data_cfg["text_embedding_cache"] = cache
+    return data_cfg
+
+
 def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     from transformers import AutoTokenizer
 
@@ -591,6 +656,9 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         label_dropout_p=0.0,
         cfg=data_cfg,
     )
+    data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
+    train_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
+    val_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     precompute_channels_for_paths(
         data_cfg, _prior_aware_image_paths([train_ds.df, val_ds.df]), desc="prior_aware channels",
         cpu_fraction=resolve_cpu_fraction(args),
@@ -614,6 +682,8 @@ def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
         label_dropout_p=0.0,
         cfg=data_cfg,
     )
+    data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [ds.df], args=args)
+    ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
     labels_available = True  # label column is always present in the pregenerated parquet
     return loader, labels_available
@@ -708,6 +778,14 @@ def unwrap_compiled_model(model: torch.nn.Module) -> torch.nn.Module:
     return getattr(model, "_orig_mod", model)
 
 
+def gradcam_runner_module(model: torch.nn.Module) -> str | None:
+    model = unwrap_compiled_model(model)
+    runner = getattr(model, "gradcam_runner_module", None)
+    if runner:
+        return str(runner)
+    return None
+
+
 def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: dict[str, Any] | None) -> torch.nn.Module:
     compile_model = bool(resolve_trainer_arg(args, cfg, "compile_model", False))
     if not compile_model:
@@ -726,6 +804,21 @@ def train_step(model, criterion, batch, device: torch.device, precision: str | N
         pred = model(data)
         loss = criterion(pred, label)
     return loss, pred, label
+
+
+def batch_study_ids(data: Any) -> list[str] | None:
+    if isinstance(data, dict) and "study_id" in data:
+        study_ids = data["study_id"]
+    elif isinstance(data, (tuple, list)) and data:
+        study_ids = data[0]
+    else:
+        return None
+    if torch.is_tensor(study_ids):
+        study_ids = study_ids.tolist()
+    try:
+        return [str(sid) for sid in study_ids]
+    except TypeError:
+        return [str(study_ids)]
 
 
 @torch.inference_mode()
@@ -756,22 +849,19 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
                 preds.append(prob)
                 labels.append(label.detach().cpu())
                 if selection_out is not None:
-                    study_ids = batch[0][0]  # data[0] = collated study ids (len B)
-                    if torch.is_tensor(study_ids):
-                        # default_collate turns numeric study_ids into a LongTensor, so
-                        # str(study_ids[bi]) would be "tensor(123)". .tolist() yields plain
-                        # python ints whose str() matches run_gradcam's str(np.int64) lookup keys.
-                        study_ids = study_ids.tolist()
+                    study_ids = batch_study_ids(batch[0])
+                    if study_ids is None:
+                        continue
                     lab = label.detach().cpu()
                     for bi in range(prob.shape[0]):
                         for c in range(n_classes):
                             if lab[bi, c] != 1:
                                 continue
                             if sel_first[c] is None:
-                                sel_first[c] = str(study_ids[bi])
+                                sel_first[c] = study_ids[bi]
                             if prob[bi, c] > sel_prob[c]:
                                 sel_prob[c] = float(prob[bi, c])
-                                sel_sid[c] = str(study_ids[bi])
+                                sel_sid[c] = study_ids[bi]
         finally:
             pbar.close()
 
@@ -1098,7 +1188,8 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     def _should_gradcam(epoch: int) -> bool:
         # Default: dump every epoch (it's cheap). Disable with 'none'/'off'/''; or pass
         # a comma list of 0-indexed epochs (e.g. '0,4,9') to restrict.
-        raw = str(resolve_trainer_arg(args, cfg, "gradcam_epochs", "all")).strip().lower()
+        default_gradcam = "all" if gradcam_runner_module(model) else "none"
+        raw = str(resolve_trainer_arg(args, cfg, "gradcam_epochs", default_gradcam)).strip().lower()
         if raw in {"none", "off", "false", "-1", ""}:
             return False
         if raw in {"all", "every", "true"}:
@@ -1108,9 +1199,10 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     def _maybe_dump_gradcam(epoch: int, epoch_path: Path, selection: dict[str, dict] | None) -> None:
         if not _should_gradcam(epoch):
             return
-        model_name = type(unwrap_compiled_model(model)).__name__
-        if model_name != "CaMCheXV2NanoVitalsModel":
-            tqdm.write(f"[gradcam] skipping: --gradcam-epochs only supports CaMCheXV2NanoVitalsModel, got {model_name}")
+        runner_module = gradcam_runner_module(model)
+        if not runner_module:
+            model_name = type(unwrap_compiled_model(model)).__name__
+            tqdm.write(f"[gradcam] skipping: {model_name} does not define gradcam_runner_module")
             return
         if not selection:
             tqdm.write("[gradcam] no per-class true-positive selection captured during validation; skipping.")
@@ -1129,7 +1221,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             json.dump(sets, f, indent=2)
         gradcam_device = str(resolve_trainer_arg(args, cfg, "gradcam_device", "cpu") or "cpu")
         cmd = [
-            sys.executable, "-m", "src.interpret.run_gradcam",
+            sys.executable, "-m", runner_module,
             "--config", str(args.config),
             "--checkpoint-path", str(epoch_path),
             "--split", "val",

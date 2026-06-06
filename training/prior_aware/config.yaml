@@ -89,6 +89,10 @@ data:
     train_df_path: data/data-camchex/prior_aware_train.parquet
     devel_df_path: data/data-camchex/prior_aware_development.parquet
     pred_df_path: data/data-camchex/prior_aware_test.parquet
+    use_text_embedding_cache: false
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
     # Shared on-disk cache for built 3-channel images (uint8, keyed by
     # path+mode+cfg). Reused across models/runs and prebuilt before training.
     image_channel_cache_dir: ../cache/channels

@@ -59,7 +59,7 @@ model:
   text_model: microsoft/BiomedVLP-CXR-BERT-specialized
   timm_init_args:
     num_classes: 26
-    model_name: convnext_tiny.fb_in22k_ft_in1k
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
     pretrained: true
     drop_path_rate: 0.0
   model_init_args:
@@ -69,6 +69,9 @@ model:
     dropout: 0.1
     freeze_text_encoder: false
     use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
   optimizer_init_args:
     weight_decay: 0.01
     betas: [0.9, 0.999]
@@ -90,6 +93,7 @@ data:
     devel_df_path: data/data-camchex/prior_aware_development.parquet
     pred_df_path: data/data-camchex/prior_aware_test.parquet
     use_text_embedding_cache: false
+    text_embedding_streams: [clin_text, prior_clin_text]
     text_embedding_cache_dir: ../cache/text_embeddings
     text_embedding_batch_size: 32
     text_embedding_device: auto

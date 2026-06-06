@@ -90,6 +90,8 @@ class VitalsTokenProjector(nn.Module):
 
 
 class CaMCheXV2NanoVitalsModel(nn.Module):
+    gradcam_runner_module = "src.interpret.run_gradcam"
+
     def __init__(
         self,
         timm_init_args,

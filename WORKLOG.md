@@ -1574,3 +1574,30 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The buckets are not computed dynamically from the current dataset distribution; they depend on the 26-class config order. `scripts/plot_run.py` still duplicates the same bucket indices for plotting.
 
 **Follow-ups.** If the class set/order becomes configurable beyond the current 26 CXR-LT labels, add validation that the hardcoded buckets match the configured classes or move the groups into config.
+
+## 2026-06-06 - prior-aware v2nano and train-time text cache
+
+**Goal.** Carry the v2nano training-pipeline improvements into the prior-aware direction: make Grad-CAM dispatch extensible, add a prior-aware v2nano model variant, and move prior-aware frozen text embedding generation out of `04_build_prior_aware_dataset.py` into train/eval loader setup.
+
+**Changes.**
+- `training/common.py:549` - added `maybe_add_prior_aware_text_embeddings()`, which gathers raw current/prior clinical and observation text from prior-aware parquet frames, fills the shared `TextEmbeddingCache`, and attaches the cache to `PriorAwareDataset` instances.
+- `training/common.py:781` - added model-level Grad-CAM runner discovery via `gradcam_runner_module`, plus dict/tuple study-id extraction for validation selection.
+- `training/common.py:1188` - changed Grad-CAM scheduling so models without a runner default to no Grad-CAM work; models opt in by defining `gradcam_runner_module`.
+- `src/model/CaMCheXV2NanoVitalsModel.py:88` - marked the existing v2nano vitals model with `gradcam_runner_module = "src.interpret.run_gradcam"` to preserve its existing automatic panels.
+- `src/prepare/04_build_prior_aware_dataset.py:92` - added numeric current/prior vital arrays and raw current/prior text columns to the parquet payload.
+- `src/prepare/04_build_prior_aware_dataset.py:294` - removed the prepare-time `--precompute-text-embeddings` path; the builder now always writes token ids/masks plus raw text.
+- `src/dataloader/PriorAwareDataset.py:96` - added train-time text-cache streaming and configurable `text_embedding_streams`, plus normalized current/prior numeric vital tensors for v2nano-style models.
+- `src/model/PriorAwareV2NanoModel.py:24` - added a new prior-aware assembly that reuses the ConvNeXtV2 Nano image router and numeric `VitalsTokenProjector`, while keeping prior labels, delta buckets, and current/prior masking.
+- `training/prior_aware_v2nano/` - added train/eval/config/docs for the new CXR-BERT + ConvNeXtV2 Nano + numeric-vitals prior-aware variant.
+- `training/prior_aware*.py` and configs - updated existing prior-aware train/eval scripts so `--use-precomputed-text-embeddings` means shared train-time cache, with config support for `use_text_embedding_cache` and cache settings.
+
+**Reasoning.** The old prior-aware embedded-parquet mode duplicated cache policy in data prep and made model training depend on separate embedded parquet filenames. Moving frozen embedding generation into the loader matches the v2nano vitals path and keeps one normal prior-aware parquet contract. I kept `PriorAwareCaMCheXModel` intact and added `PriorAwareV2NanoModel` separately because the v2nano version changes modality structure: observation/vitals text remains for the old models, while the new model uses numeric vital token blocks.
+
+**Assumptions.**
+- The prior-aware parquet should be rebuilt before using cached embeddings or `prior_aware_v2nano`, because old parquet files lack `clin_text`, `prior_clin_text`, and the raw vital arrays.
+- `training/prior_aware_v2nano` is the canonical new folder name, matching the final requested `prior_aware_v2nano` direction rather than `prior_aware_cxrbert_v2`.
+- The v2nano-style vital projector still assumes the default 512 image size, where the projected image grid is `8 x 8`; this matches the existing v2nano model's fixed vital grid.
+
+**Gotchas.** The Grad-CAM infrastructure is now model-extensible, but the only concrete runner is still the existing non-prior v2nano vitals runner. A prior-aware v2nano attribution runner needs custom UI/semantics for current vs prior images, current vs prior clinical text, current vs prior vitals, prior labels, and time-delta context. CLI/model construction checks emitted expected offline Hugging Face DNS warnings when a live CXR-BERT path tried to resolve remote files.
+
+**Follow-ups.** Rebuild `prior_aware_{train,development,test}.parquet`, then run a small `--fast-dev-run --no-pretrained` smoke test for `training/prior_aware_v2nano/prior_aware_train.py`. Design and add a custom prior-aware attribution runner before enabling Grad-CAM panels for `PriorAwareV2NanoModel`.

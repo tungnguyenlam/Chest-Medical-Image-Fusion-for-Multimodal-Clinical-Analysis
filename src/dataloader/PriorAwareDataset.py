@@ -15,6 +15,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+from src.dataloader.CaMCheXVitalsDataset import DEFAULT_VITAL_STATS, VITAL_FIELDS
 from src.dataloader.utils import (
     _safe_decode_jpeg,
     load_or_build_channels,
@@ -44,8 +45,26 @@ def _text_array(row, embedding_key: str, token_key: str, dtype):
     return _to_array(row[token_key], dtype)
 
 
+def _text_value(row, text_key: str, fallback: str) -> str:
+    if text_key not in row.index:
+        raise KeyError(
+            f"Prior-aware parquet is missing {text_key!r}; rebuild it with "
+            "src/prepare/04_build_prior_aware_dataset.py before using the training-time text embedding cache."
+        )
+    text = row[text_key]
+    if pd.isna(text) or str(text).strip() == "":
+        return fallback
+    return str(text)
+
+
 def _zero_image_block(size: int) -> np.ndarray:
     return np.zeros((MAX_VIEWS, 3, size, size), dtype=np.float32)
+
+
+def _nan_vitals() -> np.ndarray:
+    out = np.zeros(len(VITAL_FIELDS), dtype=np.float32)
+    out.fill(np.nan)
+    return out
 
 
 class PriorAwareDataset(Dataset):
@@ -77,6 +96,12 @@ class PriorAwareDataset(Dataset):
         self.channel_mode = cfg.get("channel_mode")
         self.channel_cache_dir = cfg.get("image_channel_cache_dir")
         self.channel_cfg = make_preprocess_config(cfg) if self.channel_mode else None
+        self.text_embedding_cache = cfg.get("text_embedding_cache")
+        self.text_embedding_streams = set(
+            cfg.get("text_embedding_streams")
+            or ["clin_text", "obs_text", "prior_clin_text", "prior_obs_text"]
+        )
+        self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
 
     def _decode(self, path: str):
         """Decode one image: built 3-channel array when channel_mode is set, else
@@ -119,6 +144,44 @@ class PriorAwareDataset(Dataset):
         vc = np.array(view_codes + [0] * (MAX_VIEWS - n), dtype=np.int64)
         return stacked, vc
 
+    def _text_input(
+        self,
+        row,
+        embedding_key: str,
+        token_key: str,
+        text_key: str,
+        max_length: int,
+        fallback: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if self.text_embedding_cache is not None and text_key in self.text_embedding_streams:
+            text = _text_value(row, text_key, fallback)
+            embedding = self.text_embedding_cache.get_embedding(text, max_length=max_length)
+            return embedding.astype(np.float32, copy=False), np.zeros(1, dtype=np.int64)
+        return _text_array(row, embedding_key, token_key, np.int64), (
+            _to_array(row[token_key.replace("input_ids", "attn_mask")], np.int64)
+            if token_key.replace("input_ids", "attn_mask") in row.index
+            else np.zeros(1, dtype=np.int64)
+        )
+
+    def _normalize_vitals(self, raw_values) -> tuple[np.ndarray, np.ndarray]:
+        raw = _to_array(raw_values, np.float32) if raw_values is not None else _nan_vitals()
+        if raw.shape[0] != len(VITAL_FIELDS):
+            padded = _nan_vitals()
+            padded[: min(len(padded), raw.shape[0])] = raw[: min(len(padded), raw.shape[0])]
+            raw = padded
+        values = []
+        missing = []
+        for field, value in zip(VITAL_FIELDS, raw):
+            if pd.isna(value):
+                values.append(0.0)
+                missing.append(True)
+                continue
+            stats = self.vital_stats[field]
+            std = float(stats.get("std", 1.0)) or 1.0
+            values.append((float(value) - float(stats.get("mean", 0.0))) / std)
+            missing.append(False)
+        return np.array(values, dtype=np.float32), np.array(missing, dtype=np.bool_)
+
     # ---- main entrypoint --------------------------------------------------
     def __getitem__(self, index: int) -> tuple[dict[str, Any], np.ndarray]:
         row = self.df.iloc[index]
@@ -143,25 +206,48 @@ class PriorAwareDataset(Dataset):
             prv_img = _zero_image_block(self.size)
             prv_views = np.zeros(MAX_VIEWS, dtype=np.int64)
 
+        clin_input, clin_mask = self._text_input(
+            row, "clin_embedding", "clin_input_ids", "clin_text", CLIN_MAX_LEN, "No clinical history available."
+        )
+        obs_input, obs_mask = self._text_input(
+            row, "obs_embedding", "obs_input_ids", "obs_text", OBS_MAX_LEN,
+            "Temperature: NA | Heart rate: NA | Respiratory rate: NA | O2 Saturation: NA | Systolic BP: NA | Diastolic BP: NA | Gender: NA",
+        )
+        prior_clin_input, prior_clin_mask = self._text_input(
+            row, "prior_clin_embedding", "prior_clin_input_ids", "prior_clin_text", CLIN_MAX_LEN, "No clinical history available."
+        )
+        prior_obs_input, prior_obs_mask = self._text_input(
+            row, "prior_obs_embedding", "prior_obs_input_ids", "prior_obs_text", OBS_MAX_LEN,
+            "Temperature: NA | Heart rate: NA | Respiratory rate: NA | O2 Saturation: NA | Systolic BP: NA | Diastolic BP: NA | Gender: NA",
+        )
+
         data = {
             "study_id": int(row["study_id"]),
             "img": cur_img,
             "view_positions": cur_views,
-            "clin_input_ids": _text_array(row, "clin_embedding", "clin_input_ids", np.int64),
-            "clin_attn_mask": _to_array(row["clin_attn_mask"], np.int64) if _has_value(row, "clin_attn_mask") else np.zeros(1, dtype=np.int64),
-            "obs_input_ids": _text_array(row, "obs_embedding", "obs_input_ids", np.int64),
-            "obs_attn_mask": _to_array(row["obs_attn_mask"], np.int64) if _has_value(row, "obs_attn_mask") else np.zeros(1, dtype=np.int64),
+            "clin_input_ids": clin_input,
+            "clin_attn_mask": clin_mask,
+            "obs_input_ids": obs_input,
+            "obs_attn_mask": obs_mask,
 
             "has_prior": bool(has_prior),
             "prior_img": prv_img,
             "prior_view_positions": prv_views,
-            "prior_clin_input_ids": _text_array(row, "prior_clin_embedding", "prior_clin_input_ids", np.int64),
-            "prior_clin_attn_mask": _to_array(row["prior_clin_attn_mask"], np.int64) if _has_value(row, "prior_clin_attn_mask") else np.zeros(1, dtype=np.int64),
-            "prior_obs_input_ids": _text_array(row, "prior_obs_embedding", "prior_obs_input_ids", np.int64),
-            "prior_obs_attn_mask": _to_array(row["prior_obs_attn_mask"], np.int64) if _has_value(row, "prior_obs_attn_mask") else np.zeros(1, dtype=np.int64),
+            "prior_clin_input_ids": prior_clin_input,
+            "prior_clin_attn_mask": prior_clin_mask,
+            "prior_obs_input_ids": prior_obs_input,
+            "prior_obs_attn_mask": prior_obs_mask,
             "prior_label": _to_array(row["prior_label"], np.float32) if has_prior else np.zeros(N_CLASSES, dtype=np.float32),
             "days_since_prior": float(row["days_since_prior"]) if has_prior and not pd.isna(row["days_since_prior"]) else 0.0,
         }
+        vital_values, vital_missing = self._normalize_vitals(row["vital_values_raw"] if _has_value(row, "vital_values_raw") else None)
+        prior_vital_values, prior_vital_missing = self._normalize_vitals(
+            row["prior_vital_values_raw"] if has_prior and _has_value(row, "prior_vital_values_raw") else None
+        )
+        data["vital_values"] = vital_values
+        data["vital_missing_mask"] = vital_missing
+        data["prior_vital_values"] = prior_vital_values if has_prior else np.zeros(len(VITAL_FIELDS), dtype=np.float32)
+        data["prior_vital_missing_mask"] = prior_vital_missing if has_prior else np.ones(len(VITAL_FIELDS), dtype=np.bool_)
         label = _to_array(row["label"], np.float32)
         return data, label
 

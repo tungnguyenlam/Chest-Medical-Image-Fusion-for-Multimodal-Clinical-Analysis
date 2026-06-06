@@ -367,17 +367,20 @@ the same cache root can be shared across model variants that use the same frozen
 text backbone. The train/eval dataset streams one `.npy` vector per sample
 instead of loading every cached embedding into memory at startup.
 
-For prior-aware text embedding caches, use:
+For prior-aware text embedding caches, rebuild the normal prior-aware parquet so
+raw text columns are present, then let the training script fill the shared cache:
 
 ```bash
 python src/prepare/04_build_prior_aware_dataset.py \
-  --tokenizer microsoft/BiomedVLP-CXR-BERT-specialized \
-  --precompute-text-embeddings
+  --tokenizer microsoft/BiomedVLP-CXR-BERT-specialized
+
+python training/prior_aware_cxrbert/prior_aware_train.py \
+  --use-precomputed-text-embeddings \
+  --text-embedding-cache-dir data/text_embeddings
 ```
 
-That builder writes the embedded current/prior text streams into parquet, but
-the underlying frozen CLS embeddings are still read from and written to the same
-shared `data/text_embeddings/...` cache.
+The underlying frozen CLS embeddings are read from and written to the same shared
+`data/text_embeddings/...` cache.
 
 ## Optional Decoded Image Cache
 
