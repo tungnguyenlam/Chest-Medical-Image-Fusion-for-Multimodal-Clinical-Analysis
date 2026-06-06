@@ -74,13 +74,17 @@ Set `trainer.compile_model: true` (or pass `--compile-model`) to speed up
 training. It does **not** compile the whole model — the fusion forward has
 data-dependent routing (`pad_tokens[nonzero_mask] = ...`, `if mask.any()`) that
 graph-breaks under `torch.compile`. Instead it compiles the static-shape islands
-in place with `torch.nn.Module.compile(dynamic=True)`: the two image backbones,
-the CXR-BERT text encoder, the transformer encoder, and the ML-Decoder head
-(see [maybe_compile_model](../common.py#L955)).
+in place with `torch.nn.Module.compile(dynamic=None)` (automatic dynamic): the
+two image backbones, the CXR-BERT text encoder, the transformer encoder, and the
+ML-Decoder head (see [maybe_compile_model](../common.py#L955)).
 
 - In-place `Module.compile()` is used on purpose: it leaves `state_dict` keys
   unchanged, so checkpoints stay loadable by eager runs and remain compatible
   with weights trained without compile.
-- `dynamic=True` lets the backbones take the variable number of present views
-  per batch without recompiling — so missing views are not padded.
+- Automatic dynamic (`dynamic=None`) lets the backbones take the variable number
+  of present views per batch — promoting only the genuinely-varying dims to
+  dynamic on recompile, while keeping the fixed image resolution specialized.
+  `dynamic=True` is avoided because forcing the image H/W symbolic trips an
+  Inductor backward-codegen bug (`CantSplit` on `(s//4)**2` feature-map
+  flattening). Compile failures fall back to eager instead of crashing.
 - Expect a one-time compile warmup on the first training step. Off by default.

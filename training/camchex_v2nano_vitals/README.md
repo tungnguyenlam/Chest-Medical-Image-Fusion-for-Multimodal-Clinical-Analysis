@@ -266,13 +266,18 @@ first run that misses the shared text embedding cache.
 Set `trainer.compile_model: true` (or pass `--compile-model`) to compile the
 static-shape submodules — the two image backbones, the CXR-BERT text encoder,
 the transformer encoder, and the ML-Decoder head — in place with
-`torch.nn.Module.compile(dynamic=True)`. The data-dependent fusion forward
-(`pad_tokens[nonzero_mask] = ...`, `if mask.any()`) is left eager because it
-graph-breaks under `torch.compile`; the whole model is intentionally not
-compiled. In-place compile keeps `state_dict` keys unchanged (checkpoints stay
-compatible with eager runs), and `dynamic=True` avoids recompiling on the
-varying per-batch view count. Expect a one-time warmup on the first step. Off by
-default. Shared logic lives in [maybe_compile_model](../common.py#L955).
+`torch.nn.Module.compile(dynamic=None)` (automatic dynamic). The data-dependent
+fusion forward (`pad_tokens[nonzero_mask] = ...`, `if mask.any()`) is left eager
+because it graph-breaks under `torch.compile`; the whole model is intentionally
+not compiled. In-place compile keeps `state_dict` keys unchanged (checkpoints
+stay compatible with eager runs). Automatic dynamic keeps the fixed image
+resolution specialized while promoting only the genuinely-varying dims (batch,
+token count) to dynamic on recompile — `dynamic=True` is avoided because forcing
+the image H/W symbolic trips an Inductor backward-codegen bug (`CantSplit` on
+`(s//4)**2` feature-map flattening). Compile failures fall back to eager rather
+than crashing (`torch._dynamo.config.suppress_errors`). Expect a one-time warmup
+on the first step. Off by default. Shared logic lives in
+[maybe_compile_model](../common.py#L955).
 
 ## Eval
 

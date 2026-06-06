@@ -256,7 +256,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "--compile-model",
         action="store_true",
         default=None,
-        help="Opt in to torch.compile(dynamic=True) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Default comes from trainer.compile_model, or false if unset.",
+        help="Opt in to torch.compile (automatic dynamic) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Compile failures fall back to eager. Default comes from trainer.compile_model, or false if unset.",
     )
     parser.add_argument("--accumulate-grad-batches", type=int)
     parser.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
@@ -987,6 +987,13 @@ def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: d
         return model
     if not hasattr(torch, "compile"):
         raise RuntimeError("--compile-model requires torch.compile, which is unavailable in this PyTorch build")
+    # Make any Inductor compile failure fall back to eager instead of crashing the
+    # run. Submodule compile happens lazily on the first forward/backward, so the
+    # error surfaces deep inside backward() (e.g. the CantSplit floor-div bug in
+    # codegen_mix_order_reduction) where a try/except around .compile() can't reach
+    # it; this dynamo flag is the only place to degrade gracefully.
+    import torch._dynamo
+    torch._dynamo.config.suppress_errors = True
     # Attribute chains to the submodules whose forwards are static-shape and safe to
     # compile. Missing ones are skipped (e.g. text_encoder is None with precomputed
     # embeddings; some model variants lack frontal/lateral splits).
@@ -1006,10 +1013,16 @@ def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: d
                 break
         if obj is None:
             continue
-        obj.compile(dynamic=True)  # in-place: patches forward, leaves state_dict keys intact
+        # dynamic=None (automatic dynamic), NOT dynamic=True. dynamic=True marks every
+        # input dim symbolic, including the image H/W that never change; the symbolic
+        # spatial side then feeds (s//4)**2 feature-map flattening and trips an Inductor
+        # backward-codegen bug (CantSplit: ((s//4)**2)//(s//4) not provably divisible).
+        # Automatic dynamic keeps the static spatial dims specialized and only promotes
+        # genuinely-varying dims (batch, transformer token count) to dynamic on recompile.
+        obj.compile(dynamic=None)  # in-place: patches forward, leaves state_dict keys intact
         compiled.append(".".join(path))
     if compiled:
-        print(f"[train] compiled submodules with torch.compile(dynamic=True): {', '.join(compiled)}")
+        print(f"[train] compiled submodules with torch.compile(dynamic=None, automatic): {', '.join(compiled)}")
     else:
         print("[train] --compile-model set but found no compile-safe submodules to compile; running eager")
     return model
