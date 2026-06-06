@@ -216,6 +216,13 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     )
     parser.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument(
+        "--val-batch-size",
+        type=int,
+        help="Batch size for validation/eval loaders (forward-only, so it can exceed the train "
+        "batch size). Defaults to 2x the train batch size. A one-time OOM fallback downgrades it "
+        "to the train batch size if the larger batch doesn't fit alongside the live training state.",
+    )
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--image-size", type=int)
     parser.add_argument(
@@ -557,9 +564,25 @@ def data_cfg_from_config(cfg: dict[str, Any], args: argparse.Namespace) -> dict[
     return data_cfg
 
 
-def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, shuffle: bool) -> dict[str, Any]:
-    dl_args = dict(cfg["data"]["dataloader_init_args"])
+def resolve_train_batch_size(cfg: dict[str, Any], args: argparse.Namespace) -> int:
     if args.batch_size is not None:
+        return int(args.batch_size)
+    return int(cfg["data"]["dataloader_init_args"]["batch_size"])
+
+
+def resolve_val_batch_size(cfg: dict[str, Any], args: argparse.Namespace) -> int:
+    """Eval is forward-only, so the val/eval loader can run a larger batch than training.
+    Explicit --val-batch-size wins; otherwise default to 2x the train batch size."""
+    if getattr(args, "val_batch_size", None) is not None:
+        return int(args.val_batch_size)
+    return 2 * resolve_train_batch_size(cfg, args)
+
+
+def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, shuffle: bool, for_eval: bool = False) -> dict[str, Any]:
+    dl_args = dict(cfg["data"]["dataloader_init_args"])
+    if for_eval:
+        dl_args["batch_size"] = resolve_val_batch_size(cfg, args)
+    elif args.batch_size is not None:
         dl_args["batch_size"] = args.batch_size
     if args.num_workers is not None:
         dl_args["num_workers"] = args.num_workers
@@ -626,7 +649,7 @@ def make_single_view_loaders(cfg: dict[str, Any], args: argparse.Namespace, view
     train_ds = SingleViewDataset(data_cfg, train_df, transforms_train)
     val_ds = SingleViewDataset(data_cfg, val_df, transforms_val)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
-    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True)
     print(f"[dataloader] train: {train_dl_args}")
     print(f"[dataloader] val:   {val_dl_args}")
     train_loader = DataLoader(train_ds, **train_dl_args)
@@ -649,7 +672,7 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     train_ds = CaMCheXDataset(data_cfg, train_df, transforms_train, tokenizer)
     val_ds = CaMCheXDataset(data_cfg, val_df, transforms_val, tokenizer)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
-    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True)
     print(f"[dataloader] train: {train_dl_args}")
     print(f"[dataloader] val:   {val_dl_args}")
     train_loader = DataLoader(train_ds, **train_dl_args)
@@ -794,7 +817,7 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     train_ds = CaMCheXVitalsDataset(data_cfg, train_df, transforms_train, tokenizer)
     val_ds = CaMCheXVitalsDataset(data_cfg, val_df, transforms_val, tokenizer)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
-    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True)
     print(f"[dataloader] train: {train_dl_args}")
     print(f"[dataloader] val:   {val_dl_args}")
     train_loader = DataLoader(train_ds, **train_dl_args)
@@ -830,7 +853,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         cpu_fraction=resolve_cpu_fraction(args),
     )
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
-    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False)
+    val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True)
     print(f"[dataloader] train: {train_dl_args} (label_dropout_p={label_dropout_p})")
     print(f"[dataloader] val:   {val_dl_args}")
     train_loader = DataLoader(train_ds, **train_dl_args)
@@ -850,7 +873,7 @@ def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
     )
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [ds.df], args=args)
     ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
-    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     labels_available = True  # label column is always present in the pregenerated parquet
     return loader, labels_available
 
@@ -860,7 +883,7 @@ def make_single_view_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, 
     _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     df = filter_single_view(read_dataframe(data_cfg["pred_df_path"]), view_position)
     ds = SingleViewDataset(data_cfg, df, transforms_val)
-    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     ids = df["path"].tolist() if "path" in df.columns else list(range(len(df)))
     labels_available = all(c in df.columns for c in data_cfg["classes"])
     return loader, ids, labels_available
@@ -877,7 +900,7 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
     )
     df = read_dataframe(data_cfg["pred_df_path"])
     ds = CaMCheXDataset(data_cfg, df, transforms_val, tokenizer)
-    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     labels_available = all(c in df.columns for c in data_cfg["classes"])
     return loader, labels_available
 
@@ -896,7 +919,7 @@ def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespac
             trust_remote_code=True,
         )
     ds = CaMCheXVitalsDataset(data_cfg, df, transforms_val, tokenizer)
-    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False))
+    loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     labels_available = all(c in df.columns for c in data_cfg["classes"])
     return loader, labels_available
 
@@ -1332,14 +1355,45 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         f"run_dir={run_dir}"
     )
 
+    # Validation runs a larger (forward-only) batch than training; if that doesn't fit alongside
+    # the live training state (weights + grads + optimizer moments), downgrade once to the train
+    # batch size and keep going, rather than crashing the run.
+    val_oom_downgraded = False
+
+    def _rebuild_val_loader(loader, batch_size: int):
+        dl_kwargs: dict[str, Any] = {
+            "batch_size": batch_size,
+            "shuffle": False,
+            "num_workers": loader.num_workers,
+            "pin_memory": loader.pin_memory,
+            "collate_fn": loader.collate_fn,
+            "drop_last": loader.drop_last,
+        }
+        if loader.num_workers > 0:
+            dl_kwargs["persistent_workers"] = loader.persistent_workers
+            if loader.prefetch_factor is not None:
+                dl_kwargs["prefetch_factor"] = loader.prefetch_factor
+        return DataLoader(loader.dataset, **dl_kwargs)
+
+    def _validate(**kwargs):
+        nonlocal val_loader, val_oom_downgraded
+        try:
+            return validate_model(model, criterion, val_loader, classes, device, precision, **kwargs)
+        except torch.cuda.OutOfMemoryError:
+            train_bs = resolve_train_batch_size(cfg, args) if cfg is not None else None
+            if val_oom_downgraded or device.type != "cuda" or train_bs is None or val_loader.batch_size <= train_bs:
+                raise
+            torch.cuda.empty_cache()
+            tqdm.write(
+                f"[val] OOM at val batch_size={val_loader.batch_size}; rebuilding at {train_bs} "
+                f"and retrying (one-time downgrade for the rest of the run)."
+            )
+            val_loader = _rebuild_val_loader(val_loader, train_bs)
+            val_oom_downgraded = True
+            return validate_model(model, criterion, val_loader, classes, device, precision, **kwargs)
+
     def _run_validation(epoch: int, gstep: int, trigger: str, train_loss_running: float, avg_grad_norm: float, selection_out: dict | None = None) -> dict[str, float]:
-        metrics = validate_model(
-            model,
-            criterion,
-            val_loader,
-            classes,
-            device,
-            precision,
+        metrics = _validate(
             max_batches=1 if args.fast_dev_run else None,
             desc=f"val @ {trigger} step {gstep}",
             selection_out=selection_out,
@@ -1458,13 +1512,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     ]
 
     def _run_quick_validation(epoch: int, gstep: int, batch_idx: int, train_loss_running: float) -> None:
-        metrics = validate_model(
-            model,
-            criterion,
-            val_loader,
-            classes,
-            device,
-            precision,
+        metrics = _validate(
             max_batches=quick_val_max_batches,
             desc=f"quick-val @ step {gstep}",
         )
