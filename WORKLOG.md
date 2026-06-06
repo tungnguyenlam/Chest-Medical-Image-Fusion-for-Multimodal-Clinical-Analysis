@@ -1601,3 +1601,43 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The Grad-CAM infrastructure is now model-extensible, but the only concrete runner is still the existing non-prior v2nano vitals runner. A prior-aware v2nano attribution runner needs custom UI/semantics for current vs prior images, current vs prior clinical text, current vs prior vitals, prior labels, and time-delta context. CLI/model construction checks emitted expected offline Hugging Face DNS warnings when a live CXR-BERT path tried to resolve remote files.
 
 **Follow-ups.** Rebuild `prior_aware_{train,development,test}.parquet`, then run a small `--fast-dev-run --no-pretrained` smoke test for `training/prior_aware_v2nano/prior_aware_train.py`. Design and add a custom prior-aware attribution runner before enabling Grad-CAM panels for `PriorAwareV2NanoModel`.
+
+## 2026-06-07 - shared quick continue flag
+
+**Goal.** Add a general `--quick-continue` option so any shared training entrypoint can resume from the latest saved checkpoint after a crash without manually locating the checkpoint path.
+
+**Changes.**
+- `training/common.py:209` - added `--quick-continue` to `add_common_args()`, making it available to every train script that uses the shared parser.
+- `training/common.py:340` - added checkpoint sorting by modification time with epoch as a secondary tie-breaker, so a newer crashed run wins over an older run with a higher epoch number.
+- `training/common.py:355` - added `find_quick_continue_checkpoint()`, which searches `--output-dir`, narrows by `--run-id` when provided or by `--run-name` otherwise, and falls back to any run directory if no matching run-name directory exists.
+- `training/common.py:392` - updated `prepare_run_dir()` so `--quick-continue` resolves the checkpoint, populates `args.resume_from` and `args.checkpoint_path`, prints the selected path, and reuses the checkpoint's original run directory.
+
+**Reasoning.** The resume implementation was already centralized in `training/common.py`, so the safest shape was to resolve `--quick-continue` into the existing `--resume-from` path before model construction and before `config.resolved.json` is written. I made it reject explicit `--resume-from` or `--checkpoint-path` because combining auto-selection with a manual checkpoint path is ambiguous.
+
+**Gotchas.** Checkpoints are currently saved only at epoch boundaries as `epoch_*.pt`, so quick-continue resumes from the latest completed epoch, not the exact batch where a crash happened. If multiple run folders have the same `--run-name`, the newest checkpoint modification time decides. Pass `--run-id` to force an exact run folder.
+
+**Follow-ups.** If step-level crash recovery becomes important, add periodic `last.pt` checkpointing during the training loop and let `--quick-continue` prefer it over epoch checkpoints.
+
+## 2026-06-07 - make quick continue truly automatic
+
+**Goal.** Correct `--quick-continue` so the default behavior is exactly "last run, latest checkpoint" without manually identifying a run name or checkpoint path.
+
+**Changes.**
+- `training/common.py:209` - clarified the help text: `--quick-continue` finds the latest checkpoint from the latest run under `--output-dir`; `--run-id` is the explicit narrowing mechanism.
+- `training/common.py:355` - changed quick-continue discovery to scan all run directories by default instead of filtering by the default `--run-name baseline`.
+
+**Reasoning.** The first implementation still treated the default run name as a filter, which could skip the actual latest run if its name was not `baseline`. That defeated the purpose of quick continue. The corrected behavior searches all runs for the selected model output directory and chooses the newest checkpoint by modification time, with epoch only as a tie-breaker.
+
+**Gotchas.** Passing `--run-id` still forces one exact run folder. Plain `--quick-continue` intentionally ignores `--run-name` defaults so users do not have to remember how the crashed run was named.
+
+## 2026-06-07 - quick continue run-id lookup fix
+
+**Goal.** Finish the quick-continue review before push and ensure `--run-id` does not require manually knowing the run name suffix.
+
+**Changes.**
+- `training/common.py:355` - changed `--run-id` lookup to accept either a full run directory name or a timestamp prefix matching `<run_id>-*`.
+- `training/common.py:385` - simplified the no-checkpoint error scope so it reports only the requested run id when one is supplied.
+
+**Reasoning.** Run directories are named `<run_id>-<run_name>`, so requiring both values for quick resume would still force manual lookup in the case the user knows only the timestamp/run id. Matching `<run_id>-*` preserves the ability to force a run without needing the suffix.
+
+**Gotchas.** If two folders share the same run-id prefix, quick-continue considers checkpoints from both and still picks the newest checkpoint by modification time. That should not happen with timestamp run ids, but the behavior is deterministic enough if it does.

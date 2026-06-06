@@ -206,6 +206,14 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "--resume-from",
         help="Train only: full resume from checkpoint (model + optimizer + scheduler + epoch + global_step + early-stop state). Run dir is inferred from the checkpoint path.",
     )
+    parser.add_argument(
+        "--quick-continue",
+        action="store_true",
+        help=(
+            "Train only: find the latest checkpoint from the latest run under --output-dir and resume it. "
+            "Use --run-id to force one run."
+        ),
+    )
     parser.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--num-workers", type=int)
@@ -329,7 +337,67 @@ def resume_run_dir(checkpoint_path: str | Path) -> Path:
     return resolved.resolve().parents[1]
 
 
+def _checkpoint_sort_key(path: Path) -> tuple[float, int, str]:
+    stem = path.stem
+    epoch = -1
+    if stem.startswith("epoch_"):
+        try:
+            epoch = int(stem.removeprefix("epoch_"))
+        except ValueError:
+            epoch = -1
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return mtime, epoch, str(path)
+
+
+def find_quick_continue_checkpoint(args: argparse.Namespace) -> Path:
+    base_dir = resolve_path(args.output_dir) or Path(args.output_dir)
+    if not base_dir.exists():
+        raise FileNotFoundError(f"--quick-continue could not find output dir: {base_dir}")
+
+    if getattr(args, "run_id", None):
+        exact = base_dir / str(args.run_id)
+        run_dirs = [exact] if exact.is_dir() else sorted(
+            [p for p in base_dir.glob(f"{args.run_id}-*") if p.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    else:
+        run_dirs = sorted(
+            [p for p in base_dir.iterdir() if p.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+    candidates: list[Path] = []
+    for run_dir in run_dirs:
+        ckpt_dir = run_dir / "checkpoints"
+        if not ckpt_dir.exists():
+            continue
+        run_candidates = list(ckpt_dir.glob("epoch_*.pt"))
+        if not run_candidates:
+            run_candidates = list(ckpt_dir.glob("*.pt"))
+        candidates.extend(run_candidates)
+
+    if not candidates:
+        scope = f"run_id={args.run_id}" if getattr(args, "run_id", None) else "all runs"
+        raise FileNotFoundError(f"--quick-continue found no checkpoints under {base_dir} ({scope})")
+
+    return max(candidates, key=_checkpoint_sort_key).resolve()
+
+
 def prepare_run_dir(args: argparse.Namespace) -> Path:
+    if getattr(args, "quick_continue", False):
+        if getattr(args, "resume_from", None):
+            raise ValueError("--quick-continue cannot be combined with --resume-from")
+        if getattr(args, "checkpoint_path", None):
+            raise ValueError("--quick-continue cannot be combined with --checkpoint-path")
+        checkpoint = find_quick_continue_checkpoint(args)
+        args.resume_from = str(checkpoint)
+        args.checkpoint_path = str(checkpoint)
+        print(f"[quick-continue] selected checkpoint: {checkpoint}", flush=True)
     if getattr(args, "resume_from", None):
         return resume_run_dir(args.resume_from)
     return make_run_dir(args.output_dir, args.run_name, args.run_id)
