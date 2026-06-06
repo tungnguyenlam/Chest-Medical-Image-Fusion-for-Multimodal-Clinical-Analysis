@@ -1385,6 +1385,10 @@ def compute_metrics(preds: torch.Tensor, labels: torch.Tensor, classes: list[str
     return metrics
 
 
+def _class_group_names(classes: list[str], idxs: list[int]) -> str:
+    return ", ".join(classes[i] if i < len(classes) else f"#{i}" for i in idxs)
+
+
 def print_validation_summary(metrics: dict[str, float], classes: list[str], header: str | None = None) -> None:
     if header:
         tqdm.write(f"\n=== {header} ===")
@@ -1409,6 +1413,9 @@ def print_validation_summary(metrics: dict[str, float], classes: list[str], head
         f"{metrics.get('val/auroc_medium', float('nan')):.4f} / "
         f"{metrics.get('val/auroc_tail', float('nan')):.4f}"
     )
+    tqdm.write(f"head classes  : {_class_group_names(classes, HEAD_IDX)}")
+    tqdm.write(f"medium classes: {_class_group_names(classes, MEDIUM_IDX)}")
+    tqdm.write(f"tail classes  : {_class_group_names(classes, TAIL_IDX)}")
 
 
 def load_model_state(model: torch.nn.Module, checkpoint: Any) -> None:

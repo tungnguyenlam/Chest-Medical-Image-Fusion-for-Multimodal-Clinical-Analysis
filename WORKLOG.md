@@ -1559,3 +1559,18 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Gotchas.** The clinical branch expands one CLS embedding into 64 repeated initial tokens; those are not 64 distinct CXR-BERT token-level features. Unknown-but-nonzero image views currently get `view_position=0`, are not masked, and do not pass through either the frontal or lateral backbone. Existing unrelated edits were already present in `WORKLOG.md` and `training/prior_aware/README.md` before this change.
 
 **Follow-ups.** If the image size, number of view slots, or vitals list becomes configurable per run, update this README to show formulas alongside the 512 px default example.
+
+## 2026-06-06 - Show validation class bucket names
+
+**Goal.** Clarify whether head/medium/tail validation metrics are based on hardcoded class buckets, and make the training summary show which classes belong to each bucket.
+
+**Changes.**
+- `training/common.py:25` - confirmed `HEAD_IDX`, `MEDIUM_IDX`, and `TAIL_IDX` are hardcoded class-index buckets used by shared train/eval metrics.
+- `training/common.py:1388` - added a small helper to expand bucket indices into class names using the active config class order.
+- `training/common.py:1416` - prints head, medium, and tail class names after the AP/AUROC grouped summary.
+
+**Reasoning.** The metric calculation already has one shared source of truth for the buckets, so the change only expands those existing indices at display time. This avoids duplicating the bucket-name mapping and keeps all training/eval entrypoints that use `print_validation_summary` consistent.
+
+**Gotchas.** The buckets are not computed dynamically from the current dataset distribution; they depend on the 26-class config order. `scripts/plot_run.py` still duplicates the same bucket indices for plotting.
+
+**Follow-ups.** If the class set/order becomes configurable beyond the current 26 CXR-LT labels, add validation that the hardcoded buckets match the configured classes or move the groups into config.
