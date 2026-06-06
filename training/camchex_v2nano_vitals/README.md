@@ -27,21 +27,185 @@ This is an additive CaMCheX variant. It does not change the legacy
 | Decoded image cache script | `scripts/precompute_image_cache.py` |
 | Grad-CAM / attribution | `src/interpret/{attribution,visualize,run_gradcam}.py` |
 
-## Token layout
+## How the model works
 
-For a study with up to 4 image views:
+`CaMCheXV2NanoVitalsModel` is a three-modality fusion model. It reads up to four
+CXR views for one study, one clinical indication text, and seven structured ED
+vital fields. All modalities are converted to 768-d tokens, fused with a small
+Transformer encoder, then decoded into 26 multi-label logits with ML-Decoder.
+
+With the default config, image size is 512 and the token layout is:
 
 ```text
-image views:       4 * 8 * 8 = 256 tokens
-clinical text:     1 * 8 * 8 =  64 tokens
-numeric vitals:    1 * 8 * 8 =  64 tokens
-total max:                     384 tokens
+image views:       4 views * 8 * 8 = 256 tokens
+clinical text:     1 CLS  * 8 * 8 =  64 repeated CLS tokens
+numeric vitals:    1 MLP  * 8 * 8 =  64 learned vital tokens
+total max:                            384 tokens
+token width:                           768
+output logits:                          26
 ```
 
-ConvNeXtV2 Nano returns `(B, 640, 16, 16)` features for 512px inputs. The model
-uses a `640 -> 768` stride-2 convolution to produce `(B, 768, 8, 8)` before
-fusion. The model has a local Nano image router because the older shared
-`CaMCheXImageEncoder` preallocates 768-channel features for ConvNeXt Tiny.
+```mermaid
+flowchart TD
+    D["CaMCheXVitalsDataset<br/>one study"]
+    D --> I["images<br/>B x 4 x 3 x 512 x 512"]
+    D --> VPOS["view_positions<br/>B x 4<br/>1 frontal, 2 lateral, 0 unknown/pad"]
+    D --> T["clinical_input<br/>tokens: B x 384<br/>or cached CLS: B x 768"]
+    D --> VM["vital_values + missing_mask<br/>B x 7 + B x 7"]
+
+    I --> IR["ConvNeXtV2NanoImageEncoder<br/>drop zero padded slots<br/>route frontal/lateral"]
+    VPOS --> IR
+    IR --> IF["valid image features<br/>K x 640 x 16 x 16"]
+    IF --> IP["Conv2d 640 -> 768<br/>kernel 3 stride 2 pad 1"]
+    IP --> ITOK["image tokens<br/>B x 256 x 768<br/>missing views masked"]
+
+    T --> TE["CXR-BERT CLS encoder<br/>or cached CLS passthrough"]
+    TE --> CTOK["clinical tokens<br/>B x 64 x 768<br/>same CLS repeated over 8 x 8"]
+
+    VM --> VP["VitalsTokenProjector<br/>concat values + mask: B x 14<br/>Linear 14 -> 256 -> 49152"]
+    VP --> VTOK["vital tokens<br/>B x 64 x 768"]
+
+    ITOK --> CAT["concat tokens<br/>B x 384 x 768"]
+    CTOK --> CAT
+    VTOK --> CAT
+    CAT --> ENC["TransformerEncoder<br/>2 layers, 8 heads<br/>padding mask only for absent image slots"]
+    ENC --> FUSED["fused tokens<br/>B x 384 x 768"]
+    FUSED --> MLD["MLDecoder<br/>26 fixed class queries<br/>1 decoder layer"]
+    MLD --> OUT["logits<br/>B x 26"]
+```
+
+### Batch contract
+
+The dataset groups rows by `study_id` and returns one study-level sample:
+
+| Field | Meaning | Shape before batching | Batched shape |
+|---|---|---:|---:|
+| `study_id` | Study identifier. | scalar/string | list length `B` |
+| `img` | Up to four transformed CXR images, zero-padded to four views. | `4 x 3 x 512 x 512` | `B x 4 x 3 x 512 x 512` |
+| `view_positions` | View IDs: `1` frontal AP/PA, `2` lateral/LL, `0` unknown or pad. | `4` | `B x 4` |
+| `clinical_input_ids` | Either token IDs or a cached float CLS embedding. | `384` or `768` | `B x 384` or `B x 768` |
+| `clinical_attention_mask` | Text attention mask; dummy length-1 mask when cached embeddings are used. | `384` or `1` | `B x 384` or `B x 1` |
+| `vital_values` | Normalized numeric vitals. | `7` | `B x 7` |
+| `vital_missing_mask` | `True` when the source vital is missing. The model can add training-time vital dropout later. | `7` | `B x 7` |
+| `label` | CXR-LT multi-hot target. | `26` | `B x 26` |
+
+### Image path
+
+`ConvNeXtV2NanoImageEncoder` owns two independent `TimmImageEncoder` backbones:
+one for frontal views and one for lateral views. The input is flattened from
+`B x 4 x 3 x 512 x 512` to `(B*4) x 3 x 512 x 512`, zero-padded image slots are
+removed, and the remaining slots are routed by `view_positions`.
+
+For the default 512 px input, ConvNeXtV2 Nano produces:
+
+```text
+valid image slots K:              K <= B * 4
+ConvNeXtV2 Nano output:           K x 640 x 16 x 16
+image projection Conv2d:          640 -> 768, kernel 3, stride 2, padding 1
+projected image features:         K x 768 x 8 x 8
+after reinserting padded slots:    B x 4 x 768 x 8 x 8
+flattened image tokens:           B x 256 x 768
+```
+
+The model adds 2D positional encoding after the projection. It also adds one of
+four learned image segment embeddings, one per image slot. Zero-padded image
+slots become learned `padding_token` blocks and are masked before fusion.
+Unknown-but-nonzero view images use `view_position=0`; they are not masked, but
+they also do not pass through either the frontal or lateral backbone in the
+current router.
+
+The model has a local Nano image router because the older shared
+`CaMCheXImageEncoder` preallocates 768-channel features for ConvNeXt Tiny, while
+ConvNeXtV2 Nano emits 640 channels before projection.
+
+### Clinical text path
+
+Clinical indication text has two possible input forms:
+
+| Mode | Dataset output | Model behavior | Feature shape |
+|---|---|---|---:|
+| Live text encoder | token IDs and attention mask | Run `microsoft/BiomedVLP-CXR-BERT-specialized` and take CLS. | `B x 768` |
+| Cached embedding | float CLS tensor | Skip CXR-BERT and use the tensor directly. | `B x 768` |
+
+The model then adds the clinical segment embedding and expands the single CLS
+vector to an `8 x 8` block:
+
+```text
+clinical CLS:         B x 768
+expanded clinical:    B x 64 x 768
+```
+
+This expansion keeps the clinical stream the same token count as the vitals
+stream and one image-view feature map. It does not create 64 distinct text
+features; the 64 clinical tokens start as repeated copies of the same CLS vector
+before fusion attention mixes them with image and vital tokens.
+
+### Numeric vitals path
+
+The dataset emits seven fields:
+
+```text
+temperature, heartrate, resprate, o2sat, sbp, dbp, gender
+```
+
+Each observed value is normalized with `vital_stats`. Missing values are encoded
+as normalized value `0.0` plus `missing=True`. Gender is encoded as male `1.0`,
+female `0.0`, then normalized with the gender stats. During training,
+`vital_dropout_p` can randomly mask individual fields by setting their value to
+`0.0` and OR-ing their missing bit.
+
+`VitalsTokenProjector` concatenates values and masks, then projects one study's
+structured vitals into an `8 x 8` token block:
+
+```text
+vital_values:                 B x 7
+vital_missing_mask:           B x 7
+concat(values, mask):         B x 14
+Linear + GELU + Dropout:      B x 256
+Linear to 64 * 768:           B x 49152
+vital tokens:                 B x 64 x 768
+```
+
+### Fusion and classifier head
+
+The three token streams are concatenated in fixed order:
+
+```text
+image tokens:       B x 256 x 768
+clinical tokens:    B x  64 x 768
+vital tokens:       B x  64 x 768
+all tokens:         B x 384 x 768
+```
+
+The padding mask has shape `B x 384`. It masks only absent image-view tokens.
+Clinical and vital tokens are always marked valid, even when clinical text is
+empty or every vital field is missing, because those conditions are represented
+inside the token values.
+
+Fusion uses:
+
+```text
+TransformerEncoderLayer(d_model=768, nhead=8, dropout=0.1, batch_first=True)
+num_layers = 2
+input/output = B x 384 x 768
+```
+
+The fused tokens go to `MLDecoder(num_classes=26, initial_num_features=768)`.
+In this configuration, ML-Decoder uses 26 fixed query embeddings, one decoder
+layer, 8-head cross-attention over the fused memory, and a grouped fully
+connected output layer. The memory is first passed through `Linear(768, 768)`
+plus ReLU, so its shape stays the same:
+
+```text
+fused memory:            B x 384 x 768
+memory projection:       B x 384 x 768
+class query embeddings:  26 x 768
+decoder hidden:          B x 26 x 768
+logits:                  B x 26
+```
+
+The logits are trained as independent multi-label disease outputs, not a
+softmax over mutually exclusive classes.
 
 ## Vitals
 

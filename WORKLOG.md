@@ -1517,3 +1517,45 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 - Text-embedding cache root moved `data/text_embeddings` → `../cache/text_embeddings` (sibling to the channel cache, both on native disk outside the repo) across all consumers + migrated existing embeddings. Already content-addressed per-model and skip-if-present.
 - `pool.imap_unordered` build uses `chunksize=1` (was 32): each build is ~1s of I/O on slow mounts, so chunking only made the progress bar look frozen for ~chunksize seconds; per-item dispatch also load-balances better.
 - Note: verified via `py_compile` + isolated logic tests only; this sandbox has no torch/cv2 and the training data lives on a separate server, so the integrated pipeline was not run here.
+
+## 2026-06-06 - Document prior-aware model architecture
+
+**Goal.** Explain exactly how the prior-aware model works for a server-side run: what each parquet row means, how current/prior inputs are converted into tokens, where prior labels and time deltas enter, and what dimensions flow through the model.
+
+**Changes.**
+- `training/prior_aware/README.md:170` - added a model architecture section with a Mermaid graph of the parquet -> dataset -> image/text/prior branches -> transformer -> MLDecoder flow.
+- `training/prior_aware/README.md:214` - documented per-row runtime fields and shapes, including tokenized versus pre-embedded text behavior.
+- `training/prior_aware/README.md:237` - documented image routing through shared frontal/lateral timm encoders, stride-derived image token shapes, and the default 512px -> 8x8 feature/token grid.
+- `training/prior_aware/README.md:263` - documented text CLS token construction, prior label projection, time-delta buckets, segment embeddings, prior masking, and final fused sequence shape.
+- `training/prior_aware/README.md:379` - clarified that the BioBERT and CXR-BERT prior-aware folders share the same model/data contract and differ mainly by configured text/image backbones.
+
+**Reasoning.** The docs now follow the actual implementation in `src/model/PriorAwareCaMCheXModel.py` and `src/dataloader/PriorAwareDataset.py` instead of describing the idea abstractly. I kept this in `training/prior_aware/README.md` because that is the existing README for the shared prior-aware training path; `training/prior_aware_cxrbert/` has its own scripts/config but no README and uses the same model class.
+
+**Assumptions.**
+- The documented concrete token count uses the default `size: 512` from the prior-aware configs and the current ConvNeXt stride-32 feature behavior expected by `CaMCheXImageEncoder`.
+- Both prior-aware variants continue to use `d_model=768`, 4 image slots, two fusion transformer layers, eight heads, and 26 classes unless their configs change.
+
+**Gotchas.** The model predicts only the current study label; `prior_label` is an input token, not a supervision target. When `has_prior=false` or training label dropout fires, all prior tokens are masked even though placeholder text/token arrays still exist in the batch.
+
+**Follow-ups.** If `training/prior_aware_cxrbert/` gets its own README later, link back to this shared architecture section or duplicate only the variant-specific config differences.
+
+## 2026-06-06 - Document ConvNeXtV2 Nano vitals architecture
+
+**Goal.** Explain exactly how the `camchex_v2nano_vitals` model works in its corresponding training README, including the model flow, Mermaid diagram, and input/output dimensions for each modality and fusion stage.
+
+**Changes.**
+- `training/camchex_v2nano_vitals/README.md:30` - replaced the short token-layout note with a full architecture walkthrough and Mermaid graph from `CaMCheXVitalsDataset` through image/text/vitals encoders, fusion transformer, ML-Decoder, and `B x 26` logits.
+- `training/camchex_v2nano_vitals/README.md:77` - documented the study-level batch contract and shapes for images, view positions, clinical tokens or cached CLS embeddings, vital values/masks, and labels.
+- `training/camchex_v2nano_vitals/README.md:92` - documented the ConvNeXtV2 Nano image path, including `K x 640 x 16 x 16` backbone features, `Conv2d(640,768,stride=2)`, `B x 256 x 768` image tokens, padding masks, and the current unknown-view behavior.
+- `training/camchex_v2nano_vitals/README.md:121` - documented live CXR-BERT versus cached CLS text modes and the repeated `B x 64 x 768` clinical token block.
+- `training/camchex_v2nano_vitals/README.md:143` - documented numeric vitals normalization, missing-mask/dropout semantics, `B x 14 -> B x 256 -> B x 49152 -> B x 64 x 768` projection, final `B x 384 x 768` fused sequence, and ML-Decoder output dimensions.
+
+**Reasoning.** The README already belonged to this isolated model variant, so expanding it in place keeps the explanation with the train/eval commands users will run. I based the dimensions on the active implementation in `src/model/CaMCheXV2NanoVitalsModel.py`, `src/dataloader/CaMCheXVitalsDataset.py`, and `src/decoder/MLDecoder.py`, not the older legacy CaMCheX path. I kept the existing cache/train/eval sections unchanged and inserted the architecture before them so readers get the mental model first.
+
+**Assumptions.**
+- The documented concrete spatial sizes use the current default `size: 512` from `training/camchex_v2nano_vitals/config.yaml`; changing image size changes the `h//32` and post-projection token grid.
+- The documented class count is the current 26-label CXR-LT config.
+
+**Gotchas.** The clinical branch expands one CLS embedding into 64 repeated initial tokens; those are not 64 distinct CXR-BERT token-level features. Unknown-but-nonzero image views currently get `view_position=0`, are not masked, and do not pass through either the frontal or lateral backbone. Existing unrelated edits were already present in `WORKLOG.md` and `training/prior_aware/README.md` before this change.
+
+**Follow-ups.** If the image size, number of view slots, or vitals list becomes configurable per run, update this README to show formulas alongside the 512 px default example.
