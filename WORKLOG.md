@@ -1677,3 +1677,26 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** Filesystem mtimes can be changed by copying, failed resume attempts, or writing metadata into an old run directory. The run directory name already encodes the launch timestamp, so it is a better primary signal for "last run." Within a run, the highest epoch checkpoint is the training continuation point users expect.
 
 **Gotchas.** Custom non-timestamp run ids still sort lexicographically by folder name, with mtime only as a tiebreaker. Timestamp-style run ids remain the assumed normal path.
+
+## 2026-06-07 - support all active model summaries
+
+**Goal.** Extend the presentation/model-summary CLI so every active `training/*/config.yaml` model can be summarized, especially the newer CaMCheX v2nano vitals and prior-aware v2nano variants.
+
+**Changes.**
+- `scripts/model_summary.py:34` - added `camchex_v2nano_vitals` and `prior_aware_v2nano` to the default config registry, so all current training directories have shortcuts.
+- `scripts/model_summary.py:47` - made `--model` optional for known `--config training/<model>/config.yaml` paths and added `--freeze-text-encoder` / `--use-precomputed-text-embeddings` summary switches that mirror training-time model-shaping flags.
+- `scripts/model_summary.py:85` - sets Hugging Face offline env vars for config-only summary runs, preventing CXR-BERT remote-code HEAD retries when the config/model code is already cached locally.
+- `scripts/model_summary.py:123` - infers model type from known config parent directories and errors on unknown config directories unless the caller passes an explicit `--model`.
+- `scripts/model_summary.py:144` - centralizes `model_init_args` handling and the cached-text/freeze overrides before constructing supported multimodal variants.
+- `scripts/model_summary.py:153` - added explicit builders for `CaMCheXV2NanoVitalsModel` and `PriorAwareV2NanoModel` instead of letting them fall through to plain `CaMCheXModel` or `PriorAwareCaMCheXModel`.
+
+**Reasoning.** The summary script was already the right surface for parameter tables, but its registry lagged behind the newer training entrypoints. I kept the change local to the script and matched the train-file constructors rather than importing train entrypoints, because train entrypoints also build dataloaders and run directories. The cached-text flag matters because it changes whether the text encoder exists and therefore changes parameter counts.
+
+**Assumptions.**
+- The active model list is the set of root `src/model` assemblies referenced by current `training/*/*_train.py` files.
+- Parameter summaries should keep avoiding pretrained weight downloads by default; `--use-pretrained` remains the opt-in path for real weight loading.
+- CXR-BERT config/model code is available in the local Hugging Face cache when summarizing CXR-BERT variants without `--use-precomputed-text-embeddings`.
+
+**Gotchas.** `AutoModel.from_config(..., trust_remote_code=True)` for cached CXR-BERT still tries remote-code HEAD requests unless Hugging Face offline mode is set in the process. Passing `local_files_only=True` through `from_config` is not viable because the custom CXR-BERT constructor receives it and raises an unexpected-kwarg error.
+
+**Verification.** Ran `python -m py_compile scripts/model_summary.py`, `python scripts/model_summary.py --help`, all seven `--model ... --depth 1` shortcuts, cached-text smoke tests for both v2nano variants, and `python scripts/model_summary.py --config training/camchex_v2nano_vitals/config.yaml --depth 1 --format markdown`.

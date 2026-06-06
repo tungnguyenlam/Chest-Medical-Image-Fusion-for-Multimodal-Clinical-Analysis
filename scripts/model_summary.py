@@ -3,8 +3,10 @@
 
 Examples:
     python scripts/model_summary.py --model camchex
+    python scripts/model_summary.py --model camchex_v2nano_vitals
     python scripts/model_summary.py --model singleview
     python scripts/model_summary.py --model prior_aware --format markdown
+    python scripts/model_summary.py --model prior_aware_v2nano --use-precomputed-text-embeddings
     python scripts/model_summary.py --config training/camchex_cxrbert/config.yaml
 """
 from __future__ import annotations
@@ -32,20 +34,36 @@ if str(ROOT) not in sys.path:
 DEFAULT_CONFIGS = {
     "camchex": "training/camchex/config.yaml",
     "camchex_cxrbert": "training/camchex_cxrbert/config.yaml",
+    "camchex_v2nano_vitals": "training/camchex_v2nano_vitals/config.yaml",
     "singleview": "training/singleview/config.yaml",
     "prior_aware": "training/prior_aware/config.yaml",
     "prior_aware_cxrbert": "training/prior_aware_cxrbert/config.yaml",
+    "prior_aware_v2nano": "training/prior_aware_v2nano/config.yaml",
 }
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", choices=sorted(DEFAULT_CONFIGS), default="camchex")
+    p.add_argument(
+        "--model",
+        choices=sorted(DEFAULT_CONFIGS),
+        help="Model family to build. Defaults to camchex unless --config has a known training/<model>/ parent.",
+    )
     p.add_argument("--config", help="Training config to read. Defaults from --model.")
     p.add_argument("--backbone-name", help="Override cfg.model.timm_init_args.model_name.")
     p.add_argument("--text-model", help="Override cfg.model.text_model.")
     p.add_argument("--format", choices=["plain", "markdown"], default="plain")
     p.add_argument("--depth", type=int, default=2, help="Recursive module table depth. Default: 2.")
+    p.add_argument(
+        "--freeze-text-encoder",
+        action="store_true",
+        help="Mark the text encoder frozen for models that support it.",
+    )
+    p.add_argument(
+        "--use-precomputed-text-embeddings",
+        action="store_true",
+        help="Build models in cached-text mode when supported, so no text encoder is instantiated.",
+    )
     p.add_argument(
         "--use-pretrained",
         action="store_true",
@@ -66,6 +84,9 @@ def load_config(path: str | Path) -> dict[str, Any]:
 
 def install_text_config_loader() -> None:
     """Avoid loading BioBERT weights just to count architecture parameters."""
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
     from transformers import AutoConfig, AutoModel, BertConfig
 
     original_from_pretrained = AutoModel.from_pretrained
@@ -99,11 +120,17 @@ def build_model(args: argparse.Namespace, cfg: dict[str, Any]) -> torch.nn.Modul
     if not args.use_pretrained:
         timm_args["pretrained"] = False
 
-    model_key = args.model
+    model_key = args.model or "camchex"
     if args.config:
         config_name = Path(args.config).parent.name
-        if config_name in DEFAULT_CONFIGS:
+        if args.model is None and config_name in DEFAULT_CONFIGS:
             model_key = config_name
+        elif args.model is None and config_name != ".":
+            known = ", ".join(sorted(DEFAULT_CONFIGS))
+            raise ValueError(
+                f"Cannot infer model type from config directory {config_name!r}. "
+                f"Use --model with one of: {known}"
+            )
 
     if model_key == "singleview":
         from src.model.SingleViewModel import SingleViewModel
@@ -114,10 +141,36 @@ def build_model(args: argparse.Namespace, cfg: dict[str, Any]) -> torch.nn.Modul
     if not args.use_pretrained:
         install_text_config_loader()
 
+    model_cfg = cfg.get("model", {})
+    data_cfg = cfg.get("data", {}).get("datamodule_cfg", {}) or {}
+    init_args = dict(model_cfg.get("model_init_args", {}) or {})
+    if args.freeze_text_encoder:
+        init_args["freeze_text_encoder"] = True
+    if args.use_precomputed_text_embeddings or data_cfg.get("use_text_embedding_cache", False):
+        init_args["use_precomputed_text_embeddings"] = True
+        init_args["freeze_text_encoder"] = True
+
+    if model_key == "camchex_v2nano_vitals":
+        from src.model.CaMCheXV2NanoVitalsModel import CaMCheXV2NanoVitalsModel
+
+        return CaMCheXV2NanoVitalsModel(
+            timm_init_args=timm_args,
+            text_model=text_model,
+            **init_args,
+        )
+
+    if model_key == "prior_aware_v2nano":
+        from src.model.PriorAwareV2NanoModel import PriorAwareV2NanoModel
+
+        return PriorAwareV2NanoModel(
+            timm_init_args=timm_args,
+            text_model=text_model,
+            **init_args,
+        )
+
     if model_key.startswith("prior_aware"):
         from src.model.PriorAwareCaMCheXModel import PriorAwareCaMCheXModel
 
-        init_args = dict(cfg["model"].get("model_init_args", {}))
         return PriorAwareCaMCheXModel(
             timm_init_args=timm_args,
             text_model=text_model,
@@ -205,7 +258,8 @@ def print_markdown(model: torch.nn.Module, rows: list[tuple[str, str, int, int]]
 
 def main() -> int:
     args = parse_args()
-    cfg_path = Path(args.config or DEFAULT_CONFIGS[args.model])
+    default_model = args.model or "camchex"
+    cfg_path = Path(args.config or DEFAULT_CONFIGS[default_model])
     cfg = load_config(cfg_path)
     model = build_model(args, cfg)
     rows = child_rows(model, max_depth=args.depth)
