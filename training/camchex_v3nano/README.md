@@ -67,3 +67,20 @@ data:
 Grad-CAM uses the shared `src.interpret.run_gradcam` runner. The v3 config sets
 `model.arch: camchex_v3nano` so the runner instantiates `CaMCheXV3NanoModel`
 instead of the v2 model when loading checkpoints.
+
+### Optional torch.compile
+
+Set `trainer.compile_model: true` (or pass `--compile-model`) to speed up
+training. It does **not** compile the whole model — the fusion forward has
+data-dependent routing (`pad_tokens[nonzero_mask] = ...`, `if mask.any()`) that
+graph-breaks under `torch.compile`. Instead it compiles the static-shape islands
+in place with `torch.nn.Module.compile(dynamic=True)`: the two image backbones,
+the CXR-BERT text encoder, the transformer encoder, and the ML-Decoder head
+(see [maybe_compile_model](../common.py#L955)).
+
+- In-place `Module.compile()` is used on purpose: it leaves `state_dict` keys
+  unchanged, so checkpoints stay loadable by eager runs and remain compatible
+  with weights trained without compile.
+- `dynamic=True` lets the backbones take the variable number of present views
+  per batch without recompiling — so missing views are not padded.
+- Expect a one-time compile warmup on the first training step. Off by default.

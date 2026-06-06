@@ -44,6 +44,8 @@ class CaMCheXV3NanoModel(nn.Module):
                     param.requires_grad = False
                 self.text_encoder.eval()
 
+        # 640 = ConvNeXtV2 Nano backbone channels (in), d_model = transformer width (out).
+        # stride=2 also takes the 16x16 backbone grid down to 8x8.
         self.image_proj = nn.Conv2d(640, d_model, kernel_size=3, stride=2, padding=1)
         self.pos_encoding = Summer(PositionalEncoding2D(d_model))
         self.vitals_projector = VitalsTokenProjector(

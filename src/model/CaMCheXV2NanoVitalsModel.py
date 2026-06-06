@@ -16,6 +16,12 @@ class ConvNeXtV2NanoImageEncoder(nn.Module):
         feature_dim: int = 640,
     ):
         super().__init__()
+        # NOTE: 640 is the ConvNeXtV2 *Nano* backbone output channel count.
+        # For a 512px input the backbone emits (B, 640, 16, 16) (downsample x32).
+        # This is NOT a stale value against a 768-channel backbone: d_model (768)
+        # is the transformer width, reached later by image_proj's stride-2 Conv2d
+        # which also halves the grid to 8x8 -> (B, 768, 8, 8). So 640<->16x16 here,
+        # 768<->8x8 after projection. See image_proj in the model classes.
         self.feature_dim = feature_dim
         self.frontal_encoder = TimmImageEncoder(
             timm_init_args=timm_init_args,
@@ -123,6 +129,8 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
                     param.requires_grad = False
                 self.text_encoder.eval()
 
+        # 640 = ConvNeXtV2 Nano backbone channels (in), d_model = transformer width (out).
+        # stride=2 also takes the 16x16 backbone grid down to 8x8.
         self.image_proj = nn.Conv2d(640, d_model, kernel_size=3, stride=2, padding=1)
         self.pos_encoding = Summer(PositionalEncoding2D(d_model))
         self.vitals_projector = VitalsTokenProjector(

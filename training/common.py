@@ -249,7 +249,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "--compile-model",
         action="store_true",
         default=None,
-        help="Opt in to torch.compile(model) before training. Default comes from trainer.compile_model, or false if unset.",
+        help="Opt in to torch.compile(dynamic=True) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Default comes from trainer.compile_model, or false if unset.",
     )
     parser.add_argument("--accumulate-grad-batches", type=int)
     parser.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
@@ -953,13 +953,43 @@ def gradcam_runner_module(model: torch.nn.Module) -> str | None:
 
 
 def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: dict[str, Any] | None) -> torch.nn.Module:
+    # We compile the compile-safe submodules in place rather than the whole model:
+    # the fusion forward has data-dependent boolean scatter / .any() routing that
+    # graph-breaks under torch.compile, while the heavy, static-shape islands
+    # (image backbones, BioBERT, transformer encoder, head) compile cleanly. Using
+    # the in-place nn.Module.compile() keeps state_dict keys unchanged (no _orig_mod
+    # prefix), so checkpoints stay compatible with eager runs and existing weights.
     compile_model = bool(resolve_trainer_arg(args, cfg, "compile_model", False))
     if not compile_model:
         return model
     if not hasattr(torch, "compile"):
         raise RuntimeError("--compile-model requires torch.compile, which is unavailable in this PyTorch build")
-    print("[train] compiling model with torch.compile()")
-    return torch.compile(model)
+    # Attribute chains to the submodules whose forwards are static-shape and safe to
+    # compile. Missing ones are skipped (e.g. text_encoder is None with precomputed
+    # embeddings; some model variants lack frontal/lateral splits).
+    candidates = [
+        ("image_encoder", "frontal_encoder"),
+        ("image_encoder", "lateral_encoder"),
+        ("text_encoder", "biobert_encoder"),
+        ("transformer_encoder",),
+        ("head",),
+    ]
+    compiled = []
+    for path in candidates:
+        obj = model
+        for attr in path:
+            obj = getattr(obj, attr, None)
+            if obj is None:
+                break
+        if obj is None:
+            continue
+        obj.compile(dynamic=True)  # in-place: patches forward, leaves state_dict keys intact
+        compiled.append(".".join(path))
+    if compiled:
+        print(f"[train] compiled submodules with torch.compile(dynamic=True): {', '.join(compiled)}")
+    else:
+        print("[train] --compile-model set but found no compile-safe submodules to compile; running eager")
+    return model
 
 
 def train_step(model, criterion, batch, device: torch.device, precision: str | None):
