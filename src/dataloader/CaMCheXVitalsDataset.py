@@ -1,10 +1,29 @@
-import warnings
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+
+logger = logging.getLogger(__name__)
+
+
+def _log_dataset_warning(msg):
+    """Emit a dataset warning without letting the tqdm bar clobber it.
+
+    Best-effort only: any failure here (e.g. closed stream in a worker) is
+    swallowed so it can never interrupt or crash the training loop.
+    """
+    try:
+        from tqdm import tqdm
+
+        tqdm.write(msg)
+    except Exception:
+        try:
+            logger.warning(msg)
+        except Exception:
+            pass
 
 from src.dataloader.utils import (
     _safe_decode_jpeg,
@@ -139,7 +158,7 @@ class CaMCheXVitalsDataset(Dataset):
                 if img is None:
                     img = _safe_decode_jpeg(resolved)
             if img is None:
-                warnings.warn(f"Skipping unreadable image {path} in study {study_id}")
+                _log_dataset_warning(f"Skipping unreadable image {path} in study {study_id}")
                 continue
 
             if self.transform:
@@ -159,7 +178,7 @@ class CaMCheXVitalsDataset(Dataset):
                 view_positions.append(0)
 
         if len(imgs) == 0:
-            warnings.warn(f"All images unreadable for study {study_id}; using neighbor study")
+            _log_dataset_warning(f"All images unreadable for study {study_id}; using neighbor study")
             return self.__getitem__((index + 1) % len(self.study_ids))
 
         n = len(imgs)
