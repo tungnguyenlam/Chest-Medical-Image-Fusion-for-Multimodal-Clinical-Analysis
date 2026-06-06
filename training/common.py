@@ -992,8 +992,8 @@ def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: d
     # error surfaces deep inside backward() (e.g. the CantSplit floor-div bug in
     # codegen_mix_order_reduction) where a try/except around .compile() can't reach
     # it; this dynamo flag is the only place to degrade gracefully.
-    import torch._dynamo
-    torch._dynamo.config.suppress_errors = True
+    import torch._dynamo as _dynamo  # aliased: `import torch._dynamo` would bind `torch` as a function-local and break the torch.* refs above
+    _dynamo.config.suppress_errors = True
     # Attribute chains to the submodules whose forwards are static-shape and safe to
     # compile. Missing ones are skipped (e.g. text_encoder is None with precomputed
     # embeddings; some model variants lack frontal/lateral splits).
