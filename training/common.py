@@ -266,6 +266,22 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         type=float,
         help="Fraction of val loader batches to use for quick validation (default 0.1).",
     )
+    parser.add_argument(
+        "--full-val-fracs",
+        type=float,
+        nargs="*",
+        help="Epoch fractions (each in (0,1)) at which to run a full mid-epoch validation. "
+        "Independent of batch size. End-of-epoch full validation always runs. Default 0.5. "
+        "Pass with no values to disable mid-epoch full validation.",
+    )
+    parser.add_argument(
+        "--quick-val-fracs",
+        type=float,
+        nargs="*",
+        help="Epoch fractions (each in (0,1)) at which to run a partial quick validation "
+        "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
+        "batch size. Default 0.2 0.4 0.6 0.8. Pass with no values to disable.",
+    )
     parser.add_argument("--prefetch-factor", type=int, help="DataLoader prefetch_factor (requires num_workers > 0).")
     parser.add_argument("--weight-decay", type=float)
     parser.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
@@ -745,7 +761,12 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
                 preds.append(prob)
                 labels.append(label.detach().cpu())
                 if selection_out is not None:
-                    study_ids = batch[0][0]  # data[0] = collated study_id list (len B)
+                    study_ids = batch[0][0]  # data[0] = collated study ids (len B)
+                    if torch.is_tensor(study_ids):
+                        # default_collate turns numeric study_ids into a LongTensor, so
+                        # str(study_ids[bi]) would be "tensor(123)". .tolist() yields plain
+                        # python ints whose str() matches run_gradcam's str(np.int64) lookup keys.
+                        study_ids = study_ids.tolist()
                     lab = label.detach().cpu()
                     for bi in range(prob.shape[0]):
                         for c in range(n_classes):
@@ -998,6 +1019,31 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             raise ValueError("quick_val_frac must be in (0, 1]")
         quick_val_max_batches = max(1, int(len(val_loader) * quick_val_frac))
 
+    # Fraction-of-epoch validation scheduling (batch-size independent). End-of-epoch full
+    # validation always runs; these schedule extra full/quick validations within an epoch.
+    n_train_batches = len(train_loader)
+
+    def _epoch_fracs_to_batches(fracs, name: str) -> set[int]:
+        targets: set[int] = set()
+        if n_train_batches < 2:
+            return targets
+        for f in fracs:
+            f = float(f)
+            if not (0.0 < f < 1.0):
+                raise ValueError(f"{name} entries must each be in (0, 1); got {f}")
+            targets.add(max(1, min(n_train_batches - 1, round(f * n_train_batches))))
+        return targets
+
+    full_val_fracs = resolve_trainer_arg(args, cfg, "full_val_fracs", [0.5]) or []
+    quick_val_fracs = resolve_trainer_arg(args, cfg, "quick_val_fracs", [0.2, 0.4, 0.6, 0.8]) or []
+    full_val_batches = _epoch_fracs_to_batches(full_val_fracs, "full_val_fracs")
+    # Honor the legacy fixed-interval knob too (null by default): treat its mid-epoch points
+    # as additional full-validation batches, excluding the final batch (covered by epoch val).
+    if val_every_batches is not None:
+        full_val_batches |= set(range(val_every_batches, n_train_batches, val_every_batches))
+    # Quick validations never collide with full ones; full takes precedence on shared batches.
+    quick_val_batches = _epoch_fracs_to_batches(quick_val_fracs, "quick_val_fracs") - full_val_batches
+
     print(
         f"[train] device={device} precision={precision} scaler={use_scaler} "
         f"lr={lr:.2e} max_epochs={max_epochs} accumulate={accumulate_grad_batches} "
@@ -1005,6 +1051,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         f"checkpoint_every={checkpoint_every_steps or None} "
         f"early_stop={early_stop_monitor}/{early_stop_mode}/patience={early_stop_patience or None}/min_delta={early_stop_min_delta:g} "
         f"quick_val_every={quick_val_every_steps} quick_val_batches={quick_val_max_batches} "
+        f"full_val@batches={sorted(full_val_batches) or None} quick_val@batches={sorted(quick_val_batches) or None} "
         f"run_dir={run_dir}"
     )
 
@@ -1251,16 +1298,17 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                     fieldnames=train_fields,
                 )
 
-            if val_every_batches is not None and (batch_idx + 1) % val_every_batches == 0:
-                avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
-                _run_validation(epoch, global_step, "interval", running_loss_avg, avg_grad_norm)
-
-            if (
+            do_full_val = (batch_idx + 1) in full_val_batches
+            do_quick_val = (batch_idx + 1) in quick_val_batches or (
                 stepped
                 and quick_val_every_steps is not None
                 and global_step > 0
                 and global_step % quick_val_every_steps == 0
-            ):
+            )
+            if do_full_val:
+                avg_grad_norm = running_grad_norm / grad_norm_count if grad_norm_count else float("nan")
+                _run_validation(epoch, global_step, "interval", running_loss_avg, avg_grad_norm)
+            elif do_quick_val:
                 _run_quick_validation(epoch, global_step, batch_idx, running_loss_avg)
         pbar.close()
 

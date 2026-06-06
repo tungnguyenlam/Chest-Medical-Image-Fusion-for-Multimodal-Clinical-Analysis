@@ -108,6 +108,9 @@ trainer:
   log_every_n_steps: 1
   val_check_interval: null
   quick_val_every_steps: null
+  # Fraction-of-epoch validation schedule (batch-size independent); end-of-epoch full val always runs.
+  full_val_fracs: [0.5]
+  quick_val_fracs: [0.2, 0.4, 0.6, 0.8]
   quick_val_frac: 0.1
   seed: null
   accelerator: null
