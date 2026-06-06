@@ -59,7 +59,35 @@ def _read_csv(path: Path) -> pd.DataFrame | None:
     if df.empty:
         print(f"  skip: {path} is empty")
         return None
-    return df
+    return _drop_stale_resume_rows(df, path)
+
+
+def _drop_stale_resume_rows(df: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """Drop rows left over from an epoch that crashed before its checkpoint.
+
+    Checkpoints are only written at epoch boundaries, so a mid-epoch crash leaves
+    partial rows in the log. On `--resume-from`, ``global_step`` rewinds to the last
+    completed epoch and those same steps get logged again, so the file ends up with
+    overlapping segments. Walking from the end and keeping a row only when its step
+    is below the minimum step already kept discards every stale row whose step is
+    re-covered by a later (resumed) row, while preserving the clean resumed tail.
+    Handles repeated crashes too. Non-destructive: only the in-memory frame changes.
+    """
+    if "global_step" not in df.columns:
+        return df
+    steps = pd.to_numeric(df["global_step"], errors="coerce").to_numpy()
+    keep = np.zeros(len(df), dtype=bool)
+    min_kept = np.inf
+    for pos in range(len(df) - 1, -1, -1):
+        step = steps[pos]
+        if np.isnan(step) or step < min_kept:
+            keep[pos] = True
+            if not np.isnan(step):
+                min_kept = step
+    dropped = int((~keep).sum())
+    if dropped:
+        print(f"  cleaned: dropped {dropped} stale row(s) from {path.name} (mid-epoch crash / resume overlap)")
+    return df.loc[keep].reset_index(drop=True)
 
 
 def plot_loss(train_df: pd.DataFrame | None, val_df: pd.DataFrame | None, smooth: int, out: Path, dpi: int) -> None:
