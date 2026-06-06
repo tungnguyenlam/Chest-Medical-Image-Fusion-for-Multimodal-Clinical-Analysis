@@ -1159,6 +1159,11 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         if getattr(args, "image_size", None):
             cmd += ["--image-size", str(args.image_size)]
         tqdm.write(f"[gradcam] dumping {len(selection)} per-class panels after epoch {epoch} (device={gradcam_device})...")
+        # The subprocess is blocking, so training is paused — but the parent still holds its
+        # model + optimizer + reserved caching-allocator VRAM. Hand the reserved-but-free blocks
+        # back to the driver so a cuda Grad-CAM child has headroom and doesn't OOM against us.
+        if "cuda" in gradcam_device and torch.cuda.is_available():
+            torch.cuda.empty_cache()
         try:
             subprocess.run(cmd, cwd=str(ROOT), check=True)
         except subprocess.CalledProcessError as exc:
