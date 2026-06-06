@@ -224,6 +224,14 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "to the train batch size if the larger batch doesn't fit alongside the live training state.",
     )
     parser.add_argument("--num-workers", type=int)
+    parser.add_argument(
+        "--val-num-workers",
+        type=int,
+        help="DataLoader num_workers for validation/eval loaders. Defaults to 0 (from trainer.val_num_workers) "
+        "so validation runs in the main process and does NOT fork a second worker pool on top of the "
+        "persistent train workers — avoids the host-RAM spike (and OOM kill) when mid-epoch validation "
+        "fires. Quick-val is only a few batches, so in-process cost is small. Raise it to use val workers.",
+    )
     parser.add_argument("--image-size", type=int)
     parser.add_argument(
         "--channel-mode",
@@ -290,7 +298,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         nargs="*",
         help="Epoch fractions (each in (0,1)) at which to run a partial quick validation "
         "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
-        "batch size. Default 0.2 0.4 0.6 0.8. Pass with no values to disable.",
+        "batch size. Default 0.25 0.75. Pass with no values to disable.",
     )
     parser.add_argument("--prefetch-factor", type=int, help="DataLoader prefetch_factor (requires num_workers > 0).")
     parser.add_argument("--weight-decay", type=float)
@@ -586,6 +594,11 @@ def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, s
         dl_args["batch_size"] = args.batch_size
     if args.num_workers is not None:
         dl_args["num_workers"] = args.num_workers
+    # Validation/eval uses its own worker count, defaulting to 0 (in-process) so it doesn't fork a
+    # second pool on top of the persistent train workers (the mid-epoch RAM spike that OOM-kills).
+    # CLI --val-num-workers or trainer.val_num_workers override; raise it to use val workers.
+    if for_eval:
+        dl_args["num_workers"] = int(resolve_trainer_arg(args, cfg, "val_num_workers", 0))
     if getattr(args, "prefetch_factor", None) is not None:
         dl_args["prefetch_factor"] = args.prefetch_factor
     if dl_args.get("num_workers", 0) == 0:
@@ -1349,7 +1362,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         return targets
 
     full_val_fracs = resolve_trainer_arg(args, cfg, "full_val_fracs", [0.5]) or []
-    quick_val_fracs = resolve_trainer_arg(args, cfg, "quick_val_fracs", [0.2, 0.4, 0.6, 0.8]) or []
+    quick_val_fracs = resolve_trainer_arg(args, cfg, "quick_val_fracs", [0.25, 0.75]) or []
     full_val_batches = _epoch_fracs_to_batches(full_val_fracs, "full_val_fracs")
     # Honor the legacy fixed-interval knob too (null by default): treat its mid-epoch points
     # as additional full-validation batches, excluding the final batch (covered by epoch val).

@@ -27,6 +27,9 @@ def get_transforms(size, mode=None):
     else:
         normalize = A.Normalize()
 
+    # RandomResizedCrop already outputs (size, size) and every later aug here is
+    # size-preserving, so a trailing A.Resize(size, size) would be a guaranteed
+    # no-op (a wasted LANCZOS4 pass on every item). Omitted unconditionally.
     transforms_train = A.Compose([
         A.RandomResizedCrop((size,size), scale=(0.9, 1), p=1, interpolation=cv2.INTER_LANCZOS4),
         A.HorizontalFlip(p=0.5),
@@ -49,14 +52,19 @@ def get_transforms(size, mode=None):
             A.MotionBlur(),
             A.MedianBlur(),
         ], p=0.2),
-        A.Resize(size,size, interpolation=cv2.INTER_LANCZOS4),
         normalize,
     ])
 
-    transforms_val = A.Compose([
-        A.Resize(size,size, interpolation=cv2.INTER_LANCZOS4),
-        normalize,
-    ])
+    # With a channel ``mode``, build_channels emits arrays already resized to
+    # (size, size) -- out_size is data_cfg["size"] and is folded into the cache
+    # key -- so the val Resize is a no-op and is dropped. In legacy mode (None)
+    # images arrive at native resolution, so the Resize is kept (also the only
+    # thing making the batch collatable).
+    val_steps = []
+    if not mode:
+        val_steps.append(A.Resize(size, size, interpolation=cv2.INTER_LANCZOS4))
+    val_steps.append(normalize)
+    transforms_val = A.Compose(val_steps)
     return transforms_train, transforms_val
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
