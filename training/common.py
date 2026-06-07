@@ -2048,23 +2048,30 @@ def move_to_device(value, device: torch.device):
 
 
 @torch.inference_mode()
-def predict_dataframe(model, loader, classes: list[str], device: torch.device, ids: list[Any] | None = None) -> tuple[pd.DataFrame, torch.Tensor, torch.Tensor]:
+def predict_dataframe(model, loader, classes: list[str], device: torch.device, ids: list[Any] | None = None, precision: str | None = None) -> tuple[pd.DataFrame, torch.Tensor, torch.Tensor]:
     model.to(device)
     model.eval()
+    # Inference needs no autograd graph and no fp32: building the backward graph
+    # for 4 image backbones + CXR-BERT + the transformer is the dominant eval cost,
+    # and the forward is Tensor-Core-friendly. Default to bf16 autocast on CUDA
+    # (resolve_precision downgrades to fp32 where bf16 has no hardware path).
+    if precision is None:
+        precision = "bf16-mixed" if device.type == "cuda" else "32-true"
     preds = []
     labels = []
     batch_ids = []
-    for batch in tqdm(loader, desc="predict", dynamic_ncols=True):
-        data, label = batch
-        if isinstance(data, dict) and "study_id" in data:
-            sid = data["study_id"]
-            batch_ids.extend(sid.tolist() if torch.is_tensor(sid) else list(sid))
-        elif isinstance(data, (tuple, list)) and data and not torch.is_tensor(data[0]):
-            batch_ids.extend(list(data[0]))
-        data = move_to_device(data, device)
-        pred = torch.sigmoid(model(data)).cpu()
-        preds.append(pred)
-        labels.append(label.cpu().float())
+    with torch.inference_mode(), precision_context(device, precision):
+        for batch in tqdm(loader, desc="predict", dynamic_ncols=True):
+            data, label = batch
+            if isinstance(data, dict) and "study_id" in data:
+                sid = data["study_id"]
+                batch_ids.extend(sid.tolist() if torch.is_tensor(sid) else list(sid))
+            elif isinstance(data, (tuple, list)) and data and not torch.is_tensor(data[0]):
+                batch_ids.extend(list(data[0]))
+            data = move_to_device(data, device)
+            pred = torch.sigmoid(model(data).float()).cpu()
+            preds.append(pred)
+            labels.append(label.cpu().float())
 
     pred_tensor = torch.cat(preds)
     label_tensor = torch.cat(labels)
