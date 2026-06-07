@@ -74,6 +74,7 @@ model:
     betas: [0.9, 0.999]
     eps: 1.0e-8
   scheduler_init_args:
+    schedule: single_cosine  # one cosine decay over the whole run (no per-epoch warm restarts)
     warmup_ratio: 0.05
     warmup_start_factor: 1.0e-3
     eta_min_factor: 0.1

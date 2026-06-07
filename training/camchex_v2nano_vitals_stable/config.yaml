@@ -1,6 +1,11 @@
 model:
-  arch: camchex_v3nano
-  lr: 3.0e-5
+  # Stable fine-tuning tail of the camchex_v2nano_vitals baseline:
+  #   * schedule=single_cosine  -> one smooth LR decay over the run (no warm restarts)
+  #   * trainer.ema=true         -> evaluate/save the EMA (smoothed) weights
+  #   * modest lr + few epochs    -> meant to be warm-started from the baseline's best
+  #     checkpoint via --checkpoint-path (weights-only init).
+  # For a from-scratch run instead, set lr: 3.0e-5 and trainer.max_epochs: 30.
+  lr: 1.0e-5
   classes: &classes
     - Atelectasis
     - Calcification of the Aorta
@@ -108,7 +113,9 @@ data:
     size: 512
     classes: *classes
 trainer:
-  max_epochs: 30
+  max_epochs: 10
+  ema: true          # evaluate + save the EMA-smoothed weights (see common.ModelEMA)
+  ema_decay: 0.999
   accumulate_grad_batches: 1
   grad_clip: 1.0
   precision: 16-mixed

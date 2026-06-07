@@ -75,7 +75,7 @@ training. It does **not** compile the whole model — the fusion forward has
 data-dependent routing (`pad_tokens[nonzero_mask] = ...`, `if mask.any()`) that
 graph-breaks under `torch.compile`. Instead it compiles the static-shape islands
 in place with `torch.nn.Module.compile(dynamic=None)` (automatic dynamic): the
-two image backbones, the CXR-BERT text encoder, the transformer encoder, and the
+two image backbones, thtraining/singleviewe CXR-BERT text encoder, the transformer encoder, and the
 ML-Decoder head (see [maybe_compile_model](../common.py#L955)).
 
 - In-place `Module.compile()` is used on purpose: it leaves `state_dict` keys

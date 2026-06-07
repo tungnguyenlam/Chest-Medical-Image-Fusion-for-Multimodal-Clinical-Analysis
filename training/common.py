@@ -232,6 +232,19 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "persistent train workers — avoids the host-RAM spike (and OOM kill) when mid-epoch validation "
         "fires. Quick-val is only a few batches, so in-process cost is small. Raise it to use val workers.",
     )
+    parser.add_argument(
+        "--ema",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Maintain an exponential moving average of the weights and use it as the evaluated/saved "
+        "model. Off by default (config trainer.ema overrides). Best paired with schedule=single_cosine; "
+        "do NOT --resume-from an EMA checkpoint (saved weights are the EMA snapshot, not the raw state).",
+    )
+    parser.add_argument(
+        "--ema-decay",
+        type=float,
+        help="EMA decay factor (default 0.999, or trainer.ema_decay). Higher = smoother/slower.",
+    )
     parser.add_argument("--image-size", type=int)
     parser.add_argument(
         "--channel-mode",
@@ -980,6 +993,55 @@ def unwrap_compiled_model(model: torch.nn.Module) -> torch.nn.Module:
     return getattr(model, "_orig_mod", model)
 
 
+class ModelEMA:
+    """Exponential moving average of the model's state (params + buffers).
+
+    Opt-in via ``trainer.ema`` / ``--ema``. The EMA weights are used as the
+    *evaluated and saved* weights: validation (hence early-stopping/best
+    tracking) and the saved ``model_state_dict`` reflect the smoothed model,
+    while the raw weights keep training. This is the standard "max result"
+    trick and it specifically needs a *stable* (non-restarting) LR tail --
+    averaging across warm-restart sawtooth snapshots would mix unrelated basins.
+
+    Note: EMA state is not itself checkpointed, and the saved model weights are
+    the EMA snapshot -- these checkpoints are eval-ready but not intended for
+    ``--resume-from`` (the optimizer state belongs to the raw weights).
+    """
+
+    def __init__(self, model: torch.nn.Module, decay: float):
+        self.decay = float(decay)
+        base = unwrap_compiled_model(model)
+        self.shadow = {k: v.detach().clone() for k, v in base.state_dict().items()}
+        self._backup: dict | None = None
+
+    @torch.no_grad()
+    def update(self, model: torch.nn.Module) -> None:
+        base = unwrap_compiled_model(model)
+        d = self.decay
+        for k, v in base.state_dict().items():
+            s = self.shadow[k]
+            if v.dtype.is_floating_point:
+                s.mul_(d).add_(v.detach(), alpha=1.0 - d)
+            else:
+                # ints/bool buffers (e.g. num_batches_tracked): track the latest.
+                s.copy_(v.detach())
+
+    @torch.no_grad()
+    def apply_to(self, model: torch.nn.Module) -> None:
+        """Swap EMA weights into the live model, stashing the raw weights."""
+        base = unwrap_compiled_model(model)
+        self._backup = {k: v.detach().clone() for k, v in base.state_dict().items()}
+        base.load_state_dict(self.shadow, strict=True)
+
+    @torch.no_grad()
+    def restore(self, model: torch.nn.Module) -> None:
+        """Undo :meth:`apply_to`, putting the raw training weights back."""
+        if self._backup is None:
+            return
+        unwrap_compiled_model(model).load_state_dict(self._backup, strict=True)
+        self._backup = None
+
+
 def gradcam_runner_module(model: torch.nn.Module) -> str | None:
     model = unwrap_compiled_model(model)
     runner = getattr(model, "gradcam_runner_module", None)
@@ -1152,6 +1214,7 @@ def save_checkpoint(
     early_stop_bad_epochs: int = 0,
     early_stop_monitor: str = "val_ap",
     early_stop_mode: str = "max",
+    schedule: str = "warm_restarts",
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     model_to_save = unwrap_compiled_model(model)
@@ -1161,6 +1224,7 @@ def save_checkpoint(
         "classes": classes,
         "checkpoint_kind": checkpoint_kind,
         "completed_epoch": checkpoint_kind == "epoch",
+        "schedule": schedule,
         "best_monitor_value": best_monitor_value,
         "best_monitor_epoch": best_monitor_epoch,
         "early_stop_bad_epochs": early_stop_bad_epochs,
@@ -1196,9 +1260,23 @@ def append_metric_row(csv_path: Path, row: dict[str, Any], fieldnames: list[str]
         writer.writerow({k: serializable.get(k, "") for k in fields})
 
 
-def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path, scaler=None) -> tuple[int, int, float | None, int, int | None]:
+def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str | Path, scaler=None, expected_schedule: str | None = None) -> tuple[int, int, float | None, int, int | None]:
     checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
     load_model_state(model, checkpoint)
+    # A full resume restores the optimizer + scheduler *state*; that state is only
+    # valid for the schedule shape that produced it. Switching schedules (e.g.
+    # warm_restarts -> single_cosine) mid-run would silently load a mismatched
+    # state, so refuse it and point at weights-only init instead.
+    if isinstance(checkpoint, dict) and expected_schedule is not None:
+        ckpt_schedule = checkpoint.get("schedule", "warm_restarts")
+        if ckpt_schedule != expected_schedule:
+            raise RuntimeError(
+                f"--resume-from checkpoint was trained with schedule={ckpt_schedule!r} but the "
+                f"current config uses schedule={expected_schedule!r}. The scheduler state cannot "
+                f"be transplanted across schedules. To start a fresh single-cosine run from these "
+                f"weights, use --checkpoint-path (weights-only init, fresh optimizer/scheduler) "
+                f"instead of --resume-from."
+            )
     if isinstance(checkpoint, dict) and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     if isinstance(checkpoint, dict) and scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
@@ -1241,11 +1319,15 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     else:
         sched_kwargs.pop("warmup_ratio", None)
     warmup_steps = max(1, min(int(warmup_ratio * steps_per_epoch), total_steps))
+    # Schedule shape is recorded in the checkpoint so a resume into a config with a
+    # different schedule fails loudly instead of silently loading a mismatched state.
+    schedule = sched_kwargs.get("schedule", "warm_restarts")
     scheduler = build_warmup_cosine_scheduler(
         optimizer,
         lr=lr,
         steps_per_epoch=steps_per_epoch,
         warmup_steps=warmup_steps,
+        total_steps=total_steps,
         **sched_kwargs,
     )
 
@@ -1266,7 +1348,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             best_monitor_value,
             early_stop_bad_epochs,
             best_monitor_epoch,
-        ) = load_training_checkpoint(model, optimizer, scheduler, args.resume_from, scaler=scaler)
+        ) = load_training_checkpoint(model, optimizer, scheduler, args.resume_from, scaler=scaler, expected_schedule=schedule)
         best_label = "nan" if best_monitor_value is None else f"{best_monitor_value:.6f}"
         print(
             f"resumed from {args.resume_from} at epoch={start_epoch} global_step={global_step} "
@@ -1277,6 +1359,15 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
 
     model = maybe_compile_model(model, args, cfg)
+
+    # EMA is initialised after weights are loaded (resume/checkpoint_path) and after
+    # compile, so the shadow tracks the same parameters the optimizer updates.
+    ema_enabled = bool(resolve_trainer_arg(args, cfg, "ema", False))
+    ema: ModelEMA | None = None
+    if ema_enabled:
+        ema_decay = float(resolve_trainer_arg(args, cfg, "ema_decay", 0.999))
+        ema = ModelEMA(model, ema_decay)
+        print(f"[ema] enabled decay={ema_decay} (EMA weights are evaluated and saved)")
 
     checkpoint_dir = run_dir / "checkpoints"
     logs_dir = run_dir / "logs"
@@ -1403,20 +1494,27 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
 
     def _validate(**kwargs):
         nonlocal val_loader, val_oom_downgraded
+        # When EMA is on, evaluate the smoothed weights (then restore the raw ones).
+        if ema is not None:
+            ema.apply_to(model)
         try:
-            return validate_model(model, criterion, val_loader, classes, device, precision, **kwargs)
-        except torch.cuda.OutOfMemoryError:
-            train_bs = resolve_train_batch_size(cfg, args) if cfg is not None else None
-            if val_oom_downgraded or device.type != "cuda" or train_bs is None or val_loader.batch_size <= train_bs:
-                raise
-            torch.cuda.empty_cache()
-            tqdm.write(
-                f"[val] OOM at val batch_size={val_loader.batch_size}; rebuilding at {train_bs} "
-                f"and retrying (one-time downgrade for the rest of the run)."
-            )
-            val_loader = _rebuild_val_loader(val_loader, train_bs)
-            val_oom_downgraded = True
-            return validate_model(model, criterion, val_loader, classes, device, precision, **kwargs)
+            try:
+                return validate_model(model, criterion, val_loader, classes, device, precision, **kwargs)
+            except torch.cuda.OutOfMemoryError:
+                train_bs = resolve_train_batch_size(cfg, args) if cfg is not None else None
+                if val_oom_downgraded or device.type != "cuda" or train_bs is None or val_loader.batch_size <= train_bs:
+                    raise
+                torch.cuda.empty_cache()
+                tqdm.write(
+                    f"[val] OOM at val batch_size={val_loader.batch_size}; rebuilding at {train_bs} "
+                    f"and retrying (one-time downgrade for the rest of the run)."
+                )
+                val_loader = _rebuild_val_loader(val_loader, train_bs)
+                val_oom_downgraded = True
+                return validate_model(model, criterion, val_loader, classes, device, precision, **kwargs)
+        finally:
+            if ema is not None:
+                ema.restore(model)
 
     def _run_validation(epoch: int, gstep: int, trigger: str, train_loss_running: float, avg_grad_norm: float, selection_out: dict | None = None) -> dict[str, float]:
         metrics = _validate(
@@ -1444,22 +1542,30 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         return current < best - early_stop_min_delta
 
     def _save_training_checkpoint(path: Path, epoch: int, kind: str) -> None:
-        save_checkpoint(
-            path,
-            model,
-            optimizer,
-            scheduler,
-            epoch,
-            global_step,
-            classes,
-            scaler=scaler,
-            checkpoint_kind=kind,
-            best_monitor_value=best_monitor_value,
-            best_monitor_epoch=best_monitor_epoch,
-            early_stop_bad_epochs=early_stop_bad_epochs,
-            early_stop_monitor=early_stop_monitor,
-            early_stop_mode=early_stop_mode,
-        )
+        # Save the EMA weights as the model state (eval-ready), then restore raw weights.
+        if ema is not None:
+            ema.apply_to(model)
+        try:
+            save_checkpoint(
+                path,
+                model,
+                optimizer,
+                scheduler,
+                epoch,
+                global_step,
+                classes,
+                scaler=scaler,
+                checkpoint_kind=kind,
+                best_monitor_value=best_monitor_value,
+                best_monitor_epoch=best_monitor_epoch,
+                early_stop_bad_epochs=early_stop_bad_epochs,
+                early_stop_monitor=early_stop_monitor,
+                early_stop_mode=early_stop_mode,
+                schedule=schedule,
+            )
+        finally:
+            if ema is not None:
+                ema.restore(model)
 
     def _should_gradcam(epoch: int) -> bool:
         # Default: dump every epoch (it's cheap). Disable with 'none'/'off'/''; or pass
@@ -1612,6 +1718,8 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
                 stepped = True
+                if ema is not None:
+                    ema.update(model)
 
             loss_value = float(loss.detach().cpu())
             epoch_loss += loss_value
