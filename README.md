@@ -218,6 +218,8 @@ the source filesystem — essential when images live on a slow mount (e.g. WSL
 ```bash
 --cpu-fraction 0.5   # default: fraction of cores used for the prebuild
 --cpu-fraction 2.0   # oversubscribe when the build is I/O-bound on a slow mount (idle CPU)
+--skip-precompute    # skip the upfront prebuild; channels build lazily on first access
+                     # (cache config untouched) — use when the cache is already warm
 ```
 
 **Shared text-embedding cache.** With `--use-precomputed-text-embeddings`, the frozen

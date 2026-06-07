@@ -90,7 +90,8 @@ def _build_channel_cache_entry(image_path, mode, preprocess_cfg, cache_dir):
 
 
 def precompute_channels_for_paths(
-    data_cfg: dict[str, Any], raw_paths: Iterable[str], desc: str = "channels", cpu_fraction: float | None = None
+    data_cfg: dict[str, Any], raw_paths: Iterable[str], desc: str = "channels",
+    cpu_fraction: float | None = None, skip: bool = False,
 ) -> None:
     """Build the 3-channel cache for the given image paths up front.
 
@@ -100,7 +101,15 @@ def precompute_channels_for_paths(
     from ``cpu_fraction`` of the cores (default CPU_FRACTION). No-op unless both a
     ``channel_mode`` and an ``image_channel_cache_dir`` are configured. Already-cached
     images are skipped, so re-runs are cheap.
+
+    With ``skip=True`` (``--skip-precompute``) the upfront scan/build is bypassed
+    entirely; the cache config is untouched, so channels are built lazily on first
+    access during training (and cached as usual). Use it to shave startup latency
+    when the cache is already warm.
     """
+    if skip:
+        print(f"[precompute] {desc}: skipped -- --skip-precompute set (channels build lazily on first access)", flush=True)
+        return
     frac = cpu_fraction if cpu_fraction is not None else CPU_FRACTION
     mode = data_cfg.get("channel_mode")
     cache_dir = data_cfg.get("image_channel_cache_dir")
@@ -166,14 +175,15 @@ def precompute_channels_for_paths(
 
 
 def precompute_channel_cache(
-    data_cfg: dict[str, Any], dfs: list[pd.DataFrame], desc: str = "channels", cpu_fraction: float | None = None
+    data_cfg: dict[str, Any], dfs: list[pd.DataFrame], desc: str = "channels",
+    cpu_fraction: float | None = None, skip: bool = False,
 ) -> None:
     """Prebuild channels for every image in a ``path``-column dataframe (camchex/singleview)."""
     raw_paths: list[str] = []
     for df in dfs:
         if "path" in df.columns:
             raw_paths.extend(df["path"].tolist())
-    precompute_channels_for_paths(data_cfg, raw_paths, desc, cpu_fraction=cpu_fraction)
+    precompute_channels_for_paths(data_cfg, raw_paths, desc, cpu_fraction=cpu_fraction, skip=skip)
 
 
 def _prior_aware_image_paths(dfs: list[pd.DataFrame]) -> list[str]:
@@ -283,6 +293,15 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "(threads for the scan, processes for the build). "
             f"Default {CPU_FRACTION}. e.g. 0.25 to be gentle on a shared box, "
             "1.0 to use all cores."
+        ),
+    )
+    parser.add_argument(
+        "--skip-precompute",
+        action="store_true",
+        help=(
+            "Skip the upfront image channel-cache scan/build. The cache config is "
+            "left intact, so channels build lazily on first access (and still cache). "
+            "Use when the cache is already warm to shave startup latency."
         ),
     )
     parser.add_argument("--max-epochs", type=int)
@@ -731,7 +750,7 @@ def make_single_view_loaders(cfg: dict[str, Any], args: argparse.Namespace, view
     transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     train_df = filter_single_view(read_dataframe(data_cfg["train_df_path"]), view_position)
     val_df = filter_single_view(read_dataframe(data_cfg["devel_df_path"]), view_position)
-    precompute_channel_cache(data_cfg, [train_df, val_df], desc="singleview channels", cpu_fraction=resolve_cpu_fraction(args))
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="singleview channels", cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False))
     train_ds = SingleViewDataset(data_cfg, train_df, transforms_train)
     val_ds = SingleViewDataset(data_cfg, val_df, transforms_val)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
@@ -754,7 +773,7 @@ def make_camchex_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     )
     train_df = read_dataframe(data_cfg["train_df_path"])
     val_df = read_dataframe(data_cfg["devel_df_path"])
-    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex channels", cpu_fraction=resolve_cpu_fraction(args))
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex channels", cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False))
     train_ds = CaMCheXDataset(data_cfg, train_df, transforms_train, tokenizer)
     val_ds = CaMCheXDataset(data_cfg, val_df, transforms_val, tokenizer)
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
@@ -892,7 +911,7 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     train_df = read_dataframe(data_cfg["train_df_path"])
     val_df = read_dataframe(data_cfg["devel_df_path"])
-    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex_vitals channels", cpu_fraction=resolve_cpu_fraction(args))
+    precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex_vitals channels", cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False))
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [train_df, val_df], args=args)
     tokenizer = None
     if "clinical_embedding_cache" not in data_cfg and "clinical_embeddings" not in data_cfg:
