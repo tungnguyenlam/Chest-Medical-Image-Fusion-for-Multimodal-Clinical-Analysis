@@ -1502,7 +1502,10 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             f"best_monitor={best_label} bad_epochs={early_stop_bad_epochs}"
         )
     elif args.checkpoint_path:
-        load_weights(model, args.checkpoint_path)
+        # Weights-only init tolerates shape mismatches (drops them, keeps fresh init) so a
+        # related checkpoint can warm-start a different architecture -- e.g. camchex_v3nano
+        # -> prior_aware_v3nano (segment_embedding 6->14, prior-only heads init fresh).
+        load_weights(model, args.checkpoint_path, allow_shape_mismatch=True)
         print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
 
     model = maybe_compile_model(model, args, cfg)
@@ -2122,7 +2125,16 @@ def evaluate_report_ablation(
         print_report_ablation_delta(full, ablate)
 
 
-def load_model_state(model: torch.nn.Module, checkpoint: Any) -> None:
+def load_model_state(model: torch.nn.Module, checkpoint: Any, allow_shape_mismatch: bool = False) -> None:
+    """Load weights into ``model`` (strict=False on names: missing/extra keys are tolerated).
+
+    ``allow_shape_mismatch=True`` additionally drops any checkpoint key whose tensor shape
+    does not match the model's, leaving those params at their fresh init. This is for
+    *weights-only warm-start* across related-but-not-identical architectures (e.g.
+    camchex_v3nano -> prior_aware_v3nano, where ``segment_embedding`` grows 6->14 and the
+    prior-only heads don't exist in the source). Keep it False for eval and full resume,
+    where a shape mismatch is a real error you want surfaced.
+    """
     state_dict = checkpoint
     if isinstance(checkpoint, dict):
         state_dict = checkpoint.get("model_state_dict") or checkpoint.get("state_dict") or checkpoint
@@ -2132,12 +2144,26 @@ def load_model_state(model: torch.nn.Module, checkpoint: Any) -> None:
         {k.removeprefix("model.model."): v for k, v in state_dict.items() if k.startswith("model.model.")},
     ]
     errors = []
-    model_keys = set(model.state_dict().keys())
+    model_state = model.state_dict()
+    model_keys = set(model_state.keys())
     for candidate in candidates:
         if not model_keys.intersection(candidate.keys()):
             continue
+        if allow_shape_mismatch:
+            dropped = [
+                k for k, v in candidate.items()
+                if k in model_state and hasattr(v, "shape") and tuple(v.shape) != tuple(model_state[k].shape)
+            ]
+            if dropped:
+                candidate = {k: v for k, v in candidate.items() if k not in dropped}
+                preview = ", ".join(sorted(dropped)[:6])
+                suffix = "" if len(dropped) <= 6 else f", ... ({len(dropped)} total)"
+                print(f"[warm-start] shape mismatch -> kept fresh init for: {preview}{suffix}", flush=True)
         try:
+            transferred = len(model_keys.intersection(candidate.keys()))
             model.load_state_dict(candidate, strict=False)
+            if allow_shape_mismatch:
+                print(f"[warm-start] transferred {transferred}/{len(model_keys)} model tensors from checkpoint", flush=True)
             return
         except RuntimeError as exc:
             errors.append(str(exc))
@@ -2145,10 +2171,10 @@ def load_model_state(model: torch.nn.Module, checkpoint: Any) -> None:
     raise RuntimeError(f"Could not load checkpoint: {detail}")
 
 
-def load_weights(model: torch.nn.Module, checkpoint_path: str | Path) -> None:
+def load_weights(model: torch.nn.Module, checkpoint_path: str | Path, allow_shape_mismatch: bool = False) -> None:
     checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
     try:
-        load_model_state(model, checkpoint)
+        load_model_state(model, checkpoint, allow_shape_mismatch=allow_shape_mismatch)
     except RuntimeError as exc:
         raise RuntimeError(f"Could not load checkpoint {checkpoint_path}: {exc}") from exc
 
