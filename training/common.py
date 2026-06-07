@@ -362,6 +362,18 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
              "Only models that define gradcam_runner_module emit panels.",
     )
     parser.add_argument("--gradcam-device", help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: cpu.")
+    parser.add_argument(
+        "--skip-report-ablation",
+        action="store_true",
+        help=(
+            "Eval only: by default every text model is evaluated twice -- once with the full "
+            "inputs (image + clinical indication [+ vitals]) and once with the CURRENT study's "
+            "clinical indication blanked to the in-distribution 'No clinical history available.' "
+            "placeholder, written to *.no_report.{csv,json}, to measure how much the report text "
+            "is carrying (a leakage probe). The prior study's report/text is kept either way. "
+            "Pass this flag to run only the full pass."
+        ),
+    )
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -792,6 +804,32 @@ def _clinical_text(row: pd.Series) -> str:
     return str(text)
 
 
+def _blank_current_indication(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with the CURRENT study's clinical indication emptied.
+
+    Used for the report-ablation eval pass: the datasets turn an empty
+    ``clinical_indication`` into the in-distribution "No clinical history
+    available." placeholder (the same string they emit for genuinely-missing
+    indications), so the report/indication carries no information while staying
+    on the training distribution. Vitals and prior-study text are untouched.
+    """
+    out = df.copy()
+    if "clinical_indication" in out.columns:
+        out["clinical_indication"] = ""
+    return out
+
+
+def _blank_prior_aware_current_indication(ds) -> None:
+    """In-place blank the CURRENT study's clinical indication on a PriorAwareDataset
+    for the report-ablation pass. The dataset tokenizes / caches from ``clin_text`` at
+    load time, so emptying that one column makes it emit the in-distribution
+    "No clinical history available." placeholder. Prior-study streams (indication,
+    vitals, report) and the current vitals are untouched.
+    """
+    if "clin_text" in ds.df.columns:
+        ds.df["clin_text"] = ""
+
+
 def maybe_add_camchex_vitals_text_embeddings(
     cfg: dict[str, Any],
     data_cfg: dict[str, Any],
@@ -856,7 +894,7 @@ def maybe_add_prior_aware_text_embeddings(
     if not use_cache:
         return data_cfg
 
-    required = {"clin_text", "obs_text", "prior_clin_text", "prior_obs_text"}
+    required = {"clin_text", "obs_text", "prior_clin_text", "prior_obs_text", "prior_report_text"}
     missing = sorted({col for df in dfs for col in required if col not in df.columns})
     if missing:
         raise KeyError(
@@ -881,6 +919,11 @@ def maybe_add_prior_aware_text_embeddings(
             obs_texts.extend(df["obs_text"].fillna("").astype(str).tolist())
         if "prior_obs_text" in streams:
             obs_texts.extend(df["prior_obs_text"].fillna("").astype(str).tolist())
+        if "prior_report_text" in streams:
+            # Prior radiology report shares the clinical 384-token budget (CLS-pooled).
+            clinical_texts.extend(
+                df["prior_report_text"].fillna("No prior report available.").astype(str).tolist()
+            )
 
     text_model = (
         getattr(args, "text_model", None)
@@ -902,6 +945,21 @@ def maybe_add_prior_aware_text_embeddings(
     data_cfg = dict(data_cfg)
     data_cfg["text_embedding_cache"] = cache
     return data_cfg
+
+
+def _prior_aware_tokenizer(cfg: dict[str, Any], data_cfg: dict[str, Any], args: argparse.Namespace | None = None):
+    """Tokenizer for PriorAwareDataset's load-time text encoding. The parquet stores
+    raw text only, so the tokenizer comes from the training config (model.text_model /
+    data.tokenizer), which is what lets one parquet serve any text model."""
+    from transformers import AutoTokenizer
+
+    text_model = (
+        getattr(args, "text_model", None)
+        or (cfg.get("model", {}) or {}).get("text_model")
+        or data_cfg.get("tokenizer")
+        or "dmis-lab/biobert-v1.1"
+    )
+    return AutoTokenizer.from_pretrained(text_model, trust_remote_code=True)
 
 
 def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
@@ -935,6 +993,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     data_cfg = data_cfg_from_config(cfg, args)
     transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     label_dropout_p = float(data_cfg.get("label_dropout_p", 0.3))
+    tokenizer = _prior_aware_tokenizer(cfg, data_cfg, args)
 
     train_ds = PriorAwareDataset(
         parquet_path=str(resolve_path(data_cfg["train_df_path"])),
@@ -942,6 +1001,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         transform=transforms_train,
         label_dropout_p=label_dropout_p,
         cfg=data_cfg,
+        tokenizer=tokenizer,
     )
     val_ds = PriorAwareDataset(
         parquet_path=str(resolve_path(data_cfg["devel_df_path"])),
@@ -949,6 +1009,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         transform=transforms_val,
         label_dropout_p=0.0,
         cfg=data_cfg,
+        tokenizer=tokenizer,
     )
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
     train_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
@@ -966,7 +1027,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     return train_loader, val_loader
 
 
-def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
+def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, drop_report: bool = False):
     data_cfg = data_cfg_from_config(cfg, args)
     _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     ds = PriorAwareDataset(
@@ -975,7 +1036,10 @@ def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
         transform=transforms_val,
         label_dropout_p=0.0,
         cfg=data_cfg,
+        tokenizer=_prior_aware_tokenizer(cfg, data_cfg, args),
     )
+    if drop_report:
+        _blank_prior_aware_current_indication(ds)
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [ds.df], args=args)
     ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
@@ -994,7 +1058,7 @@ def make_single_view_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, 
     return loader, ids, labels_available
 
 
-def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
+def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, drop_report: bool = False):
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
@@ -1004,18 +1068,22 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
         trust_remote_code=True,
     )
     df = read_dataframe(data_cfg["pred_df_path"])
+    if drop_report:
+        df = _blank_current_indication(df)
     ds = CaMCheXDataset(data_cfg, df, transforms_val, tokenizer)
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     labels_available = all(c in df.columns for c in data_cfg["classes"])
     return loader, labels_available
 
 
-def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespace):
+def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, drop_report: bool = False):
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
     _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     df = read_dataframe(data_cfg["pred_df_path"])
+    if drop_report:
+        df = _blank_current_indication(df)
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [df], args=args)
     tokenizer = None
     if "clinical_embedding_cache" not in data_cfg and "clinical_embeddings" not in data_cfg:
@@ -1982,6 +2050,76 @@ def print_validation_summary(metrics: dict[str, float], classes: list[str], head
     tqdm.write(f"head classes  : {_class_group_names(classes, HEAD_IDX)}")
     tqdm.write(f"medium classes: {_class_group_names(classes, MEDIUM_IDX)}")
     tqdm.write(f"tail classes  : {_class_group_names(classes, TAIL_IDX)}")
+
+
+def _no_report_path(path: str | Path) -> Path:
+    """foo/metrics.json -> foo/metrics.no_report.json (the report-ablation variant)."""
+    p = Path(path)
+    return p.with_name(f"{p.stem}.no_report{p.suffix}")
+
+
+def print_report_ablation_delta(full: dict[str, float], ablate: dict[str, float]) -> None:
+    """Side-by-side of the full pass vs the report-dropped pass. A positive Δ
+    (full − no_report) means the clinical indication was *helping* that metric;
+    a large positive Δ is what you'd expect if the report leaks label information."""
+    rows = [
+        ("mean AP", "val_ap"), ("mean AUROC", "val_auroc"),
+        ("AP head", "val/ap_head"), ("AP medium", "val/ap_medium"), ("AP tail", "val/ap_tail"),
+        ("AUROC head", "val/auroc_head"), ("AUROC medium", "val/auroc_medium"), ("AUROC tail", "val/auroc_tail"),
+    ]
+    tqdm.write("\n=== report-ablation delta (full image+report[+vitals]  vs  report dropped) ===")
+    tqdm.write(f"{'metric':<14}{'full':>10}{'no_report':>12}{'Δ (full-abl)':>14}")
+    for label, key in rows:
+        f = full.get(key, float("nan"))
+        a = ablate.get(key, float("nan"))
+        tqdm.write(f"{label:<14}{f:>10.4f}{a:>12.4f}{f - a:>+14.4f}")
+    tqdm.write("Δ > 0 ⇒ the clinical indication helped (possible leakage); Δ ≈ 0 ⇒ report adds little.")
+
+
+def evaluate_report_ablation(
+    *,
+    model,
+    classes: list[str],
+    device: torch.device,
+    args: argparse.Namespace,
+    make_loader,
+    predictions_path: str | Path,
+    metrics_path: str | Path,
+    header: str,
+) -> None:
+    """Run the full eval pass, then (unless --skip-report-ablation) a second pass with
+    the current study's clinical indication blanked, writing ``*.no_report.{csv,json}``
+    and printing the metric delta.
+
+    ``make_loader(drop_report: bool) -> (loader, labels_available)`` builds the eval
+    loader for each pass (rebuilt per pass so DataLoader workers see the right frame).
+    """
+    def _run(drop_report: bool, pred_path: Path, met_path: Path, tag: str) -> dict[str, float] | None:
+        loader, labels_available = make_loader(drop_report)
+        out_df, preds, labels = predict_dataframe(model, loader, classes, device)
+        pred_path.parent.mkdir(parents=True, exist_ok=True)
+        out_df.to_csv(pred_path, index=False)
+        if not labels_available:
+            print(f"[eval] wrote {pred_path} (no label columns; metrics skipped)")
+            return None
+        metrics = compute_metrics(preds, labels, classes)
+        met_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(met_path, "w") as f:
+            json.dump(metrics, f, indent=2)
+        print_validation_summary(metrics, classes, header=f"{header} | {tag}")
+        return metrics
+
+    predictions_path = Path(predictions_path)
+    metrics_path = Path(metrics_path)
+    full = _run(False, predictions_path, metrics_path, "image+report[+vitals]")
+
+    if getattr(args, "skip_report_ablation", False):
+        return
+
+    ablate = _run(True, _no_report_path(predictions_path), _no_report_path(metrics_path),
+                  "report dropped (image[+vitals])")
+    if full is not None and ablate is not None:
+        print_report_ablation_delta(full, ablate)
 
 
 def load_model_state(model: torch.nn.Module, checkpoint: Any) -> None:

@@ -3,7 +3,11 @@
 Same backbone as CaMCheXModel, plus a parallel "prior" branch sharing weights
 with the current branch. Adds:
 
-  - 13 segment embedding slots (4 cur views + clin/obs + 4 prior views + clin/obs + prior labels)
+  - 14 segment embedding slots (4 cur views + clin/obs + 4 prior views + clin/obs/report + prior labels)
+  - Prior radiology report (findings + impression) as its own prior token. The
+    report is leakage for the *current* study (it states the labels) so it is never
+    fed there, but the *prior* study's report was authored before this exam and is
+    legitimate prior information.
   - Time-delta bucket embedding broadcast onto every prior token
   - Linear(26 -> 768) projection of the prior CheXpert/NegBio label vector
   - Per-sample masking when has_prior is False (matches dataset's label_dropout)
@@ -31,7 +35,8 @@ SEG_PRV_VIEWS = (6, 7, 8, 9)
 SEG_PRV_CLIN = 10
 SEG_PRV_OBS = 11
 SEG_PRV_LABELS = 12
-N_SEGMENTS = 13
+SEG_PRV_REPORT = 13  # prior study's findings + impression (legitimate prior info)
+N_SEGMENTS = 14
 
 
 class PriorAwareCaMCheXModel(nn.Module):
@@ -160,6 +165,19 @@ class PriorAwareCaMCheXModel(nn.Module):
             clinical_obs_attention_mask=clinical_obs_attention_mask,
         )
 
+    def _encode_single_text(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """CLS embedding for one text stream (used by the prior-report token)."""
+        if self.use_precomputed_text_embeddings:
+            if not input_ids.is_floating_point():
+                raise TypeError("use_precomputed_text_embeddings=True requires float embedding tensors")
+            return input_ids.float()
+        if self.text_encoder is None:
+            raise RuntimeError("text_encoder is not initialized; set use_precomputed_text_embeddings=False for token batches")
+        if self.freeze_text_encoder:
+            with torch.no_grad():
+                return self.text_encoder.biobert_encoder(input_ids=input_ids, attention_mask=attention_mask)
+        return self.text_encoder.biobert_encoder(input_ids=input_ids, attention_mask=attention_mask)
+
     # ---------------------------------------------------------------------
     # Forward
     # ---------------------------------------------------------------------
@@ -205,6 +223,11 @@ class PriorAwareCaMCheXModel(nn.Module):
         prv_clin_tok = prv_clin_cls + self.segment_embedding[SEG_PRV_CLIN].view(cdim)
         prv_obs_tok = prv_obs_cls + self.segment_embedding[SEG_PRV_OBS].view(cdim)
 
+        prv_report_cls = self._encode_single_text(
+            data["prior_report_input_ids"], data["prior_report_attn_mask"]
+        )
+        prv_report_tok = prv_report_cls + self.segment_embedding[SEG_PRV_REPORT].view(cdim)
+
         prior_label = data["prior_label"].to(cur_img_tokens.device).float()           # (B, 26)
         prv_label_tok = self.prior_label_proj(prior_label) + self.segment_embedding[SEG_PRV_LABELS].view(cdim)
 
@@ -213,13 +236,16 @@ class PriorAwareCaMCheXModel(nn.Module):
         prv_img_tokens = prv_img_tokens + delta_for_img
         prv_clin_tok = prv_clin_tok + delta_emb
         prv_obs_tok = prv_obs_tok + delta_emb
+        prv_report_tok = prv_report_tok + delta_emb
         prv_label_tok = prv_label_tok + delta_emb
 
-        prv_text_tokens = torch.stack([prv_clin_tok, prv_obs_tok, prv_label_tok], dim=1)  # (B, 3, C)
+        prv_text_tokens = torch.stack(
+            [prv_clin_tok, prv_obs_tok, prv_report_tok, prv_label_tok], dim=1
+        )  # (B, 4, C)
 
         prv_img_slot_valid = prv_slot_valid & has_prior.unsqueeze(-1)
         prv_img_valid = prv_img_slot_valid.unsqueeze(-1).expand(-1, -1, h2 * w2).reshape(b, s_img * h2 * w2)
-        prv_text_valid = has_prior.unsqueeze(-1).expand(-1, 3)                         # (B, 3)
+        prv_text_valid = has_prior.unsqueeze(-1).expand(-1, 4)                         # (B, 4)
 
         # ---- fuse + decode ------------------------------------------------
         tokens = torch.cat([cur_img_tokens, cur_text_tokens, prv_img_tokens, prv_text_tokens], dim=1)

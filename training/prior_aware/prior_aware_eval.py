@@ -13,9 +13,9 @@ from training.common import (
     add_common_args,
     classes_from_config,
     load_config,
+    evaluate_report_ablation,
     load_weights,
     make_prior_aware_eval_loader,
-    predict_dataframe,
     prepare_run_dir,
     resolve_path,
     select_device,
@@ -43,7 +43,6 @@ def main() -> None:
     run_dir = prepare_run_dir(args)
     write_resolved_config(run_dir, args, cfg)
 
-    loader, _ = make_prior_aware_eval_loader(cfg, args)
     text_model = args.text_model or cfg.get("model", {}).get("text_model") or "dmis-lab/biobert-v1.1"
     model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
     if args.freeze_text_encoder:
@@ -61,11 +60,16 @@ def main() -> None:
     )
     if args.checkpoint_path:
         load_weights(model, args.checkpoint_path)
-    device = select_device(args.accelerator)
-    out, _, _ = predict_dataframe(model, loader, classes_from_config(cfg), device)
-    out_path = run_dir / args.output_csv
-    out.to_csv(out_path, index=False)
-    print(f"[eval] wrote {out_path}")
+    evaluate_report_ablation(
+        model=model,
+        classes=classes_from_config(cfg),
+        device=select_device(args.accelerator),
+        args=args,
+        make_loader=lambda drop_report: make_prior_aware_eval_loader(cfg, args, drop_report=drop_report),
+        predictions_path=run_dir / args.output_csv,
+        metrics_path=run_dir / "metrics.json",
+        header=f"eval | {args.checkpoint_path}",
+    )
 
 
 if __name__ == "__main__":

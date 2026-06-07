@@ -118,6 +118,25 @@ to label sweeps.
 Eval scripts write predictions and metrics to `--predictions-path` and
 `--metrics-path`.
 
+### Report-ablation eval (leakage probe)
+
+Every text model is evaluated **twice** by default: once with the full inputs
+(image + clinical indication [+ vitals]) and once with the **current study's
+clinical indication blanked** to the in-distribution `"No clinical history
+available."` placeholder — the same string the datasets emit for genuinely
+missing indications, so the probe stays on the training distribution. The second
+pass is written alongside the first as `*.no_report.csv` / `*.no_report.json`,
+and the console prints a head/medium/tail AP+AUROC delta:
+
+- **Δ (full − no_report) > 0** ⇒ the indication text was *helping* that metric
+  (and a large drop is what you'd expect if it leaks label information).
+- **Δ ≈ 0** ⇒ the report text adds little; the model is leaning on the image/vitals.
+
+Only the *current* study's indication is dropped — for prior-aware models the
+**prior study's report/indication is kept** (it was authored before this exam,
+so it is legitimate prior information, not leakage). Pass `--skip-report-ablation`
+to run only the full pass.
+
 ## Useful training flags
 
 ```bash

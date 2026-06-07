@@ -18,7 +18,8 @@ SEG_PRV_VIEWS = (6, 7, 8, 9)
 SEG_PRV_CLIN = 10
 SEG_PRV_VITALS = 11
 SEG_PRV_LABELS = 12
-N_SEGMENTS = 13
+SEG_PRV_REPORT = 13  # prior study's findings + impression (legitimate prior info)
+N_SEGMENTS = 14
 
 
 class PriorAwareV2NanoModel(nn.Module):
@@ -163,6 +164,8 @@ class PriorAwareV2NanoModel(nn.Module):
         prv_img_tokens = einops.rearrange(prv_block, "b s c h w -> b (s h w) c")
         prv_clin_cls = self._encode_text(data["prior_clin_input_ids"], data["prior_clin_attn_mask"])
         prv_clin_tokens = self._expand_text_block(prv_clin_cls, SEG_PRV_CLIN, block_tokens, cdim)
+        prv_report_cls = self._encode_text(data["prior_report_input_ids"], data["prior_report_attn_mask"])
+        prv_report_tokens = self._expand_text_block(prv_report_cls, SEG_PRV_REPORT, block_tokens, cdim)
         prv_vital_tokens = self.vitals_projector(
             data["prior_vital_values"].to(cur_img_tokens.device),
             data["prior_vital_missing_mask"].to(cur_img_tokens.device),
@@ -173,6 +176,7 @@ class PriorAwareV2NanoModel(nn.Module):
 
         prv_img_tokens = prv_img_tokens + delta_emb.unsqueeze(1)
         prv_clin_tokens = prv_clin_tokens + delta_emb.unsqueeze(1)
+        prv_report_tokens = prv_report_tokens + delta_emb.unsqueeze(1)
         prv_vital_tokens = prv_vital_tokens + delta_emb.unsqueeze(1)
         prv_label_token = prv_label_token + delta_emb
 
@@ -183,6 +187,7 @@ class PriorAwareV2NanoModel(nn.Module):
                 cur_vital_tokens,
                 prv_img_tokens,
                 prv_clin_tokens,
+                prv_report_tokens,
                 prv_vital_tokens,
                 prv_label_token.unsqueeze(1),
             ],
@@ -194,6 +199,7 @@ class PriorAwareV2NanoModel(nn.Module):
         cur_vital_valid = torch.ones(b, block_tokens, dtype=torch.bool, device=tokens.device)
         prv_img_valid = self._valid_image_tokens(prv_slot_valid & has_prior.unsqueeze(-1), h2, w2)
         prv_clin_valid = has_prior.unsqueeze(1).expand(-1, block_tokens)
+        prv_report_valid = has_prior.unsqueeze(1).expand(-1, block_tokens)
         prv_vital_valid = has_prior.unsqueeze(1).expand(-1, block_tokens)
         prv_label_valid = has_prior.unsqueeze(1)
         valid = torch.cat(
@@ -203,6 +209,7 @@ class PriorAwareV2NanoModel(nn.Module):
                 cur_vital_valid,
                 prv_img_valid,
                 prv_clin_valid,
+                prv_report_valid,
                 prv_vital_valid,
                 prv_label_valid,
             ],

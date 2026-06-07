@@ -3,6 +3,12 @@
 This path trains a CaMCheX variant that sees the current study plus the nearest
 previous study for the same patient.
 
+The prior study additionally contributes its **full radiology report** (findings +
+impression) as its own token. The report is label leakage for the *current* study
+(it states the findings being classified) and is never fed there, but the *prior*
+study's report was authored before this exam, so it is legitimate prior
+information — a previous radiologist's read of this patient's chest.
+
 ## How Prior Context Rows Are Built
 
 The prior-aware parquet has one row per current study. It does not create every
@@ -31,30 +37,30 @@ still appears as a row, but its prior branch is masked.
 
 ## Build The Parquet
 
-The builder stores token ids/attention masks plus raw text columns for the
-training-time embedding cache. It no longer writes frozen CLS embeddings into
-the parquet.
+The builder stores **raw text columns only** (`clin_text`, `obs_text`,
+`prior_clin_text`, `prior_obs_text`, `prior_report_text`) — no baked token ids and
+no frozen CLS embeddings. Tokenization happens at load time with the training
+config's tokenizer, so **one parquet serves every text model** (BioBERT, CXR-BERT,
+…) with no `--tokenizer` argument and no rebuild when you switch variants:
 
 ```bash
-python src/prepare/04_build_prior_aware_dataset.py \
-  --tokenizer dmis-lab/biobert-v1.1
+python src/prepare/04_build_prior_aware_dataset.py
 ```
 
-For the CXR-BERT variant:
-
-```bash
-python src/prepare/04_build_prior_aware_dataset.py \
-  --tokenizer microsoft/BiomedVLP-CXR-BERT-specialized
-```
+> **Rebuild required.** The schema changed: the prior radiology report
+> (`prior_report_text`) was added and the baked `*_input_ids`/`*_attn_mask` columns
+> were dropped in favor of load-time tokenization. Parquets built before this change
+> are incompatible — re-run the builder above to regenerate
+> `prior_aware_{train,development,test}.parquet`.
 
 ## Tokenized Versus Cached
 
 Default live text path:
 
 ```text
-CSV text
--> tokenizer during parquet build
--> input_ids + attention mask stored in parquet
+raw text in parquet
+-> PriorAwareDataset tokenizes at load with the config's tokenizer
+   (model.text_model / data.tokenizer; not cached -- keeps RAM low)
 -> model loads and runs BioBERT/CXR-BERT during training
 ```
 
@@ -73,13 +79,14 @@ embeddings would be stale.
 
 ## Train With Cached Text Embeddings
 
-Prior-aware rows need four text streams cached:
+Prior-aware rows need five text streams cached:
 
 ```text
 current clinical
 current observation/vitals text
 prior clinical
 prior observation/vitals text
+prior report (findings + impression)
 ```
 
 The training and eval loaders use the shared frozen text embedding cache under
@@ -136,7 +143,7 @@ flowchart TD
     B --> C2["current text<br/>clinical ids/mask: B x 384<br/>vitals ids/mask: B x 128"]
     B --> C3["current target<br/>label: B x 26"]
     B --> P1["prior images<br/>prior_img: B x 4 x 3 x H x W<br/>prior_view_positions: B x 4"]
-    B --> P2["prior text<br/>prior clinical ids/mask: B x 384<br/>prior vitals ids/mask: B x 128"]
+    B --> P2["prior text<br/>prior clinical ids/mask: B x 384<br/>prior vitals ids/mask: B x 128<br/>prior report ids/mask: B x 384"]
     B --> P3["prior metadata<br/>has_prior: B<br/>days_since_prior: B<br/>prior_label: B x 26"]
 
     C1 --> IE["shared CaMCheXImageEncoder<br/>frontal timm for AP/PA<br/>lateral timm for lateral"]
@@ -155,7 +162,7 @@ flowchart TD
     LB --> ST
     DB --> ST
 
-    ST --> F["concatenate tokens<br/>current: image tokens + 2 text tokens<br/>prior: image tokens + 2 text tokens + 1 label token"]
+    ST --> F["concatenate tokens<br/>current: image tokens + 2 text tokens<br/>prior: image tokens + 3 text tokens + 1 label token"]
     P3 --> M["valid-token mask<br/>drop all prior tokens when has_prior=false"]
     F --> X["TransformerEncoder<br/>2 layers, 8 heads, width 768"]
     M --> X
@@ -172,21 +179,27 @@ by the stage-3 `PreviousStudy` column.
 
 | Field group | Meaning | Runtime shape |
 |---|---|---|
+The parquet stores raw text columns; the dataset tokenizes them at load (the
+runtime shape column shows the tokenized result for the default live-text path).
+
+| Field group | Meaning | Runtime shape |
+|---|---|---|
 | `img`, `view_positions` | Up to 4 current CXR images and integer view codes. `1` is frontal, `2` is lateral, `0` is padding/unknown. | `B x 4 x 3 x H x W`, `B x 4` |
-| `clin_input_ids`, `clin_attn_mask` | Tokenized current clinical indication. | `B x 384`, `B x 384` |
-| `obs_input_ids`, `obs_attn_mask` | Tokenized current vitals/observation text. | `B x 128`, `B x 128` |
+| `clin_text` | Current clinical indication, tokenized at load. | `B x 384` ids + mask |
+| `obs_text` | Current vitals/observation text, tokenized at load. | `B x 128` ids + mask |
 | `label` | Current study multi-label target. Uncertain labels are stored as `0.5`; missing labels become `0`. | `B x 26` |
 | `has_prior` | Whether this row has a usable previous study after lookup/dropout. | `B` |
 | `prior_img`, `prior_view_positions` | Up to 4 prior-study CXR images and view codes. All zeros when no prior is used. | `B x 4 x 3 x H x W`, `B x 4` |
-| `prior_clin_*`, `prior_obs_*` | Tokenized prior clinical indication and prior vitals text. | `B x 384`, `B x 128` |
+| `prior_clin_text`, `prior_obs_text` | Prior clinical indication and prior vitals text, tokenized at load. | `B x 384`, `B x 128` |
+| `prior_report_text` | Prior radiology report (findings + impression), tokenized at load. Legitimate prior info, not leakage. | `B x 384` |
 | `prior_label` | Prior study's 26-label vector. Zeroed when no prior is used. | `B x 26` |
 | `days_since_prior` | Current study time minus prior study time, in days. Zeroed when no prior is used. | `B` |
 
 If `--use-precomputed-text-embeddings` or `use_text_embedding_cache: true` is
-enabled at train/eval time, the dataset streams cached CLS vectors instead of
-token ids for the configured text streams. In that mode the relevant text
-tensors are `B x 768`, attention masks are dummy arrays, and the model does not
-instantiate BioBERT/CXR-BERT.
+enabled at train/eval time, the dataset streams cached CLS vectors (keyed on the
+raw text) instead of tokenizing for the configured text streams. In that mode the
+relevant text tensors are `B x 768`, attention masks are dummy arrays, and the
+model does not instantiate BioBERT/CXR-BERT.
 
 ### Image Tokens
 
@@ -225,10 +238,11 @@ clinical input_ids: B x 384 -> clinical CLS: B x 768
 vitals input_ids:   B x 128 -> vitals CLS:   B x 768
 ```
 
-The prior clinical and prior vitals streams call the same text encoder with the
-prior token ids. Segment embeddings distinguish current clinical, current
-vitals, prior clinical, and prior vitals tokens. The prior text tokens also get
-the time-delta embedding.
+The prior clinical, prior vitals, and prior report streams call the same text
+encoder with the prior token ids (the prior report is the prior study's findings +
+impression, capped at 384 tokens like the clinical stream). Segment embeddings
+distinguish current clinical, current vitals, prior clinical, prior vitals, and
+prior report tokens. The prior text tokens also get the time-delta embedding.
 
 ### Prior Label And Time Delta
 
@@ -256,8 +270,8 @@ Linear(26 -> 768)
 | `7` | > 3 years |
 
 The selected bucket is embedded as `B x 768` and added to every prior token:
-prior image tokens, prior clinical token, prior vitals token, and prior label
-token. Current-study tokens do not get this delta embedding.
+prior image tokens, prior clinical token, prior vitals token, prior report token,
+and prior label token. Current-study tokens do not get this delta embedding.
 
 ### Fused Sequence Shape
 
@@ -278,17 +292,17 @@ The fused sequence is:
 | Current image tokens | `I` | `B x I x 768` |
 | Current clinical + vitals | `2` | `B x 2 x 768` |
 | Prior image tokens | `I` | `B x I x 768` |
-| Prior clinical + vitals + label | `3` | `B x 3 x 768` |
-| Total | `2I + 5` | `B x (2I + 5) x 768` |
+| Prior clinical + vitals + report + label | `4` | `B x 4 x 768` |
+| Total | `2I + 6` | `B x (2I + 6) x 768` |
 
 With the default `H = W = 512`, `h = w = 8`, `I = 256`, and the transformer
 input is:
 
 ```text
-B x 517 x 768
+B x 518 x 768
 ```
 
-The model has 13 learned segment embeddings:
+The model has 14 learned segment embeddings:
 
 ```text
 0-3   current image slots
@@ -298,6 +312,7 @@ The model has 13 learned segment embeddings:
 10    prior clinical token
 11    prior vitals token
 12    prior label token
+13    prior report token
 ```
 
 Missing image slots are represented by a learned padding token internally but
@@ -320,7 +335,7 @@ TransformerEncoder(
 )
 ```
 
-The transformer output keeps the same shape, `B x (2I + 5) x 768`. MLDecoder
+The transformer output keeps the same shape, `B x (2I + 6) x 768`. MLDecoder
 then attends with class/group queries over the valid memory tokens and returns:
 
 ```text

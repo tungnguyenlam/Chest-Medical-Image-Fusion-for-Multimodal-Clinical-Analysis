@@ -7,11 +7,12 @@ at the chosen image source) and emits:
 
   data/data-camchex/prior_aware_{train,development,test}.parquet
 
-One row per study. Groupby/path-resolution/tokenizer work happens here so the
-runtime Dataset only has to decode JPEGs, apply transforms, and optionally read
-frozen text embeddings from the shared training-time cache. Raw text and numeric
-vital arrays are kept in the parquet for cache construction and v2nano-style
-prior-aware variants.
+One row per study. Groupby/path-resolution happens here; the parquet stores the
+RAW text columns (no baked token ids). The runtime Dataset decodes JPEGs, applies
+transforms, and tokenizes the raw text at load time with the training config's
+tokenizer (so one parquet serves any text model -- BioBERT, CXR-BERT, etc. -- with
+no rebuild), or reads frozen CLS embeddings from the shared cache when the text
+encoder is frozen.
 
 Defaults to the `mimic` source (03_mimic_*.csv) to match training/camchex/config.yaml.
 Use --in-prefix 03_kaggle_ to build from the kaggle-hosted images instead.
@@ -44,8 +45,12 @@ CLASSES = [
 ]
 OBS_FIELDS = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp", "gender"]
 MAX_VIEWS = 4
-CLIN_MAX_LEN = 384
-OBS_MAX_LEN = 128
+# The prior study's full radiology report (findings + impression) is fed only for
+# the PRIOR study: it was authored before the current exam, so it is legitimate
+# prior information rather than label leakage (unlike the current study's report,
+# which directly states the labels and is never used). Token budgets (clinical 384,
+# vitals 128, report 384) now live on PriorAwareDataset, which tokenizes at load.
+NO_PRIOR_REPORT = "No prior report available."
 
 
 def _view_code(vp: object) -> int:
@@ -114,6 +119,15 @@ def _clin_text(row: pd.Series) -> str:
     return text
 
 
+def _report_text(row: pd.Series) -> str:
+    """The radiology report (findings + impression), parsed in stage 01 into the
+    ``report`` column. Used only for the PRIOR study (see REPORT_MAX_LEN note)."""
+    text = row.get("report", "")
+    if pd.isna(text) or not isinstance(text, str) or text.strip() == "":
+        return NO_PRIOR_REPORT
+    return text
+
+
 def collapse_to_study(df: pd.DataFrame) -> pd.DataFrame:
     """One row per study_id: pick the first row for scalar fields and aggregate paths/views."""
     df = df.copy()
@@ -141,22 +155,9 @@ def _resolve_and_trim(paths: list, views: list, cap: int = MAX_VIEWS) -> tuple[l
     return resolved, list(map(int, views))
 
 
-def _tokenize_batch(tokenizer, texts: list[str], max_len: int) -> tuple[np.ndarray, np.ndarray]:
-    enc = tokenizer(
-        texts,
-        padding="max_length",
-        truncation=True,
-        max_length=max_len,
-        return_tensors="np",
-    )
-    return enc["input_ids"].astype(np.int32), enc["attention_mask"].astype(np.int8)
-
-
 def build_split(
     csv_path: Path,
     out_path: Path,
-    tokenizer,
-    batch_size: int = 256,
 ) -> None:
     print(f"[build] reading {csv_path}")
     df = pd.read_csv(csv_path, low_memory=False)
@@ -178,7 +179,7 @@ def build_split(
     # Prior text: pull from lookup when available, else use the same placeholder text the
     # current path uses for empties (kept consistent so empty != no-prior at the token level).
     print("[build] gathering prior text...")
-    prior_clin_texts, prior_obs_texts, prior_has_text = [], [], []
+    prior_clin_texts, prior_obs_texts, prior_report_texts, prior_has_text = [], [], [], []
     for pid in tqdm(studies["_prior_id"].values, dynamic_ncols=True):
         if pid >= 0 and pid in lookup.index:
             prow = lookup.loc[pid]
@@ -186,6 +187,7 @@ def build_split(
                 prow = prow.iloc[0]
             prior_clin_texts.append(_clin_text(prow))
             prior_obs_texts.append(_obs_text(prow))
+            prior_report_texts.append(_report_text(prow))
             prior_has_text.append(True)
         else:
             prior_clin_texts.append("No clinical history available.")
@@ -193,16 +195,8 @@ def build_split(
                 "Temperature: NA", "Heart rate: NA", "Respiratory rate: NA",
                 "O2 Saturation: NA", "Systolic BP: NA", "Diastolic BP: NA", "Gender: NA",
             ]))
+            prior_report_texts.append(NO_PRIOR_REPORT)
             prior_has_text.append(False)
-
-    print("[build] tokenizing current clinical_indication...")
-    clin_ids, clin_mask = _tokenize_batch(tokenizer, clin_texts, CLIN_MAX_LEN)
-    print("[build] tokenizing current vitals...")
-    obs_ids, obs_mask = _tokenize_batch(tokenizer, obs_texts, OBS_MAX_LEN)
-    print("[build] tokenizing prior clinical_indication...")
-    prior_clin_ids, prior_clin_mask = _tokenize_batch(tokenizer, prior_clin_texts, CLIN_MAX_LEN)
-    print("[build] tokenizing prior vitals...")
-    prior_obs_ids, prior_obs_mask = _tokenize_batch(tokenizer, prior_obs_texts, OBS_MAX_LEN)
 
     # Per-row resolved paths + views (current + prior), label vectors, time delta.
     print("[build] resolving paths and assembling rows...")
@@ -269,17 +263,8 @@ def build_split(
         "obs_text": obs_texts,
         "prior_clin_text": prior_clin_texts,
         "prior_obs_text": prior_obs_texts,
+        "prior_report_text": prior_report_texts,
     }
-    payload.update({
-        "clin_input_ids": list(clin_ids),
-        "clin_attn_mask": list(clin_mask),
-        "obs_input_ids": list(obs_ids),
-        "obs_attn_mask": list(obs_mask),
-        "prior_clin_input_ids": list(prior_clin_ids),
-        "prior_clin_attn_mask": list(prior_clin_mask),
-        "prior_obs_input_ids": list(prior_obs_ids),
-        "prior_obs_attn_mask": list(prior_obs_mask),
-    })
     out_df = pd.DataFrame(payload)
 
     print(f"[build] writing {out_path} ({len(out_df)} studies)")
@@ -295,7 +280,6 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Pre-generate prior-aware parquet datasets.")
     p.add_argument("--in-dir", default="data/data-camchex")
     p.add_argument("--out-dir", default="data/data-camchex")
-    p.add_argument("--tokenizer", default="dmis-lab/biobert-v1.1")
     p.add_argument("--splits", nargs="+", default=["train", "development", "test"])
     p.add_argument(
         "--in-prefix",
@@ -307,21 +291,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    from transformers import AutoTokenizer
-
     args = parse_args()
     in_dir = (ROOT / args.in_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
 
     for split in args.splits:
         csv_path = in_dir / f"{args.in_prefix}{split}.csv"
         out_path = out_dir / f"{args.out_prefix}{split}.parquet"
-        build_split(
-            csv_path,
-            out_path,
-            tokenizer,
-        )
+        build_split(csv_path, out_path)
 
 
 if __name__ == "__main__":

@@ -1734,3 +1734,51 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 - CPU verification (torch 2.11.0+cu130, timm 1.0.27, g++ 15.2 present locally): each island compiles, is numerically equal to eager (max abs diff 5e-6 to 7e-7), preserves state_dict keys, and handles dynamic batch (1/3/5). `dynamic=True` is what lets the backbones take the filtered, variable-N image batch without recompiling — so no need to pad missing views (padding would ~double backbone FLOPs to recover a ~10-25% kernel gain; net loss at typical CXR view occupancy).
 - End-to-end: full `CaMCheXV3NanoModel` forward compiled vs eager max diff 7e-7, state_dict keys unchanged. Note the v3 model hard-assumes exactly 4 view slots (`segment_embedding[:4]` repeats to `b*4`); a forward with s!=4 IndexErrors — that is a fixed contract, not introduced here.
 - Comments added at [CaMCheXV2NanoVitalsModel.py:19](src/model/CaMCheXV2NanoVitalsModel.py#L19) and the `image_proj` lines in both v2nano/v3nano model files clarifying 640=ConvNeXtV2 Nano backbone channels @16x16, 768=d_model @8x8 after the stride-2 projection (not a stale-channel bug).
+
+## 2026-06-08 — Prior-study report token + report-ablation eval (leakage probe)
+
+**Goal.** Two related changes around the radiology report text. (A) Evaluate every text model twice — once with the full inputs, once with the **current** study's clinical indication blanked — to measure how much that text carries (a leakage probe). (B) Feed the **prior** study's full report (findings + impression) as a new input token for the prior-aware models, since the prior report was authored before the current exam and is legitimate prior information rather than leakage.
+
+**Key disambiguation.** Stage 01 already splits each report into `report` (findings + impression — leakage for the current study, never fed) and `clinical_indication` (indication + history — the reason-for-exam, the model's only free-text input). `obs_text` is *vitals rendered as text*, not findings — so the only free-text leakage candidate anywhere is the clinical indication. In the original CaMCheX/prior-aware models vitals ride a text-encoded `obs` token; in the v2nano variants vitals are numeric through `VitalsTokenProjector`. Either way "report" = clinical indication for the ablation.
+
+**A — report-ablation eval.**
+- [training/common.py](training/common.py): added `--skip-report-ablation` (default off → two passes), `_blank_current_indication` (camchex/vitals: empties `clinical_indication`, datasets emit the in-distribution `"No clinical history available."` placeholder), `_blank_prior_aware_current_indication` (prior-aware: blanks `clin_text`, nulls any baked `clin_embedding`, and injects the tokenized placeholder into `clin_input_ids`/`clin_attn_mask` for the default baked-token path), `_no_report_path` (`metrics.json` → `metrics.no_report.json`), `print_report_ablation_delta` (head/medium/tail AP+AUROC, Δ = full − no_report), and the `evaluate_report_ablation` runner. The three eval loaders (`make_camchex_eval_loader`, `make_camchex_vitals_eval_loader`, `make_prior_aware_eval_loader`) take `drop_report=False`.
+- All 8 text eval scripts now build the model once and call `evaluate_report_ablation` with a `make_loader(drop_report)` closure, writing `*.no_report.{csv,json}` beside the full outputs. prior-aware eval now also emits `metrics.json` (it previously wrote predictions only). singleview is image-only → left as a single pass.
+
+**B — prior report token.**
+- [src/prepare/04_build_prior_aware_dataset.py](src/prepare/04_build_prior_aware_dataset.py): `_report_text` reads the prior row's `report`; new `prior_report_text` + `prior_report_input_ids`/`prior_report_attn_mask` columns (REPORT_MAX_LEN=384, matching the indication; placeholder `"No prior report available."`). **Parquet rebuild required** — older parquets lack these columns.
+- [src/dataloader/PriorAwareDataset.py](src/dataloader/PriorAwareDataset.py): emits the `prior_report` stream; added to the default `text_embedding_streams`.
+- [src/model/PriorAwareCaMCheXModel.py](src/model/PriorAwareCaMCheXModel.py) + [src/model/PriorAwareV2NanoModel.py](src/model/PriorAwareV2NanoModel.py): new `SEG_PRV_REPORT` slot, `N_SEGMENTS` 13→14, prior report text-encoded (added `_encode_single_text` to the original model; v2nano reused `_encode_text`/`_expand_text_block`), +time-delta embedding, concatenated into the token sequence and `has_prior`-gated valid mask. Original model's prior text tokens 3→4 (clin/obs/report/label), fused length 2I+5 → 2I+6 (518 at 512²).
+- [training/common.py](training/common.py) `maybe_add_prior_aware_text_embeddings`: `prior_report_text` added to the required columns and ensured on the 384-token clinical budget. `training/prior_aware_v2nano/config.yaml` streams list gained `prior_report_text`.
+
+**Reasoning.** Neutral-placeholder ablation (vs. hard attention-masking the text token) keeps the input on the training distribution — the model saw that exact string for genuinely-missing indications — so the measured drop reflects information content, not an OOD shock. The prior report is a dedicated token (parallel to prior indication/vitals/label) rather than concatenated into the prior indication, so it is independently ablatable and keeps the 384-token budgets clean. Only the current study's indication is dropped in the ablation; the prior report/indication is always kept (not leakage).
+
+**Verification.** `python -m py_compile` over all 13 touched files passes. No GPU/data locally (per project setup), so model forward shapes were verified by review: segment indices < N_SEGMENTS, token/valid concat orders match in both prior models. README (root + `training/prior_aware/README.md`) updated: new eval section, prior-report intro/streams/per-row table/segment list/fused-shape, and a rebuild note.
+
+**Follow-ups.** Rebuild the three prior-aware parquets and retrain the prior-aware models to pick up the new token. Run the two-pass eval across all models and tabulate the report-ablation Δ for the thesis (expect near-zero Δ if indication isn't leaking; large Δ flags leakage).
+
+### Addendum — move prior-aware tokenization from build time to load time
+
+**Why.** Asked whether `--tokenizer` on the builder could be more flexible. Two real pain points: (1) you had to pass the right tokenizer string by hand, and (2) all three variants share one `prior_aware_{split}.parquet`, but BioBERT and CXR-BERT have different vocabularies — so the baked token ids forced a parquet *rebuild/overwrite* whenever you switched variants (wrong tokenizer → silently wrong-vocab ids). Also RAM-relevant on this box: baked `*_input_ids`/`*_attn_mask` (5 streams × ≤384 ints/study) are resident in the in-memory DataFrame and copied across DataLoader worker forks.
+
+**Change.** Stage 04 now stores **raw text only** — dropped `_tokenize_batch`, the `*_input_ids`/`*_attn_mask` columns, the `--tokenizer` arg, and the `AutoTokenizer` import. [PriorAwareDataset](src/dataloader/PriorAwareDataset.py) gained a `tokenizer=` arg and tokenizes each raw-text stream in `_text_input` at load (cache path unchanged: it already keyed on raw text). [training/common.py](training/common.py) `_prior_aware_tokenizer(cfg, data_cfg, args)` builds the tokenizer from `model.text_model`/`data.tokenizer` and both prior-aware loaders pass it in. The report-ablation helper `_blank_prior_aware_current_indication` collapsed to a one-liner (`clin_text = ""`) since tokenization now reads that column.
+
+**Result.** One parquet serves any text model — no `--tokenizer`, no rebuild on variant switch — and the token-id arrays are transient per batch (lower resident RAM) instead of cached. **Decided against a tokenization cache:** it would re-materialize exactly the arrays we removed from RAM; fast HF tokenizers run in the worker processes in parallel with JPEG decode, so per-`__getitem__` tokenization of short clinical text is negligible next to 8 ConvNeXt forwards. Build command is now just `python src/prepare/04_build_prior_aware_dataset.py`. `py_compile` over all changed files passes.
+
+## 2026-06-08 — modular subfolder-based LaTeX report setup
+
+**Goal.** Set up the LaTeX report directory structure where each section is housed in its own subfolder.
+
+**Changes.**
+- `report/introduction/introduction.tex` — Created introduction section stub.
+- `report/related_work/related_work.tex` — Created related work section stub.
+- `report/eda/eda.tex` — Created exploratory data analysis section stub.
+- `report/methodology/methodology.tex` — Created methodology section stub.
+- `report/results/results.tex` — Created results section stub.
+- `report/discussion/discussion.tex` — Created discussion section stub.
+- `report/conclusion/conclusion.tex` — Created conclusion section stub.
+- `report/main.tex` — Modified to include `\tableofcontents` and use `\input` for each subfolder-based section. Added `\bibliography` call referencing `references.bib` inside the main CJK document environment.
+
+**Reasoning.** Using a modular directory structure is standard practice for large LaTeX projects, as it prevents `main.tex` from becoming bloated and makes it easier for multiple authors/sessions to edit individual sections without merge conflicts. We chose `\input` rather than `\subfile` or `\include` because `\input` behaves as direct substitution and avoids complex path compilation dependencies across different LaTeX compilers and configurations.
+
+**Gotchas.** In the previous `main.tex`, the section headings and bibliography were placed below `\end{CJK*}` and `\end{document}`, which prevented them from compiling. Moving them inside the CJK and document environments fixed the build. Compiled `main.tex` twice with `pdflatex` to generate and populate the table of contents (`main.toc`).

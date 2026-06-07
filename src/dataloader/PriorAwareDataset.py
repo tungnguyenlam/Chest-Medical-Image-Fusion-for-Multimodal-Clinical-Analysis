@@ -26,6 +26,7 @@ MAX_VIEWS = 4
 N_CLASSES = 26
 CLIN_MAX_LEN = 384
 OBS_MAX_LEN = 128
+REPORT_MAX_LEN = 384  # prior study's findings + impression (legitimate prior info, not leakage)
 
 
 def _to_array(x, dtype):
@@ -39,17 +40,11 @@ def _has_value(row, key: str) -> bool:
     return key in row.index and row[key] is not None
 
 
-def _text_array(row, embedding_key: str, token_key: str, dtype):
-    if _has_value(row, embedding_key):
-        return _to_array(row[embedding_key], np.float32)
-    return _to_array(row[token_key], dtype)
-
-
 def _text_value(row, text_key: str, fallback: str) -> str:
     if text_key not in row.index:
         raise KeyError(
             f"Prior-aware parquet is missing {text_key!r}; rebuild it with "
-            "src/prepare/04_build_prior_aware_dataset.py before using the training-time text embedding cache."
+            "src/prepare/04_build_prior_aware_dataset.py."
         )
     text = row[text_key]
     if pd.isna(text) or str(text).strip() == "":
@@ -75,6 +70,7 @@ class PriorAwareDataset(Dataset):
         transform=None,
         label_dropout_p: float = 0.0,
         cfg: dict | None = None,
+        tokenizer=None,
     ):
         """
         Args:
@@ -86,12 +82,17 @@ class PriorAwareDataset(Dataset):
                 (raw+CLAHE+third channel) shared with the other datasets; left
                 unset (or ``--channel-mode none``) it keeps the legacy direct JPEG
                 decode -- i.e. the plain grayscale-duplicated-to-3-channels image.
+            tokenizer: HF tokenizer used to encode the raw text columns at load time.
+                The parquet stores only raw text (no baked token ids), so one parquet
+                serves any text model -- the tokenizer is chosen by the training config.
+                May be None only when every text stream is served by the embedding cache.
         """
         super().__init__()
         self.df = pd.read_parquet(parquet_path).reset_index(drop=True)
         self.size = int(image_size)
         self.transform = transform
         self.label_dropout_p = float(label_dropout_p)
+        self.tokenizer = tokenizer
         cfg = cfg or {}
         self.channel_mode = cfg.get("channel_mode")
         self.channel_cache_dir = cfg.get("image_channel_cache_dir")
@@ -99,7 +100,7 @@ class PriorAwareDataset(Dataset):
         self.text_embedding_cache = cfg.get("text_embedding_cache")
         self.text_embedding_streams = set(
             cfg.get("text_embedding_streams")
-            or ["clin_text", "obs_text", "prior_clin_text", "prior_obs_text"]
+            or ["clin_text", "obs_text", "prior_clin_text", "prior_obs_text", "prior_report_text"]
         )
         self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
 
@@ -147,21 +148,26 @@ class PriorAwareDataset(Dataset):
     def _text_input(
         self,
         row,
-        embedding_key: str,
-        token_key: str,
         text_key: str,
         max_length: int,
         fallback: str,
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Encode one raw-text stream. Frozen-encoder runs read a cached CLS vector;
+        otherwise the text is tokenized at load time with ``self.tokenizer`` (the
+        parquet stores raw text only, so the tokenizer is the training config's)."""
+        text = _text_value(row, text_key, fallback)
         if self.text_embedding_cache is not None and text_key in self.text_embedding_streams:
-            text = _text_value(row, text_key, fallback)
             embedding = self.text_embedding_cache.get_embedding(text, max_length=max_length)
             return embedding.astype(np.float32, copy=False), np.zeros(1, dtype=np.int64)
-        return _text_array(row, embedding_key, token_key, np.int64), (
-            _to_array(row[token_key.replace("input_ids", "attn_mask")], np.int64)
-            if token_key.replace("input_ids", "attn_mask") in row.index
-            else np.zeros(1, dtype=np.int64)
+        if self.tokenizer is None:
+            raise RuntimeError(
+                f"PriorAwareDataset has no tokenizer to encode {text_key!r}; pass a tokenizer "
+                "or enable the text embedding cache / --use-precomputed-text-embeddings."
+            )
+        enc = self.tokenizer(
+            text, padding="max_length", truncation=True, max_length=max_length, return_tensors="np"
         )
+        return enc["input_ids"][0].astype(np.int64), enc["attention_mask"][0].astype(np.int64)
 
     def _normalize_vitals(self, raw_values) -> tuple[np.ndarray, np.ndarray]:
         raw = _to_array(raw_values, np.float32) if raw_values is not None else _nan_vitals()
@@ -206,20 +212,12 @@ class PriorAwareDataset(Dataset):
             prv_img = _zero_image_block(self.size)
             prv_views = np.zeros(MAX_VIEWS, dtype=np.int64)
 
-        clin_input, clin_mask = self._text_input(
-            row, "clin_embedding", "clin_input_ids", "clin_text", CLIN_MAX_LEN, "No clinical history available."
-        )
-        obs_input, obs_mask = self._text_input(
-            row, "obs_embedding", "obs_input_ids", "obs_text", OBS_MAX_LEN,
-            "Temperature: NA | Heart rate: NA | Respiratory rate: NA | O2 Saturation: NA | Systolic BP: NA | Diastolic BP: NA | Gender: NA",
-        )
-        prior_clin_input, prior_clin_mask = self._text_input(
-            row, "prior_clin_embedding", "prior_clin_input_ids", "prior_clin_text", CLIN_MAX_LEN, "No clinical history available."
-        )
-        prior_obs_input, prior_obs_mask = self._text_input(
-            row, "prior_obs_embedding", "prior_obs_input_ids", "prior_obs_text", OBS_MAX_LEN,
-            "Temperature: NA | Heart rate: NA | Respiratory rate: NA | O2 Saturation: NA | Systolic BP: NA | Diastolic BP: NA | Gender: NA",
-        )
+        _VITALS_NA = "Temperature: NA | Heart rate: NA | Respiratory rate: NA | O2 Saturation: NA | Systolic BP: NA | Diastolic BP: NA | Gender: NA"
+        clin_input, clin_mask = self._text_input(row, "clin_text", CLIN_MAX_LEN, "No clinical history available.")
+        obs_input, obs_mask = self._text_input(row, "obs_text", OBS_MAX_LEN, _VITALS_NA)
+        prior_clin_input, prior_clin_mask = self._text_input(row, "prior_clin_text", CLIN_MAX_LEN, "No clinical history available.")
+        prior_obs_input, prior_obs_mask = self._text_input(row, "prior_obs_text", OBS_MAX_LEN, _VITALS_NA)
+        prior_report_input, prior_report_mask = self._text_input(row, "prior_report_text", REPORT_MAX_LEN, "No prior report available.")
 
         data = {
             "study_id": int(row["study_id"]),
@@ -237,6 +235,8 @@ class PriorAwareDataset(Dataset):
             "prior_clin_attn_mask": prior_clin_mask,
             "prior_obs_input_ids": prior_obs_input,
             "prior_obs_attn_mask": prior_obs_mask,
+            "prior_report_input_ids": prior_report_input,
+            "prior_report_attn_mask": prior_report_mask,
             "prior_label": _to_array(row["prior_label"], np.float32) if has_prior else np.zeros(N_CLASSES, dtype=np.float32),
             "days_since_prior": float(row["days_since_prior"]) if has_prior and not pd.isna(row["days_since_prior"]) else 0.0,
         }

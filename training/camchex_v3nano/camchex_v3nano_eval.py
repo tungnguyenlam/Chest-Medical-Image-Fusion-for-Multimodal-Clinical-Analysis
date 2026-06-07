@@ -16,6 +16,7 @@ from training.common import (
     compute_metrics,
     load_config,
     load_weights,
+    evaluate_report_ablation,
     make_camchex_vitals_eval_loader,
     predict_dataframe,
     print_validation_summary,
@@ -50,7 +51,6 @@ def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
     classes = classes_from_config(cfg)
-    loader, labels_available = make_camchex_vitals_eval_loader(cfg, args)
     frontal_pretrained_path = str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None
     lateral_pretrained_path = str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None
 
@@ -70,19 +70,16 @@ def main() -> None:
         **model_init_args,
     )
     load_weights(model, args.checkpoint_path)
-    out_df, preds, labels = predict_dataframe(model, loader, classes, select_device(args.accelerator))
-
-    predictions_path = Path(args.predictions_path)
-    predictions_path.parent.mkdir(parents=True, exist_ok=True)
-    out_df.to_csv(predictions_path, index=False)
-
-    if labels_available:
-        metrics = compute_metrics(preds, labels, classes)
-        metrics_path = Path(args.metrics_path)
-        metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(metrics_path, "w") as f:
-            json.dump(metrics, f, indent=2)
-        print_validation_summary(metrics, classes, header=f"eval | {args.checkpoint_path}")
+    evaluate_report_ablation(
+        model=model,
+        classes=classes,
+        device=select_device(args.accelerator),
+        args=args,
+        make_loader=lambda drop_report: make_camchex_vitals_eval_loader(cfg, args, drop_report=drop_report),
+        predictions_path=args.predictions_path,
+        metrics_path=args.metrics_path,
+        header=f"eval | {args.checkpoint_path}",
+    )
 
 
 if __name__ == "__main__":
