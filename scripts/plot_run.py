@@ -3,6 +3,11 @@
 Reads `<run_dir>/logs/train_steps.csv` and `<run_dir>/logs/val_epochs.csv`
 (produced by training/common.py) and writes PNGs to `<run_dir>/plots/`.
 
+The LR plot shows one curve per parameter group when discriminative LR is used
+(`train/lr/<component>` columns); otherwise the single `train/lr` curve. The loss plot
+overlays each weighted loss-component term (`train/loss/<name>` columns) on the total
+when a composite loss (e.g. `--loss FC ASL`) is in use.
+
 Usage:
     python scripts/plot_run.py <run_dir> [<run_dir> ...]
     python scripts/plot_run.py <run_dir> --output-dir <other_dir>
@@ -99,7 +104,17 @@ def plot_loss(train_df: pd.DataFrame | None, val_df: pd.DataFrame | None, smooth
         ax.plot(train_df["global_step"], loss_step, color="tab:blue", alpha=0.25, linewidth=0.6, label="train loss (step)")
         if smooth and smooth > 1:
             smoothed = loss_step.rolling(smooth, min_periods=1).mean()
-            ax.plot(train_df["global_step"], smoothed, color="tab:blue", linewidth=1.4, label=f"train loss (rolling {smooth})")
+            ax.plot(train_df["global_step"], smoothed, color="tab:blue", linewidth=1.4, label=f"train loss (total, rolling {smooth})")
+    # Per-loss-component contributions (composite loss): train/loss/<name>.
+    if train_df is not None:
+        term_cols = [c for c in train_df.columns if c.startswith("train/loss/")]
+        term_colors = ["tab:cyan", "tab:olive", "tab:brown", "tab:pink", "tab:gray"]
+        for col, color in zip(sorted(term_cols), term_colors):
+            term = train_df[col].astype(float)
+            name = col[len("train/loss/"):]
+            if smooth and smooth > 1:
+                term = term.rolling(smooth, min_periods=1).mean()
+            ax.plot(train_df["global_step"], term, color=color, linewidth=1.1, alpha=0.85, label=f"{name} term (weighted)")
     if val_df is not None and "val/loss" in val_df.columns:
         ax.plot(val_df["global_step"], val_df["val/loss"], "o-", color="tab:red", markersize=4, label="val loss")
     ax.set_xlabel("global step")
@@ -114,7 +129,16 @@ def plot_lr(train_df: pd.DataFrame | None, out: Path, dpi: int) -> None:
     if train_df is None or "train/lr" not in train_df.columns:
         return
     fig, ax = plt.subplots(figsize=(9, 4), dpi=dpi)
-    ax.plot(train_df["global_step"], train_df["train/lr"], color="tab:green", linewidth=1.2)
+    # Per-component LR curves (discriminative LR): train/lr/<component>. Fall back to the
+    # single aggregate train/lr column when no per-group columns are present.
+    group_cols = [c for c in train_df.columns if c.startswith("train/lr/")]
+    if group_cols:
+        for col in sorted(group_cols):
+            name = col[len("train/lr/"):]
+            ax.plot(train_df["global_step"], train_df[col], linewidth=1.2, label=name)
+        ax.legend(title="param group", fontsize=8)
+    else:
+        ax.plot(train_df["global_step"], train_df["train/lr"], color="tab:green", linewidth=1.2)
     ax.set_xlabel("global step")
     ax.set_ylabel("learning rate")
     ax.set_title("learning rate schedule")

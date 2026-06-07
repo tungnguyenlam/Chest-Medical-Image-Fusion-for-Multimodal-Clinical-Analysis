@@ -41,7 +41,7 @@ from src.dataloader.utils import (
     load_or_build_channels,
     make_preprocess_config,
 )
-from src.loss.AsymetricLoss import AsymetricLoss
+from src.loss import LOSS_REGISTRY, CompositeLoss
 from src.optimizer import build_adamw_optimizer
 from src.scheduler import build_warmup_cosine_scheduler
 from src.utils.text_embedding_cache import TextEmbeddingCache
@@ -231,6 +231,23 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "so validation runs in the main process and does NOT fork a second worker pool on top of the "
         "persistent train workers — avoids the host-RAM spike (and OOM kill) when mid-epoch validation "
         "fires. Quick-val is only a few batches, so in-process cost is small. Raise it to use val workers.",
+    )
+    parser.add_argument(
+        "--loss",
+        nargs="+",
+        metavar="NAME",
+        help="Loss function(s), overriding model.loss / the default ASL. One name -> that loss "
+        f"(available: {', '.join(sorted(LOSS_REGISTRY))}); several -> their weighted sum, e.g. "
+        "'--loss FC ASL'. Per-loss kwargs come from model.loss_kwargs.<NAME>; ASL also inherits "
+        "model.loss_init_args. Weights: --loss-weights or model.loss_weights (default 1.0 each).",
+    )
+    parser.add_argument(
+        "--loss-weights",
+        nargs="+",
+        type=float,
+        metavar="W",
+        help="Weights for a multi-loss --loss, positionally matched (e.g. '--loss FC ASL "
+        "--loss-weights 1.0 0.5'). Must match the number of losses.",
     )
     parser.add_argument(
         "--ema",
@@ -563,6 +580,49 @@ def classes_from_config(cfg: dict[str, Any]) -> list[str]:
 
 def loss_args_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return dict(cfg["model"]["loss_init_args"])
+
+
+def resolve_loss_names(args: argparse.Namespace, cfg: dict[str, Any] | None) -> list[str]:
+    """Loss names to use: CLI --loss, else model.loss, else the default ['ASL']."""
+    raw = getattr(args, "loss", None)
+    if not raw and cfg is not None:
+        raw = (cfg.get("model", {}) or {}).get("loss")
+    if not raw:
+        return ["ASL"]
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(n).upper() for n in raw]
+
+
+def build_criterion(args: argparse.Namespace, cfg: dict[str, Any] | None, asl_init_args: dict[str, Any]):
+    """Build the training criterion from the loss registry.
+
+    One name -> that loss; several -> a CompositeLoss (weighted sum). Per-loss kwargs come
+    from ``model.loss_kwargs.<NAME>``; ASL additionally inherits the flat
+    ``model.loss_init_args`` (``asl_init_args``) for backward compatibility. Weights come
+    from ``--loss-weights`` (positional) or ``model.loss_weights`` (default 1.0 each).
+    """
+    model_cfg = (cfg.get("model", {}) or {}) if cfg else {}
+    loss_kwargs = model_cfg.get("loss_kwargs", {}) or {}
+    cfg_weights = model_cfg.get("loss_weights", {}) or {}
+    names = resolve_loss_names(args, cfg)
+
+    cli_weights = getattr(args, "loss_weights", None)
+    if cli_weights is not None and len(cli_weights) != len(names):
+        raise ValueError(f"--loss-weights has {len(cli_weights)} values but --loss has {len(names)} losses")
+
+    losses, weights = [], []
+    for i, name in enumerate(names):
+        if name not in LOSS_REGISTRY:
+            raise ValueError(f"unknown loss {name!r}; available: {sorted(LOSS_REGISTRY)}")
+        kwargs = dict(loss_kwargs.get(name, {}) or {})
+        if name == "ASL":
+            kwargs = {**asl_init_args, **kwargs}  # flat loss_init_args is ASL's args
+        losses.append(LOSS_REGISTRY[name](**kwargs))
+        weights.append(float(cli_weights[i]) if cli_weights is not None else float(cfg_weights.get(name, 1.0)))
+
+    print(f"[loss] {names}" + (f" weights={weights}" if len(names) > 1 else ""))
+    return losses[0] if len(losses) == 1 else CompositeLoss(losses, weights, names=names)
 
 
 def lr_from_config(cfg: dict[str, Any], args: argparse.Namespace) -> float:
@@ -1306,7 +1366,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     accelerator = resolve_trainer_arg(args, cfg, "accelerator", None)
     device = select_device(accelerator)
     model.to(device)
-    criterion = AsymetricLoss(**loss_init_args).to(device)
+    criterion = build_criterion(args, cfg, loss_init_args).to(device)
     optimizer = build_adamw_optimizer(model, lr=lr, **optimizer_args_from_config(cfg, args))
     max_epochs = resolve_trainer_arg(args, cfg, "max_epochs", 1000)
     accumulate_grad_batches = resolve_trainer_arg(args, cfg, "accumulate_grad_batches", None) or 1
@@ -1375,6 +1435,17 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     val_csv = logs_dir / "val_epochs.csv"
     quick_val_csv = logs_dir / "val_quick.csv"
 
+    # Per-component LR columns (discriminative LR) and per-loss-component columns
+    # (composite loss). Both collapse to nothing in the common single-LR / single-loss
+    # case, so the CSV schema is unchanged unless those features are in use.
+    lr_group_names: list[str] = []
+    for g in optimizer.param_groups:
+        nm = g.get("name", "base")
+        if nm not in lr_group_names:
+            lr_group_names.append(nm)
+    per_group_lr = len(lr_group_names) > 1
+    loss_term_names: list[str] = list(getattr(criterion, "names", []) or [])
+
     train_fields = [
         "epoch",
         "global_step",
@@ -1385,6 +1456,9 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         "train/grad_norm",
         "train/scaler_scale",
     ]
+    if per_group_lr:
+        train_fields += [f"train/lr/{nm}" for nm in lr_group_names]
+    train_fields += [f"train/loss/{nm}" for nm in loss_term_names]
     val_fields = (
         [
             "epoch",
@@ -1726,7 +1800,8 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             epoch_batches += 1
             running_loss_total += loss_value
             running_batches_total += 1
-            current_lr = float(optimizer.param_groups[0]["lr"])
+            group_lrs = {g.get("name", "base"): float(g["lr"]) for g in optimizer.param_groups}
+            current_lr = group_lrs.get("base", max(group_lrs.values()))
             epoch_loss_avg = epoch_loss / max(1, epoch_batches)
             running_loss_avg = running_loss_total / max(1, running_batches_total)
 
@@ -1750,20 +1825,22 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             )
 
             if stepped and (global_step % log_every_n_steps == 0):
-                append_metric_row(
-                    train_csv,
-                    {
-                        "epoch": epoch,
-                        "global_step": global_step,
-                        "batch_idx": batch_idx,
-                        "train/loss_step": loss_value,
-                        "train/loss_running": running_loss_avg,
-                        "train/lr": current_lr,
-                        "train/grad_norm": last_grad_norm,
-                        "train/scaler_scale": float(scaler.get_scale()) if scaler.is_enabled() else float("nan"),
-                    },
-                    fieldnames=train_fields,
-                )
+                row = {
+                    "epoch": epoch,
+                    "global_step": global_step,
+                    "batch_idx": batch_idx,
+                    "train/loss_step": loss_value,
+                    "train/loss_running": running_loss_avg,
+                    "train/lr": current_lr,
+                    "train/grad_norm": last_grad_norm,
+                    "train/scaler_scale": float(scaler.get_scale()) if scaler.is_enabled() else float("nan"),
+                }
+                if per_group_lr:
+                    row.update({f"train/lr/{nm}": group_lrs.get(nm, float("nan")) for nm in lr_group_names})
+                # Weighted per-loss-component values from the composite loss's last forward.
+                for nm, val in getattr(criterion, "last_terms", {}).items():
+                    row[f"train/loss/{nm}"] = val
+                append_metric_row(train_csv, row, fieldnames=train_fields)
 
             do_full_val = (batch_idx + 1) in full_val_batches
             do_quick_val = (batch_idx + 1) in quick_val_batches or (

@@ -4,16 +4,15 @@ import torch.nn as nn
 from torch.optim import AdamW, Optimizer
 
 
-def _resolve_lr(name: str, param_group_lrs: dict[str, float], base_lr: float) -> float:
-    """LR for parameter ``name``: the value of the longest matching prefix in
-    ``param_group_lrs`` (e.g. ``"text_encoder."`` or ``"image_encoder.frontal_encoder."``),
-    or ``base_lr`` if nothing matches. Longest-prefix wins so a more specific prefix
-    overrides a broader one."""
+def _match_prefix(name: str, param_group_lrs: dict[str, float]) -> str | None:
+    """Longest matching prefix in ``param_group_lrs`` for parameter ``name`` (a more
+    specific prefix like ``"image_encoder.frontal_encoder."`` overrides a broader
+    ``"image_encoder."``), or None if nothing matches."""
     best_prefix: str | None = None
     for prefix in param_group_lrs:
         if name.startswith(prefix) and (best_prefix is None or len(prefix) > len(best_prefix)):
             best_prefix = prefix
-    return base_lr if best_prefix is None else float(param_group_lrs[best_prefix])
+    return best_prefix
 
 
 def build_param_groups(
@@ -34,22 +33,28 @@ def build_param_groups(
     checkpoints stay compatible.
     """
     param_group_lrs = param_group_lrs or {}
-    # Insertion-ordered buckets keyed by (lr, no_decay); named_parameters() order is stable,
-    # so group ordering is deterministic and reproducible across runs/resumes.
-    buckets: dict[tuple[float, bool], list] = {}
+    # Insertion-ordered buckets keyed by (component label, no_decay); named_parameters()
+    # order is stable, so group ordering is deterministic and reproducible. The label is
+    # the matched prefix (or "base" for unmatched params) and is stored as ``name`` on the
+    # group so logging/plotting can show each component's LR separately.
+    buckets: dict[tuple[str, bool], dict] = {}
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        lr = _resolve_lr(name, param_group_lrs, base_lr)
+        prefix = _match_prefix(name, param_group_lrs)
+        label = "base" if prefix is None else prefix
+        lr = base_lr if prefix is None else float(param_group_lrs[prefix])
         no_decay = p.ndim <= 1 or name.endswith(".bias")
-        buckets.setdefault((lr, no_decay), []).append(p)
+        bucket = buckets.setdefault((label, no_decay), {"lr": lr, "params": []})
+        bucket["params"].append(p)
 
     groups: list[dict] = []
-    for (lr, no_decay), params in buckets.items():
+    for (label, no_decay), g in buckets.items():
         groups.append(
             {
-                "params": params,
-                "lr": lr,
+                "params": g["params"],
+                "lr": g["lr"],
+                "name": label,
                 "weight_decay": 0.0 if no_decay else weight_decay,
             }
         )

@@ -163,6 +163,31 @@ Full list: `python training/camchex/camchex_train.py --help`.
   eta_min_factor`), so all groups converge to the *same* floor — the LR ratio holds
   early/mid-training and shrinks toward 1.0 in the tail.
 
+### Loss function
+
+The training criterion is selectable from a registry (`src/loss/__init__.py`,
+`LOSS_REGISTRY`): `ASL` (Asymmetric Loss, default) and `FC` (multi-label sigmoid focal).
+
+- **`--loss FC`** (or `model.loss: FC`) overrides the default ASL with focal.
+- **`--loss FC ASL`** trains on their **weighted sum** (a `CompositeLoss`). Set weights
+  with `--loss-weights 1.0 0.5` (positional) or `model.loss_weights: {FC: 1.0, ASL: 0.5}`
+  — they matter because the losses differ in scale.
+- Per-loss kwargs come from `model.loss_kwargs.<NAME>` (e.g. `FC: {gamma: 2.0, alpha: 0.25}`);
+  `ASL` also inherits the existing flat `model.loss_init_args` for backward compatibility.
+- Default (no flag, no `model.loss`) = `ASL` from `model.loss_init_args` — unchanged.
+
+```yaml
+model:
+  loss: [FC, ASL]            # or a single name; CLI --loss overrides
+  loss_weights: {FC: 1.0, ASL: 0.5}
+  loss_kwargs:
+    FC: {gamma: 2.0, alpha: 0.25}
+  loss_init_args: { ... }    # ASL's class counts (also used when ASL is in the mix)
+```
+
+Add a new loss by registering it in `LOSS_REGISTRY` with the `forward(logits, float_labels)
+-> scalar` convention.
+
 ## Image preprocessing, caching, and flash attention
 
 These behaviors are shared across every training/eval script (wired in
