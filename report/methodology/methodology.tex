@@ -1,4 +1,229 @@
 \section{Methodology}
 \label{sec:methodology}
 
-This is the methodology.
+In this section, we present the methodology for the clinically-aligned multi-modal chest X-ray classification framework, which we refer to as \textbf{CaMCheX}. We detail the formal problem definition, describe the individual modal encoders (image, text, and vitals), outline the token fusion strategies (comparing the spatially expanded V2 and the collapsed single-token V3 architectures), describe the prior-aware temporal modeling extension, and discuss the training objective.
+
+An overview of the system architecture for both the current study and the temporal prior-aware extension is illustrated in Figure~\ref{fig:architecture}.
+
+\begin{figure}[thb]
+    \centering
+    \begin{adjustbox}{width=\textwidth}
+    \begin{tikzpicture}[
+        node distance=0.8cm and 0.4cm,
+        box/.style={draw, rectangle, rounded corners, minimum width=2.4cm, minimum height=1.0cm, align=center, fill=blue!5!white, font=\small},
+        encoder/.style={draw, rectangle, rounded corners, minimum width=2.4cm, minimum height=1.0cm, align=center, fill=orange!10!white, font=\small},
+        fuse/.style={draw, circle, minimum size=0.9cm, fill=green!10!white, font=\small},
+        arrow/.style={-{Latex[scale=0.8]}, thick},
+        group/.style={draw, dashed, inner sep=0.4cm, rounded corners}
+    ]
+        % Current Study Nodes
+        \node (cur_cxr) [box] {Current CXR\\(up to 4 views)};
+        \node (cur_clin) [box, right=of cur_cxr] {Current Clinical\\Indication};
+        \node (cur_vit) [box, right=of cur_clin] {Current Vitals\\(Numeric)};
+
+        \node (img_enc) [encoder, below=of cur_cxr] {ConvNeXt-V2-Nano\\+ Conv2D Proj};
+        \node (text_enc) [encoder, below=of cur_clin] {CXR-BERT\\(CLS Token)};
+        \node (vit_enc) [encoder, below=of cur_vit] {Vitals\\Projector};
+
+        \draw [arrow] (cur_cxr) -- (img_enc);
+        \draw [arrow] (cur_clin) -- (text_enc);
+        \draw [arrow] (cur_vit) -- (vit_enc);
+
+        % Prior Study Nodes (optional temporal branch)
+        \node (prv_lbl) [box, right=of cur_vit, xshift=1.2cm] {Prior Labels\\(26-dim vector)};
+        \node (prv_cxr) [box, right=of prv_lbl] {Prior CXR\\(up to 4 views)};
+        \node (prv_txt) [box, right=of prv_cxr] {Prior Clinical\\Text / Report};
+        \node (prv_vit) [box, right=of prv_txt] {Prior Vitals\\(Numeric)};
+
+        \node (lbl_enc) [encoder, below=of prv_lbl] {Linear\\Projection};
+        \node (prv_img_enc) [encoder, below=of prv_cxr] {ConvNeXt-V2-Nano\\+ Conv2D Proj};
+        \node (prv_text_enc) [encoder, below=of prv_txt] {CXR-BERT\\(CLS Token)};
+        \node (prv_vit_enc) [encoder, below=of prv_vit] {Vitals\\Projector};
+
+        \draw [arrow] (prv_lbl) -- (lbl_enc);
+        \draw [arrow] (prv_cxr) -- (prv_img_enc);
+        \draw [arrow] (prv_txt) -- (prv_text_enc);
+        \draw [arrow] (prv_vit) -- (prv_vit_enc);
+
+        % Segment Embeddings and Time Delta
+        \node (seg_emb) [box, below=of text_enc, yshift=-0.5cm, fill=purple!10!white] {Segment Embeddings\\(Slots 0--13)};
+        \node (time_delta) [box, below=of prv_text_enc, yshift=-0.5cm, fill=yellow!10!white] {Time-Delta Embedding\\(8 buckets)};
+
+        % Sum operations/adding embeddings
+        \node (sum_cur) [fuse, below=of img_enc, yshift=-1.5cm] {\Large +};
+        \node (sum_prv) [fuse, below=of prv_img_enc, yshift=-1.5cm] {\Large +};
+
+        % Connections to addition nodes
+        \draw [arrow] (img_enc) -- (sum_cur);
+        \draw [arrow] (text_enc) -- (sum_cur);
+        \draw [arrow] (vit_enc) -- (sum_cur);
+        \draw [arrow] (seg_emb) -- (sum_cur);
+
+        \draw [arrow] (lbl_enc) -- (sum_prv);
+        \draw [arrow] (prv_img_enc) -- (sum_prv);
+        \draw [arrow] (prv_text_enc) -- (sum_prv);
+        \draw [arrow] (prv_vit_enc) -- (sum_prv);
+        \draw [arrow] (time_delta) -- (sum_prv);
+        \draw [arrow] (seg_emb) -- (sum_prv);
+
+        % Concatenate / Sequence Node
+        \node (concat) [box, below=of sum_cur, xshift=5.2cm, minimum width=9cm, fill=teal!10!white] {Concatenated Token Sequence (V3 Slim / V2 Expanded Layout)};
+        \draw [arrow] (sum_cur) -- (concat);
+        \draw [arrow] (sum_prv) -- (concat);
+
+        % Transformer Encoder
+        \node (trans_enc) [encoder, below=of concat, minimum width=6cm] {2-Layer Transformer Encoder\\(Self-Attention with Key Padding Masking)};
+        \draw [arrow] (concat) -- (trans_enc);
+
+        % Decoder & Output
+        \node (mldec) [encoder, below=of trans_enc, fill=red!5!white] {MLDecoder Head\\(Group-FC Query-Attention)};
+        \node (out) [box, below=of mldec, fill=green!5!white] {26 Multi-label disease logits};
+
+        \draw [arrow] (trans_enc) -- (mldec);
+        \draw [arrow] (mldec) -- (out);
+
+        % Grouping
+        \node [group, fit=(cur_cxr) (cur_vit) (vit_enc), label=above:\textbf{Current Study Modalities}] {};
+        \node [group, fit=(prv_lbl) (prv_vit) (prv_vit_enc), label=above:\textbf{Prior Study Modalities}] {};
+
+    \end{tikzpicture}
+    \end{adjustbox}
+    \caption{Overview of the CaMCheX prior-aware multi-modal fusion architecture. Encoders extract features from current and historical (prior) modalities. Segment and time-delta embeddings are added, and the tokens are fused via self-attention and decoded by MLDecoder for multi-label classification.}
+    \label{fig:architecture}
+\end{figure}
+
+\subsection{Problem Formulation}
+Let $\mathcal{D} = \{(\mathbf{X}_{img}^{(i)}, \mathbf{T}_{clin}^{(i)}, \mathbf{V}^{(i)}, \mathbf{M}^{(i)}, \mathbf{y}^{(i)})\}_{i=1}^N$ be a dataset of $N$ patient admissions. For each sample:
+\begin{itemize}
+    \item $\mathbf{X}_{img} \in \mathbb{R}^{S \times 3 \times H \times W}$ is a sequence of chest X-ray (CXR) images representing up to $S \le 4$ views (frontal, e.g., AP/PA, or lateral, e.g., LL) obtained during the current clinical study.
+    \item $\mathbf{T}_{clin}$ represents the clinical indication/history text gathered from the emergency department (ED) notes.
+    \item $\mathbf{V} \in \mathbb{R}^D$ is a vector of $D = 7$ numeric vital signs (temperature, heart rate, respiratory rate, O2 saturation, systolic blood pressure, diastolic blood pressure, and gender).
+    \item $\mathbf{M} \in \{0, 1\}^D$ is a binary mask where $M_j = 1$ indicates that the $j$-th vital sign is missing, and $0$ indicates it is present.
+    \item $\mathbf{y} \in \{0, 1\}^C$ is the ground-truth multi-label vector for $C = 26$ chest pathological findings.
+\end{itemize}
+Our objective is to train a neural network $f_\theta$ that maps the multi-modal input tuple to a vector of predicted probabilities $\hat{\mathbf{y}} = f_\theta(\mathbf{X}_{img}, \mathbf{T}_{clin}, \mathbf{V}, \mathbf{M}) \in [0, 1]^C$ minimizing a multi-label classification loss.
+
+\subsection{Modality-Specific Encoders}
+
+\subsubsection{Chest X-Ray Image Encoder}
+To encode the sequence of images $\mathbf{X}_{img}$, we utilize a ConvNeXt-V2-Nano backbone. Because different view positions (frontal vs. lateral) exhibit distinct spatial distributions and diagnostic patterns, we employ a view-routing mechanism:
+\begin{equation}
+    \mathbf{F}_{img, s} = \begin{cases} 
+      \text{Encoder}_{frontal}(\mathbf{X}_{img, s}) & \text{if } \text{VP}_s \in \{\text{AP}, \text{PA}, \text{Frontal}\} \\
+      \text{Encoder}_{lateral}(\mathbf{X}_{img, s}) & \text{if } \text{VP}_s \in \{\text{Lateral}, \text{LL}\} \\
+      \mathbf{0} & \text{otherwise}
+   \end{cases}
+\end{equation}
+where $\text{VP}_s$ is the view position of slot $s$. For active views, the raw backbone generates spatial features $\mathbf{F}_{img, s} \in \mathbb{R}^{C_{back} \times h_{back} \times w_{back}}$. To integrate these into our transformer architecture, a projection layer (implemented as a 2D convolution with kernel size 3 and stride 2) projects the channels to the transformer's latent dimension $d_{model} = 768$ while reducing the spatial resolution to a grid size of $8 \times 8$:
+\begin{equation}
+    \mathbf{Z}_{img, s} = \text{Conv2D}(\mathbf{F}_{img, s}) \in \mathbb{R}^{d_{model} \times 8 \times 8}
+\end{equation}
+We add a 2D sinusoidal spatial positional encoding $\mathbf{P}_{2D} \in \mathbb{R}^{d_{model} \times 8 \times 8}$ to preserve spatial structure:
+\begin{equation}
+    \mathbf{\tilde{Z}}_{img, s} = \mathbf{Z}_{img, s} + \mathbf{P}_{2D}
+\end{equation}
+Inactive image slots (e.g., studies with fewer than 4 views) are padded with an all-zero tensor $\mathbf{0}$ and a learnable padding token $\mathbf{t}_{pad} \in \mathbb{R}^{d_{model}}$.
+
+\subsubsection{Clinical Indication Text Encoder}
+The clinical text $\mathbf{T}_{clin}$ contains critical contextual information, such as the primary symptoms or reasons for the exam. We leverage a specialized clinical text encoder, BiomedVLP-CXR-BERT-specialized. The text is first tokenized and padded to a maximum length of 384 tokens. The encoder maps this sequence to a high-dimensional space, and we extract the CLS token representation:
+\begin{equation}
+    \mathbf{h}_{clin} = \text{CXR-BERT}(\mathbf{T}_{clin}) \in \mathbb{R}^{d_{model}}
+\end{equation}
+
+\subsubsection{Vital Signs Encoder}
+To process the vital signs without relying on noisy text translations, we normalize the raw numeric values $\mathbf{V}$ using statistics (mean and standard deviation) computed over the training set:
+\begin{equation}
+    \tilde{V}_j = \frac{V_j - \mu_j}{\sigma_j}
+\end{equation}
+For missing values ($M_j = 1$), we fill $\tilde{V}_j = 0$. The vital signs encoder, \texttt{VitalsTokenProjector}, concatenates the normalized values and the missingness indicator mask to form a feature vector $\mathbf{x}_{vit} = [\mathbf{\tilde{V}}; \mathbf{M}] \in \mathbb{R}^{2D}$. This feature vector is mapped to the embedding space via a Multi-Layer Perceptron (MLP):
+\begin{equation}
+    \mathbf{Z}_{vit} = \text{MLP}(\mathbf{x}_{vit})
+\end{equation}
+where the MLP consists of two linear layers with a GeLU activation and Dropout.
+
+\subsection{Multimodal Fusion \& Token Grid Layouts}
+The outputs of the modality encoders are mapped into a unified sequence of tokens before being fed to a Transformer Encoder. We compare two distinct token layouts, which represent a trade-off between spatial alignment and computational efficiency.
+
+\subsubsection{Spatially Expanded Fusion (CaMCheX V2)}
+In the V2 architecture, we align the text and vitals tokens with the spatial grid of the image features. Since each image view produces a grid of $8 \times 8 = 64$ spatial tokens, the clinical text representation $\mathbf{h}_{clin}$ and the vital signs projection $\mathbf{Z}_{vit}$ are expanded (duplicated) across an identical $8 \times 8$ grid:
+\begin{align}
+    \mathbf{Z'}_{clin} &= \text{Expand}(\mathbf{h}_{clin}) \in \mathbb{R}^{64 \times d_{model}} \\
+    \mathbf{Z'}_{vit} &= \text{MLP}_{v2}(\mathbf{x}_{vit}) \in \mathbb{R}^{64 \times d_{model}}
+\end{align}
+This strategy produces a long token sequence. For a patient with 4 image views, the sequence contains $4 \times 64 = 256$ image tokens, 64 clinical text tokens, and 64 vital signs tokens, resulting in a total sequence length of 384 tokens. While this enables pixel-to-token cross-attention alignment, it incurs significant quadratic self-attention cost.
+
+\subsubsection{Slim Single-Token Fusion (CaMCheX V3)}
+To address the computational bottleneck and evaluate whether spatial expansion carries diagnostic signals, the V3 architecture collapses each non-image modality into a single token:
+\begin{align}
+    \mathbf{Z'}_{clin} &= \mathbf{h}_{clin} \in \mathbb{R}^{1 \times d_{model}} \\
+    \mathbf{Z'}_{vit} &= \text{MLP}_{v3}(\mathbf{x}_{vit}) \in \mathbb{R}^{1 \times d_{model}}
+\end{align}
+For 4 image views, the sequence length drops from 384 to $256 + 1 + 1 = 258$ tokens. This represents a 33\% reduction in token length, drastically accelerating training and inference.
+
+\subsubsection{Segment Embeddings \& Transformer Fusion}
+To distinguish between tokens originating from different modalities and image slots, we add learnable segment embeddings $\mathbf{S} \in \mathbb{R}^{6 \times d_{model}}$ to the sequence:
+\begin{equation}
+    \mathbf{e}_k = \mathbf{z}_k + \mathbf{s}_{\text{seg}(k)}
+\end{equation}
+where $\text{seg}(k) \in \{0, 1, 2, 3\}$ corresponds to image view slots, $4$ denotes the clinical indication token, and $5$ represents the vital signs token.
+The combined token sequence is fed to a 2-layer Transformer Encoder with 8 attention heads. An attention key padding mask is applied to zero out attention weights for padded image views and missing vital signs:
+\begin{equation}
+    \mathbf{H} = \text{TransformerEncoder}(\mathbf{E}, \text{Mask})
+\end{equation}
+
+\subsection{Prior-Aware Temporal Modeling Extension}
+Clinical diagnosis is inherently comparative; clinicians regularly review historical (prior) chest X-rays and clinical reports to determine disease progression. To emulate this clinical workflow, we extend CaMCheX to a prior-aware architecture.
+
+\subsubsection{Inputs \& Information Leakage Prevention}
+For patients with a previous study, we retrieve the prior images $\mathbf{X}_{prv}$, prior clinical history $\mathbf{T}_{prv}$, and prior vital signs $\mathbf{V}_{prv}$. Crucially, we also incorporate the prior radiology report $\mathbf{T}_{report}$ and the prior label vector $\mathbf{y}_{prv} \in \mathbb{R}^C$ derived from the prior report. Although the current report cannot be used during current classification as it contains ground-truth labels (representing label leakage), the prior study's report and labels represent legitimate historical context.
+
+\subsubsection{Prior Token Layout and Embedding Projection}
+We project the prior multi-label vector $\mathbf{y}_{prv}$ into the embedding space using a linear layer:
+\begin{equation}
+    \mathbf{Z}_{prv\_label} = \mathbf{W}_{label} \mathbf{y}_{prv} \in \mathbb{R}^{d_{model}}
+\end{equation}
+The prior report $\mathbf{T}_{report}$ is encoded using the same text encoder to obtain a single CLS token $\mathbf{h}_{prv\_report} \in \mathbb{R}^{d_{model}}$. In the V3 configuration, the complete sequence of tokens for a sample with a prior exam is structured as:
+\begin{equation}
+    \mathbf{E} = [\mathbf{E}_{cur\_img}, \mathbf{e}_{cur\_clin}, \mathbf{e}_{cur\_vit}, \mathbf{E}_{prv\_img}, \mathbf{e}_{prv\_clin}, \mathbf{e}_{prv\_vit}, \mathbf{e}_{prv\_report}, \mathbf{e}_{prv\_label}]
+\end{equation}
+Segment embeddings are expanded to 14 slots: 0--3 for current image views, 4--5 for current clinical/vitals, 6--9 for prior image views, and 10--13 for prior clinical, vitals, labels, and report tokens respectively.
+
+\subsubsection{Time-Delta Bucketing}
+The diagnostic relevance of a prior study decays as the time gap $\Delta t$ (in days) increases. To allow the transformer to incorporate temporal decay, we discretize $\Delta t$ into 8 buckets:
+\begin{equation}
+    \text{Bucket}(\Delta t) = \begin{cases}
+        0 & \text{if prior is absent / unknown} \\
+        1 & \text{if } \Delta t \le 1 \\
+        2 & \text{if } 1 < \Delta t \le 7 \\
+        3 & \text{if } 7 < \Delta t \le 30 \\
+        4 & \text{if } 30 < \Delta t \le 180 \\
+        5 & \text{if } 180 < \Delta t \le 365 \\
+        6 & \text{if } 365 < \Delta t \le 1095 \\
+        7 & \text{if } \Delta t > 1095
+    \end{cases}
+\end{equation}
+A learned time-delta embedding vector $\mathbf{E}_{\Delta} \in \mathbb{R}^{d_{model}}$ is retrieved based on the bucket and added directly to every token in the prior study block.
+
+\subsubsection{Stochastic Prior Dropout}
+To ensure that the prior-aware model remains robust when patients have no prior clinical history, we apply stochastic prior dropout during training. With a probability $p_{dropout} = 0.2$, the entire prior block is masked out by setting the corresponding key padding mask values to True, forcing the model to rely solely on the current study features.
+
+\subsection{Classification Head \& Loss Functions}
+
+\subsubsection{Multi-Label Decoder (MLDecoder)}
+Instead of standard pooling followed by a linear layer, we use MLDecoder to decode the transformer representation. MLDecoder constructs a set of learnable query embeddings $\mathbf{Q} \in \mathbb{R}^{K \times d_{model}}$ (where $K < C$ is the number of groups, typically 100). These queries undergo cross-attention with the final transformer tokens:
+\begin{equation}
+    \mathbf{H}_{dec} = \text{CrossAttention}(\mathbf{Q}, \mathbf{H})
+\end{equation}
+A group fully-connected layer maps the queried features to the 26 target logits, reducing computation and parameter count compared to traditional query-based decoders like query-attention.
+
+\subsubsection{Asymmetric Loss (ASL)}
+To combat severe class imbalance across the 26 labels, we optimize the model using Asymmetric Loss (ASL). ASL dynamically down-weights easy negative examples by applying asymmetric focusing parameters $\gamma_{pos}$ and $\gamma_{neg}$, and shifts negative probabilities with a margin $m$:
+\begin{equation}
+    L_{ASL} = -\frac{1}{C}\sum_{c=1}^C \left[ y_c w_c^{pos} (1-p_c)^{\gamma_{pos}}\log(p_c) + (1-y_c)w_c^{neg}(p_c^{m})^{\gamma_{neg}}\log(1-p_c^{m}) \right]
+\end{equation}
+where $p_c = \sigma(\hat{y}_c)$, $p_c^m = \text{clamp}(1 - p_c + m, 0, 1)$, and $w_c^{pos}, w_c^{neg}$ are inverse frequency weights:
+\begin{align}
+    w_c^{pos} &= \exp(1 - q_c) \\
+    w_c^{neg} &= \exp(q_c)
+\end{align}
+where $q_c$ is the proportion of positive instances for class $c$.

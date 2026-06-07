@@ -40,6 +40,8 @@ N_SEGMENTS = 14
 
 
 class PriorAwareCaMCheXModel(nn.Module):
+    gradcam_runner_module = "src.interpret.run_prior_gradcam"
+
     def __init__(
         self,
         timm_init_args: dict,

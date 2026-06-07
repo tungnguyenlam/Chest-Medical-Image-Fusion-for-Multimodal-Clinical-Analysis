@@ -59,8 +59,17 @@ def _header(result: AttributionResult) -> str:
 # image: one row per view -> original | Grad-CAM overlay
 # --------------------------------------------------------------------------- #
 def render_images(result: AttributionResult, out_path: str | Path) -> Path:
+    return _render_image_rows(result.views or [], _header(result), out_path)
+
+
+def _render_image_rows(views: list, header: str, out_path: str | Path,
+                       empty_msg: str = "(no images)") -> Path:
+    """One row per view: original (or per-channel planes) | Grad-CAM overlay.
+
+    Factored out of ``render_images`` so the prior branch can render its own
+    image panel with a different header without duplicating the layout logic.
+    """
     out_path = Path(out_path)
-    views = result.views or []
     n = max(1, len(views))
     total = sum(v.contribution for v in views) + 1e-8
 
@@ -73,12 +82,12 @@ def render_images(result: AttributionResult, out_path: str | Path) -> Path:
     ncols = n_chan + 1 if n_chan else 2
 
     fig, axes = plt.subplots(n, ncols, figsize=(4.2 * ncols, 4.2 * n), squeeze=False)
-    fig.suptitle(_header(result), fontsize=13, fontweight="bold")
+    fig.suptitle(header, fontsize=13, fontweight="bold")
 
     if not views:
         for ax in axes.ravel():
             ax.axis("off")
-        axes[0, 0].text(0.5, 0.5, "(no images)", ha="center", va="center")
+        axes[0, 0].text(0.5, 0.5, empty_msg, ha="center", va="center")
 
     for row, v in enumerate(views):
         name = VIEW_NAMES.get(v.view_position, "?")
@@ -122,10 +131,20 @@ def render_text(result: AttributionResult, out_path: str | Path, tokens_per_row:
     line); chips themselves are placed by their measured width so short words sit
     close together instead of each occupying an equal-width column.
     """
-    out_path = Path(out_path)
-    tokens = [t.replace("##", "") for t in (result.tokens or [])]
-    scores = result.token_scores
     title = f"{result.class_name} — clinical indication (grad × embedding)"
+    return _render_token_chips(result.tokens, result.token_scores, title, out_path,
+                               tokens_per_row=tokens_per_row, empty_msg="(no text)")
+
+
+def _render_token_chips(raw_tokens, scores, title: str, out_path: str | Path,
+                        tokens_per_row: int = 10, empty_msg: str = "(no text)") -> Path:
+    """Token chips coloured by signed score, packed left-to-right then wrapped.
+
+    Factored out of ``render_text`` so the prior clinical / prior report panels
+    reuse the exact same packing + colour mapping with their own title.
+    """
+    out_path = Path(out_path)
+    tokens = [t.replace("##", "") for t in (raw_tokens or [])]
     fig_w = 1.0 * tokens_per_row + 1.0
     fontsize = 13
 
@@ -133,7 +152,7 @@ def render_text(result: AttributionResult, out_path: str | Path, tokens_per_row:
         fig, ax = plt.subplots(figsize=(fig_w, 1.8))
         ax.axis("off")
         ax.set_title(title, fontsize=12, loc="left")
-        ax.text(0.5, 0.5, "(no text)", ha="center", va="center", transform=ax.transAxes)
+        ax.text(0.5, 0.5, empty_msg, ha="center", va="center", transform=ax.transAxes)
         fig.savefig(out_path, dpi=140, bbox_inches="tight")
         plt.close(fig)
         return out_path
@@ -196,10 +215,21 @@ def render_text(result: AttributionResult, out_path: str | Path, tokens_per_row:
 # vitals: signed grad x value + modality share
 # --------------------------------------------------------------------------- #
 def render_vitals(result: AttributionResult, out_path: str | Path) -> Path:
+    title = f"{result.class_name} — vitals (grad × value, red = toward class)"
+    return _render_vitals_barh(
+        result.vital_names, result.vital_scores, result.vital_display,
+        result.vital_missing, title, out_path,
+    )
+
+
+def _render_vitals_barh(names, scores, displays, missing, title: str, out_path: str | Path) -> Path:
+    """Signed horizontal bar of grad × value per vital, name + value on each tick.
+
+    Factored out of ``render_vitals`` so the prior-branch vitals panel reuses it.
+    """
     out_path = Path(out_path)
     fig, ax = plt.subplots(figsize=(9, 4.6))
 
-    names, scores = result.vital_names, result.vital_scores
     y = np.arange(len(names))
     colors = ["#d62728" if s >= 0 else "#1f77b4" for s in scores]
     ax.barh(y, scores, color=colors)
@@ -208,16 +238,16 @@ def render_vitals(result: AttributionResult, out_path: str | Path) -> Path:
     ax.set_yticks(y)
     labels = ax.set_yticklabels(
         [f"{n}\n{d}{'  (missing)' if m else ''}"
-         for n, d, m in zip(names, result.vital_display, result.vital_missing)]
+         for n, d, m in zip(names, displays, missing)]
     )
-    for lbl, miss in zip(labels, result.vital_missing):
+    for lbl, miss in zip(labels, missing):
         lbl.set_fontsize(9)
         if miss:
             lbl.set_color("gray")
 
     ax.invert_yaxis()
     ax.axvline(0, color="k", lw=0.8)
-    ax.set_title(f"{result.class_name} — vitals (grad × value, red = toward class)", fontsize=12, loc="left")
+    ax.set_title(title, fontsize=12, loc="left")
     ax.set_xlabel("signed grad × value")
     ax.margins(x=0.1)
 
@@ -308,5 +338,158 @@ def render_attribution(result: AttributionResult, out_path: str | Path, tokens_p
     ax2.set_ylim(0, 100); ax2.set_title("Modality share (heuristic)", fontsize=11, loc="left")
 
     fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+    return out_path
+
+
+# --------------------------------------------------------------------------- #
+# prior-aware models: current panels (reused) + prior-branch panels
+# --------------------------------------------------------------------------- #
+def _prior_header(result) -> str:
+    from src.interpret.prior_attribution import DELTA_BUCKET_NAMES
+
+    label = "n/a" if result.label is None else str(int(result.label))
+    head = (
+        f"{result.class_name}   |   study={result.study_id}   |   "
+        f"p={result.prob:.3f}   |   logit={result.logit:+.2f}   |   true={label}"
+    )
+    if result.has_prior:
+        bucket = DELTA_BUCKET_NAMES.get(result.delta_bucket, "?")
+        head += f"\nprior: yes  |  Δt={result.days_since_prior:.0f}d ({bucket})"
+    else:
+        head += "\nprior: none (prior tokens masked out)"
+    others = [c for c in result.true_labels if c != result.class_name]
+    if others:
+        head += f"\nalso positive: {', '.join(others)}"
+    return head
+
+
+def render_prior_attribution_split(result, out_dir: str | Path, tokens_per_row: int = 10) -> list[Path]:
+    """Write the full per-class panel set for a prior-aware model.
+
+    Current-branch panels reuse the single-study renderers; prior-branch panels
+    (image / clinical / report / label / time-delta) get their own files. ``modality``
+    shows the current-vs-prior contribution breakdown across all token groups.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    header = _prior_header(result)
+    paths = [
+        _render_image_rows(result.cur_views, header, out_dir / "image.png"),
+        _render_image_rows(result.prv_views, header, out_dir / "prior_image.png",
+                           empty_msg="(no prior study)"),
+        render_prior_modality(result, out_dir / "modality.png"),
+        render_time_delta(result, out_dir / "time_delta.png"),
+        render_prior_label(result, out_dir / "prior_label.png"),
+    ]
+    # text streams: one PNG per stream, named by its key (current_*/prior_*).
+    for st in result.cur_texts + result.prv_texts:
+        name = "text.png" if st.key == "cur_clin" else f"{st.key}.png"
+        paths.append(_render_token_chips(st.tokens, st.scores, st.title, out_dir / name,
+                                         tokens_per_row=tokens_per_row, empty_msg="(no text)"))
+    # vitals (Nano variants only; the base model uses obs text streams instead).
+    if result.has_vitals:
+        paths.append(_render_vitals_barh(
+            result.cur_vital_names, result.cur_vital_scores, result.cur_vital_display,
+            result.cur_vital_missing, f"{result.class_name} — current vitals (grad × value)",
+            out_dir / "vitals.png"))
+        paths.append(_render_vitals_barh(
+            result.cur_vital_names, result.prv_vital_scores, result.prv_vital_display,
+            result.prv_vital_missing, f"{result.class_name} — prior vitals (grad × value)",
+            out_dir / "prior_vitals.png"))
+    return paths
+
+
+def render_prior_label(result, out_path: str | Path) -> Path:
+    """Per-class grad × value over the prior study's 26-dim CheXpert label vector.
+
+    This answers 'which findings in the prior study drove the current prediction?' —
+    a signal unique to the prior-aware models (the Linear(26→768) prior-label token)."""
+    out_path = Path(out_path)
+    names = list(result.class_names) or [str(i) for i in range(len(result.prior_label_scores))]
+    scores = np.asarray(result.prior_label_scores, dtype=float)
+    values = np.asarray(result.prior_label_values, dtype=float)
+
+    fig, ax = plt.subplots(figsize=(8.5, max(4.5, 0.32 * len(names))))
+    y = np.arange(len(names))
+    colors = ["#d62728" if s >= 0 else "#1f77b4" for s in scores]
+    ax.barh(y, scores, color=colors)
+    ax.set_yticks(y)
+    # bold the labels that were actually positive in the prior study.
+    labels = ax.set_yticklabels(names)
+    for lbl, on in zip(labels, values):
+        lbl.set_fontsize(8)
+        if on >= 0.5:
+            lbl.set_fontweight("bold")
+            lbl.set_color("#b22222")
+    ax.invert_yaxis()
+    ax.axvline(0, color="k", lw=0.8)
+    ax.margins(x=0.1)
+    title = f"{result.class_name} — prior label token (grad × value)"
+    if not result.has_prior:
+        title += "  [no prior — masked]"
+    ax.set_title(title, fontsize=12, loc="left")
+    ax.set_xlabel("signed grad × value   (red bars push toward class)")
+    fig.text(0.5, 0.005, "Bold/red ticks = findings positive in the PRIOR study.",
+             ha="center", fontsize=8, color="0.45")
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    return out_path
+
+
+def render_time_delta(result, out_path: str | Path) -> Path:
+    """The time-delta bucket token: its signed grad × embedding and magnitude."""
+    from src.interpret.prior_attribution import DELTA_BUCKET_NAMES
+
+    out_path = Path(out_path)
+    fig, ax = plt.subplots(figsize=(6.0, 3.2))
+    bucket = DELTA_BUCKET_NAMES.get(result.delta_bucket, "?")
+    color = "#d62728" if result.delta_score >= 0 else "#1f77b4"
+    ax.bar(["time-delta token"], [result.delta_score], color=color, width=0.5)
+    ax.axhline(0, color="k", lw=0.8)
+    ax.set_ylabel("signed grad × embedding")
+    sub = (f"bucket {result.delta_bucket} ({bucket}) | Δt={result.days_since_prior:.0f}d | "
+           f"|grad×emb|={result.delta_mag:.3g}")
+    if not result.has_prior:
+        sub = "no prior study — delta bucket 0 (masked)"
+    ax.set_title(f"{result.class_name} — time gap to prior\n{sub}", fontsize=11, loc="left")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    return out_path
+
+
+def render_prior_modality(result, out_path: str | Path) -> Path:
+    """Current-vs-prior contribution breakdown across every token group (heuristic)."""
+    out_path = Path(out_path)
+    mc = result.modality_contrib
+    keys = ["cur_image", "cur_clin", "cur_vitals",
+            "prv_image", "prv_clin", "prv_report", "prv_vitals", "prv_label", "time_delta"]
+    labels = ["cur img", "cur clin", "cur vit/obs",
+              "prv img", "prv clin", "prv report", "prv vit/obs", "prv label", "Δt"]
+    vals = [100.0 * mc.get(k, 0.0) for k in keys]
+    # current group greens/purples, prior group warm — visually split the two branches.
+    colors = ["#2ca02c", "#9467bd", "#ff7f0e",
+              "#1f9e89", "#7b68ee", "#ff9896", "#ffbb78", "#8c564b", "#c7c7c7"]
+
+    fig, ax = plt.subplots(figsize=(10, 4.8))
+    ax.bar(labels, vals, color=colors)
+    ax.set_ylim(0, max(110, max(vals) + 10))
+    ax.set_ylabel("% of |grad × input|")
+    ax.set_title(f"{result.class_name} — current vs prior contribution (heuristic)", fontsize=12, loc="left")
+    cur_share = sum(mc.get(k, 0.0) for k in ("cur_image", "cur_clin", "cur_vitals"))
+    ax.axvline(2.5, color="0.6", ls="--", lw=1.0)
+    ax.text(1.0, ax.get_ylim()[1] * 0.93, f"current {100*cur_share:.0f}%", ha="center", fontsize=10, color="0.3")
+    ax.text(5.5, ax.get_ylim()[1] * 0.93, f"prior {100*(1-cur_share):.0f}%", ha="center", fontsize=10, color="0.3")
+    for i, val in enumerate(vals):
+        if val > 0.5:
+            ax.text(i, val + 1.5, f"{val:.0f}", ha="center", fontsize=9)
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=9)
+    fig.text(0.5, 0.005,
+             "Rough share of total |grad × input| at each token group's native input — comparable-ish, not exact.",
+             ha="center", fontsize=8, color="0.45")
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    fig.savefig(out_path, dpi=140)
     plt.close(fig)
     return out_path

@@ -1,4 +1,5 @@
 model:
+  arch: prior_aware_v2nano
   lr: 3.0e-5
   classes: &classes
     - Atelectasis

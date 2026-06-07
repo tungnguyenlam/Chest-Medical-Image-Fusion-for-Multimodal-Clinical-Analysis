@@ -83,19 +83,7 @@ class CaMCheXAttributor:
         self.vital_fields = list(vital_fields)
         self.vital_stats = vital_stats
 
-        # De-normalization must mirror the training transform. With channel_mode set
-        # the dataset used A.Normalize(CHANNEL_STATS[mode], max_pixel_value=1.0); the
-        # legacy RGB path used ImageNet stats. Same inverse formula, different stats.
-        self.channel_mode = channel_mode
-        if channel_mode:
-            stats = CHANNEL_STATS[channel_mode]
-            self._denorm_mean = np.asarray(stats["mean"], dtype=np.float32)
-            self._denorm_std = np.asarray(stats["std"], dtype=np.float32)
-            self._channel_names = list(CHANNEL_MODES[channel_mode])
-        else:
-            self._denorm_mean = IMAGENET_MEAN
-            self._denorm_std = IMAGENET_STD
-            self._channel_names = None
+        self._init_denorm(channel_mode)
 
         enc = model.image_encoder
         self._modules = {
@@ -109,6 +97,24 @@ class CaMCheXAttributor:
             module.register_forward_hook(self._make_hook(name))
             for name, module in self._modules.items()
         ]
+
+    def _init_denorm(self, channel_mode):
+        """Set up the inverse of the training normalization for display.
+
+        With channel_mode set the dataset used A.Normalize(CHANNEL_STATS[mode],
+        max_pixel_value=1.0); the legacy RGB path used ImageNet stats. Same inverse
+        formula, different stats. Shared with PriorAwareAttributor.
+        """
+        self.channel_mode = channel_mode
+        if channel_mode:
+            stats = CHANNEL_STATS[channel_mode]
+            self._denorm_mean = np.asarray(stats["mean"], dtype=np.float32)
+            self._denorm_std = np.asarray(stats["std"], dtype=np.float32)
+            self._channel_names = list(CHANNEL_MODES[channel_mode])
+        else:
+            self._denorm_mean = IMAGENET_MEAN
+            self._denorm_std = IMAGENET_STD
+            self._channel_names = None
 
     # -- hook plumbing ---------------------------------------------------------
     def _make_hook(self, name):

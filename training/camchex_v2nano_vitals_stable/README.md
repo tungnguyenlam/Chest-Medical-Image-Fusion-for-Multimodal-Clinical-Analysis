@@ -1,5 +1,20 @@
 # camchex_v2nano_vitals_stable
 
+## Quick start
+
+```bash
+# train (single-cosine + EMA tail; CXR-BERT frozen via the text-embedding cache)
+python training/camchex_v2nano_vitals_stable/camchex_v2nano_vitals_stable_train.py \
+  --use-precomputed-text-embeddings --ema --batch-size 4 --num-workers 4
+
+# eval (two passes: full vs. clinical-indication dropped -> *.no_report.{csv,json})
+python training/camchex_v2nano_vitals_stable/camchex_v2nano_vitals_stable_eval.py \
+  --checkpoint-path <ckpt> --use-precomputed-text-embeddings
+```
+
+Tune `--batch-size` / `--num-workers` to your GPU; leave `val_num_workers` at 0. Don't
+`--resume-from` an EMA checkpoint.
+
 Stable fine-tuning-tail variant of [`camchex_v2nano_vitals`](../camchex_v2nano_vitals/).
 **Same model** (`CaMCheXV2NanoVitalsModel`) — this directory differs only in the
 **learning-rate schedule** and **weight averaging**. It exists to push the converged

@@ -52,6 +52,8 @@ N_SEGMENTS = 14
 class PriorAwareV3NanoModel(nn.Module):
     """Prior-aware CaMCheX variant: v2nano backbone/vitals, single-token fusion."""
 
+    gradcam_runner_module = "src.interpret.run_prior_gradcam"
+
     def __init__(
         self,
         timm_init_args: dict,

@@ -1,5 +1,20 @@
 # CaMCheX ConvNeXtV2 Nano + Numeric Vitals
 
+## Quick start
+
+```bash
+# train (CXR-BERT frozen via the shared text-embedding cache; EMA + single-cosine)
+python training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py \
+  --use-precomputed-text-embeddings --ema --batch-size 4 --num-workers 4
+
+# eval (two passes: full vs. clinical-indication dropped -> *.no_report.{csv,json})
+python training/camchex_v2nano_vitals/camchex_v2nano_vitals_eval.py \
+  --checkpoint-path <ckpt> --use-precomputed-text-embeddings
+```
+
+Tune `--batch-size` / `--num-workers` to your GPU; leave `val_num_workers` at 0. Don't
+`--resume-from` an EMA checkpoint.
+
 This is an additive CaMCheX variant. It does not change the legacy
 `CaMCheXModel`, `CaMCheXDataset`, or existing `training/camchex*` entrypoints.
 

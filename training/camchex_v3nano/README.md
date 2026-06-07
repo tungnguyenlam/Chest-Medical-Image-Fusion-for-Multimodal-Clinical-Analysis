@@ -1,5 +1,20 @@
 # CaMCheX v3 Nano
 
+## Quick start
+
+```bash
+# train (single-token clinical + vitals; CXR-BERT frozen via the text-embedding cache)
+python training/camchex_v3nano/camchex_v3nano_train.py \
+  --use-precomputed-text-embeddings --ema --batch-size 4 --num-workers 4
+
+# eval (two passes: full vs. clinical-indication dropped -> *.no_report.{csv,json})
+python training/camchex_v3nano/camchex_v3nano_eval.py \
+  --checkpoint-path <ckpt> --use-precomputed-text-embeddings
+```
+
+Tune `--batch-size` / `--num-workers` to your GPU; leave `val_num_workers` at 0. Don't
+`--resume-from` an EMA checkpoint.
+
 This variant keeps the `camchex_v2nano_vitals` image backbone, CXR-BERT clinical
 encoder, numeric-vitals dataset, optimizer/training defaults, and ML-Decoder
 head, but removes the repeated non-image fusion blocks.

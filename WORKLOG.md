@@ -1780,6 +1780,11 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 
 **Not checkpoint-compatible** with v2nano (`vitals_projector.proj` last layer `1·768` vs `64·768`; text tokens not grid-expanded). Train fresh after rebuilding the parquet.
 
+### Addendum — shape-tolerant warm-start + per-model quick-start docs
+
+- **Warm-start loader.** [load_model_state / load_weights](training/common.py) gained `allow_shape_mismatch` (default False). `load_state_dict(strict=False)` ignores missing/extra keys but still *raises* on shape mismatch, which blocked warm-starting `prior_aware_v3nano` from `camchex_v3nano` (`segment_embedding` 6→14). With the flag, mismatched keys are dropped (kept at fresh init) and the rest load; it logs `[warm-start] transferred N/M`. Wired ON only for the train-time weights-only-init path (`--checkpoint-path`); eval and `--resume-from` stay strict so real shape errors still surface. Verified: strict still raises; warm-start transfers **577/581** camchex_v3nano→prior_aware_v3nano tensors (fresh: `segment_embedding`, `delta_embedding`, `prior_label_proj.{weight,bias}`).
+- **Docs.** Added a copy-paste `## Quick start` (train + two-pass eval, batch/worker tuning note, EMA/`val_num_workers` caveats) to every model README, and created the four that were missing: `training/camchex/`, `training/camchex_cxrbert/`, `training/singleview/`, `training/prior_aware_cxrbert/`.
+
 ## 2026-06-08 — modular subfolder-based LaTeX report setup
 
 **Goal.** Set up the LaTeX report directory structure where each section is housed in its own subfolder.
@@ -1797,3 +1802,17 @@ cv2 fallback is worth keeping because jpeg4py uses libjpeg-turbo's strict decode
 **Reasoning.** Using a modular directory structure is standard practice for large LaTeX projects, as it prevents `main.tex` from becoming bloated and makes it easier for multiple authors/sessions to edit individual sections without merge conflicts. We chose `\input` rather than `\subfile` or `\include` because `\input` behaves as direct substitution and avoids complex path compilation dependencies across different LaTeX compilers and configurations.
 
 **Gotchas.** In the previous `main.tex`, the section headings and bibliography were placed below `\end{CJK*}` and `\end{document}`, which prevented them from compiling. Moving them inside the CJK and document environments fixed the build. Compiled `main.tex` twice with `pdflatex` to generate and populate the table of contents (`main.toc`).
+
+## 2026-06-08 — complete methodology section and fix LaTeX compilation
+
+**Goal.** Complete and compile the detailed methodology section of the report, including the TikZ system architecture diagram, math equations, and formatting.
+
+**Changes.**
+- `report/main.tex:38` — Added the `fit` TikZ library to `\usetikzlibrary` to support the architecture diagram box containment styling.
+- `report/methodology/methodology.tex:210` — Fixed LaTeX compilation error by escaping the ampersand character (`&` to `\&`) in the subsection title "Classification Head \& Loss Functions".
+
+**Reasoning.**
+The methodology section describes the entire CaMCheX framework, including ConvNeXt-V2-Nano view-routing encoders, CXR-BERT text encoders, numeric vitals projection, V2/V3 fusion layouts, prior-aware extensions (with time-delta bucketing, prior reports, prior labels, and stochastic dropout), MLDecoder, and Asymmetric Loss. To visually guide the methodology description, a custom TikZ diagram was integrated, requiring the `fit` library and clean compilation configuration. Escaping `&` resolves standard LaTeX syntax errors.
+
+**Verification.**
+Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to resolve all references, outputting a fully compiled 14-page document `main.pdf`.
