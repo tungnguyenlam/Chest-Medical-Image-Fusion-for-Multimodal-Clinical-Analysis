@@ -131,6 +131,38 @@ python training/camchex/camchex_train.py \
 
 Full list: `python training/camchex/camchex_train.py --help`.
 
+### LR schedule and weight averaging (EMA)
+
+- **`model.scheduler_init_args.schedule`** selects the cosine shape:
+  `warm_restarts` (default — per-epoch SGDR sawtooth, faithful to the original
+  CaMCheX code; **keep the best checkpoint, the converged tail can collapse on a
+  restart**) or `single_cosine` (one monotone decay over the whole run, no restarts —
+  recommended for a stable fine-tuning tail).
+- **`--ema` / `--no-ema`** (or `trainer.ema`, default **off**) keeps an exponential
+  moving average of the weights and uses it as the *evaluated and saved* model;
+  `--ema-decay` (default `0.999`) controls the smoothing. Best paired with
+  `single_cosine`. Note: EMA checkpoints are eval-ready but not meant for
+  `--resume-from` (use `--checkpoint-path` for weights-only warm-start). Switching
+  `schedule` between a checkpoint and a `--resume-from` is blocked for the same reason.
+- **Discriminative (per-component) LR** — `model.optimizer_init_args.param_group_lrs`
+  maps a parameter-name *prefix* to its own LR; unmatched params use the base `lr`
+  (longest prefix wins). Default empty → **all components share one LR** (unchanged
+  behavior, 2 param groups, checkpoint-compatible). Example: give a pretrained text
+  encoder a smaller LR while the rest trains faster:
+
+  ```yaml
+  model:
+    lr: 3.0e-5
+    optimizer_init_args:
+      param_group_lrs:
+        "text_encoder.": 1.0e-5   # prefixes match model.named_parameters()
+  ```
+
+  Per-group LRs compose with the schedules (each group is scaled relative to its own
+  initial LR). Caveat: the cosine `eta_min` is a single scalar (`base_lr *
+  eta_min_factor`), so all groups converge to the *same* floor — the LR ratio holds
+  early/mid-training and shrinks toward 1.0 in the tail.
+
 ## Image preprocessing, caching, and flash attention
 
 These behaviors are shared across every training/eval script (wired in

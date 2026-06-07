@@ -261,6 +261,25 @@ python training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py \
 CXR-BERT still needs to be available from Hugging Face or local cache on the
 first run that misses the shared text embedding cache.
 
+### Learning-rate schedule (and a known tail-collapse caveat)
+
+The LR schedule is selected by `model.scheduler_init_args.schedule`:
+
+- **`warm_restarts`** (default here, faithful to the original CaMCheX code):
+  `CosineAnnealingWarmRestarts(T_0=steps_per_epoch)` — the LR sweeps `lr → eta_min`
+  and **restarts to `lr` every epoch** (a per-epoch sawtooth). Once the model has
+  converged, the full-amplitude restart at an epoch boundary can kick it out of the
+  good basin into an equal-loss but worse-AP minimum (val_ap collapses while ASL
+  stays flat, because ASL is dominated by easy negatives). **Keep the best
+  checkpoint, not the last.** This is the expected SGDR behaviour, not a bug.
+- **`single_cosine`**: one `CosineAnnealingLR` over the whole run — a single monotone
+  decay with no restarts, so the model settles in the tail. Recommended for a stable
+  fine-tuning tail.
+
+For a stable single-cosine tail **with weight averaging (EMA)**, use the sibling
+variant [`camchex_v2nano_vitals_stable`](../camchex_v2nano_vitals_stable/) — same
+model, warm-started from this baseline's best checkpoint.
+
 ### Optional torch.compile
 
 Set `trainer.compile_model: true` (or pass `--compile-model`) to compile the
