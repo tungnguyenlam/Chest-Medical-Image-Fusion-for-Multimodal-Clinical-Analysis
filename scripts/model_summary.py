@@ -39,6 +39,7 @@ DEFAULT_CONFIGS = {
     "prior_aware": "training/prior_aware/config.yaml",
     "prior_aware_cxrbert": "training/prior_aware_cxrbert/config.yaml",
     "prior_aware_v2nano": "training/prior_aware_v2nano/config.yaml",
+    "prior_aware_v3nano": "training/prior_aware_v3nano/config.yaml",
 }
 
 
@@ -163,6 +164,15 @@ def build_model(args: argparse.Namespace, cfg: dict[str, Any]) -> torch.nn.Modul
         from src.model.PriorAwareV2NanoModel import PriorAwareV2NanoModel
 
         return PriorAwareV2NanoModel(
+            timm_init_args=timm_args,
+            text_model=text_model,
+            **init_args,
+        )
+
+    if model_key == "prior_aware_v3nano":
+        from src.model.PriorAwareV3NanoModel import PriorAwareV3NanoModel
+
+        return PriorAwareV3NanoModel(
             timm_init_args=timm_args,
             text_model=text_model,
             **init_args,

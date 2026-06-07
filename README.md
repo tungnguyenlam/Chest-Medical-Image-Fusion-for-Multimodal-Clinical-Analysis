@@ -51,6 +51,8 @@ training/
   camchex_v2nano_vitals/
                      ConvNeXtV2 Nano + CXR-BERT + numeric vitals variant
   prior_aware/       current study + nearest previous study variant
+                     (also: prior_aware_v2nano = Nano backbone + numeric vitals;
+                     prior_aware_v3nano = same, single-token fusion)
   singleview/        train/eval entrypoints for single-view image models
   common.py          plain PyTorch train/eval helpers
 scripts/

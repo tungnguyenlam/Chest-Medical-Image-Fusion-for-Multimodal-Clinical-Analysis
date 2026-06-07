@@ -1,0 +1,127 @@
+model:
+  arch: prior_aware_v3nano
+  lr: 3.0e-5
+  classes: &classes
+    - Atelectasis
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fracture
+    - Hernia
+    - Infiltration
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - No Finding
+    - Nodule
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+  loss_init_args:
+    class_instance_nums:
+      - 67597
+      - 4361
+      - 76900
+      - 16038
+      - 38574
+      - 4255
+      - 30119
+      - 1158
+      - 11883
+      - 4049
+      - 10218
+      - 2533
+      - 79931
+      - 5529
+      - 41869
+      - 7663
+      - 69240
+      - 675
+      - 3369
+      - 788
+      - 48093
+      - 543
+      - 14983
+      - 2453
+      - 89140
+      - 3499
+    total_instance_num: 264849
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 26
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
+    pretrained: true
+    drop_path_rate: 0.0
+  model_init_args:
+    d_model: 768
+    transformer_layers: 2
+    nhead: 8
+    dropout: 0.1
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    schedule: single_cosine  # one cosine decay over the whole run (no per-epoch warm restarts)
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/prior_aware_train.parquet
+    devel_df_path: data/data-camchex/prior_aware_development.parquet
+    pred_df_path: data/data-camchex/prior_aware_test.parquet
+    use_text_embedding_cache: false
+    text_embedding_streams: [clin_text, prior_clin_text, prior_report_text]
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
+    # Shared on-disk cache for built 3-channel images (uint8, keyed by
+    # path+mode+cfg). Reused across models/runs and prebuilt before training.
+    image_channel_cache_dir: ../cache/channels
+    # 3-channel CXR representation: raw + CLAHE + a third channel. Set null (or
+    # pass --channel-mode none) to go back to the plain direct JPEG decode, i.e.
+    # the normal grayscale-duplicated-to-3-channels image.
+    channel_mode: raw_clahe_histeq
+    size: 512
+    classes: *classes
+    label_dropout_p: 0.3
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 2
+  grad_clip: 1.0
+  precision: 16-mixed
+  compile_model: false
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  # Fraction-of-epoch validation schedule (batch-size independent); end-of-epoch full val always runs.
+  full_val_fracs: [0.5]
+  quick_val_fracs: [0.25, 0.75]
+  quick_val_frac: 0.1
+  val_num_workers: 0  # 0 = run val in-process (no 2nd worker pool); raise to use val workers
+  seed: null
+  accelerator: null
