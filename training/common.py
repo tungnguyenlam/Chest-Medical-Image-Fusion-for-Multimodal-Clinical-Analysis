@@ -2331,7 +2331,12 @@ def select_device(requested: str | None = None) -> torch.device:
 
 def move_to_device(value, device: torch.device):
     if torch.is_tensor(value):
-        return value.to(device)
+        # Async H2D copy so the transfer overlaps the current batch's compute.
+        # This is only safe-and-useful when the source is pinned CPU memory and
+        # the target is CUDA (our loaders set pin_memory: true); on CPU/MPS or a
+        # non-pinned tensor non_blocking is a silent no-op, so gate on CUDA.
+        non_blocking = device.type == "cuda"
+        return value.to(device, non_blocking=non_blocking)
     if isinstance(value, tuple):
         return tuple(move_to_device(v, device) for v in value)
     if isinstance(value, list):
