@@ -210,9 +210,12 @@ class PriorAwareAttributor(CaMCheXAttributor):
     @torch.no_grad()
     def predict_probs(self, sample) -> np.ndarray:
         self._clear()
-        batch, _, _ = self._to_dict_batch(sample, with_grad=False)
-        logits = self.model(batch)
-        return torch.sigmoid(logits)[0].detach().cpu().numpy()
+        try:
+            batch, _, _ = self._to_dict_batch(sample, with_grad=False)
+            logits = self.model(batch)
+            return torch.sigmoid(logits)[0].detach().cpu().numpy()
+        finally:
+            self._clear()
 
     def attribute(self, sample, class_index: int) -> PriorAttributionResult:
         data, label = sample
@@ -220,88 +223,94 @@ class PriorAwareAttributor(CaMCheXAttributor):
         self._clear()
         self.model.zero_grad(set_to_none=True)
 
-        batch, grad_inputs, _ = self._to_dict_batch(sample, with_grad=True)
-        logits = self.model(batch)
-        prob = torch.sigmoid(logits)[0, class_index].item()
-        logit = logits[0, class_index].item()
-        logits[0, class_index].backward()
+        try:
+            batch, grad_inputs, _ = self._to_dict_batch(sample, with_grad=True)
+            logits = self.model(batch)
+            prob = torch.sigmoid(logits)[0, class_index].item()
+            logit = logits[0, class_index].item()
+            logits[0, class_index].backward()
 
-        has_prior = bool(data["has_prior"])
+            has_prior = bool(data["has_prior"])
 
-        # images: call 0 = current, call 1 = prior.
-        cur_views = self._block_views(data["img"], data["view_positions"], 0)
-        prv_views = self._block_views(data["prior_img"], data["prior_view_positions"], 1) if has_prior else []
+            # images: call 0 = current, call 1 = prior.
+            cur_views = self._block_views(data["img"], data["view_positions"], 0)
+            prv_views = self._block_views(data["prior_img"], data["prior_view_positions"], 1) if has_prior else []
 
-        # text streams, mapped by fixed call order.
-        slots = self._text_slots(batch)
-        cur_texts, prv_texts = [], []
-        for i, (key, title, ids, mask) in enumerate(slots):
-            toks, scores = self._text_attr(i, ids, mask)
-            stream = TextStream(key=key, title=title, tokens=toks, scores=scores,
-                                text=self._decode(ids, mask))
-            (cur_texts if key.startswith("cur") else prv_texts).append(stream)
+            # text streams, mapped by fixed call order.
+            slots = self._text_slots(batch)
+            cur_texts, prv_texts = [], []
+            for i, (key, title, ids, mask) in enumerate(slots):
+                toks, scores = self._text_attr(i, ids, mask)
+                stream = TextStream(key=key, title=title, tokens=toks, scores=scores,
+                                    text=self._decode(ids, mask))
+                (cur_texts if key.startswith("cur") else prv_texts).append(stream)
 
-        # vitals (Nano only): grad × value on the raw normalized vitals.
-        if self.has_vitals:
-            cur_vital_scores = self._grad_x_input(grad_inputs["cur_vitals"])
-            prv_vital_scores = self._grad_x_input(grad_inputs["prior_vitals"]) if has_prior else np.zeros(len(self.vital_fields))
-            cur_vital_display = self._format_vitals(data["vital_values"], data["vital_missing_mask"])
-            prv_vital_display = self._format_vitals(data["prior_vital_values"], data["prior_vital_missing_mask"])
-        else:
-            cur_vital_scores = prv_vital_scores = np.zeros(0)
-            cur_vital_display = prv_vital_display = []
+            # vitals (Nano only): grad x value on the raw normalized vitals.
+            if self.has_vitals:
+                cur_vital_scores = self._grad_x_input(grad_inputs["cur_vitals"])
+                prv_vital_scores = self._grad_x_input(grad_inputs["prior_vitals"]) if has_prior else np.zeros(len(self.vital_fields))
+                cur_vital_display = self._format_vitals(data["vital_values"], data["vital_missing_mask"])
+                prv_vital_display = self._format_vitals(data["prior_vital_values"], data["prior_vital_missing_mask"])
+            else:
+                cur_vital_scores = prv_vital_scores = np.zeros(0)
+                cur_vital_display = prv_vital_display = []
 
-        # prior label token: grad × value over the 26-dim multi-hot vector.
-        prior_label_scores = self._grad_x_input(grad_inputs["prior_label"])
-        prior_label_values = np.asarray(data["prior_label"], dtype=np.float32)
+            # prior label token: grad x value over the 26-dim multi-hot vector.
+            prior_label_scores = self._grad_x_input(grad_inputs["prior_label"])
+            prior_label_values = np.asarray(data["prior_label"], dtype=np.float32)
 
-        # time-delta token: one embedding lookup -> signed/abs grad × embedding.
-        delta_idx = int(bucket_days(
-            torch.tensor([float(data["days_since_prior"])]),
-            torch.tensor([has_prior]),
-        ).item())
-        delta_score, delta_mag = self._delta_attr()
+            # time-delta token: one embedding lookup -> signed/abs grad x embedding.
+            delta_idx = int(bucket_days(
+                torch.tensor([float(data["days_since_prior"])]),
+                torch.tensor([has_prior]),
+            ).item())
+            delta_score, delta_mag = self._delta_attr()
 
-        modality_contrib = self._modality_contrib(
-            cur_views, prv_views, cur_texts, prv_texts,
-            cur_vital_scores, prv_vital_scores, prior_label_scores, delta_mag,
-        )
+            modality_contrib = self._modality_contrib(
+                cur_views, prv_views, cur_texts, prv_texts,
+                cur_vital_scores, prv_vital_scores, prior_label_scores, delta_mag,
+            )
 
-        label_val = float(label[class_index]) if label is not None else None
-        true_labels = (
-            [self.classes[i] for i in range(len(self.classes)) if float(label[i]) == 1.0]
-            if label is not None else []
-        )
-        return PriorAttributionResult(
-            study_id=str(data["study_id"]),
-            class_name=self.classes[class_index],
-            class_index=class_index,
-            prob=prob,
-            logit=logit,
-            label=label_val,
-            true_labels=true_labels,
-            has_prior=has_prior,
-            days_since_prior=float(data["days_since_prior"]),
-            delta_bucket=delta_idx,
-            delta_score=delta_score,
-            delta_mag=delta_mag,
-            cur_views=cur_views,
-            cur_texts=cur_texts,
-            has_vitals=self.has_vitals,
-            cur_vital_names=list(self.vital_fields) if self.has_vitals else [],
-            cur_vital_display=cur_vital_display,
-            cur_vital_missing=np.asarray(data["vital_missing_mask"], dtype=bool) if self.has_vitals else np.zeros(0, bool),
-            cur_vital_scores=cur_vital_scores,
-            prv_views=prv_views,
-            prv_texts=prv_texts,
-            prv_vital_display=prv_vital_display,
-            prv_vital_missing=np.asarray(data["prior_vital_missing_mask"], dtype=bool) if self.has_vitals else np.zeros(0, bool),
-            prv_vital_scores=prv_vital_scores,
-            prior_label_scores=prior_label_scores,
-            prior_label_values=prior_label_values,
-            class_names=list(self.classes),
-            modality_contrib=modality_contrib,
-        )
+            label_val = float(label[class_index]) if label is not None else None
+            true_labels = (
+                [self.classes[i] for i in range(len(self.classes)) if float(label[i]) == 1.0]
+                if label is not None else []
+            )
+            return PriorAttributionResult(
+                study_id=str(data["study_id"]),
+                class_name=self.classes[class_index],
+                class_index=class_index,
+                prob=prob,
+                logit=logit,
+                label=label_val,
+                true_labels=true_labels,
+                has_prior=has_prior,
+                days_since_prior=float(data["days_since_prior"]),
+                delta_bucket=delta_idx,
+                delta_score=delta_score,
+                delta_mag=delta_mag,
+                cur_views=cur_views,
+                cur_texts=cur_texts,
+                has_vitals=self.has_vitals,
+                cur_vital_names=list(self.vital_fields) if self.has_vitals else [],
+                cur_vital_display=cur_vital_display,
+                cur_vital_missing=np.asarray(data["vital_missing_mask"], dtype=bool) if self.has_vitals else np.zeros(0, bool),
+                cur_vital_scores=cur_vital_scores,
+                prv_views=prv_views,
+                prv_texts=prv_texts,
+                prv_vital_display=prv_vital_display,
+                prv_vital_missing=np.asarray(data["prior_vital_missing_mask"], dtype=bool) if self.has_vitals else np.zeros(0, bool),
+                prv_vital_scores=prv_vital_scores,
+                prior_label_scores=prior_label_scores,
+                prior_label_values=prior_label_values,
+                class_names=list(self.classes),
+                modality_contrib=modality_contrib,
+            )
+        finally:
+            self._clear()
+            self.model.zero_grad(set_to_none=True)
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
 
     # -- per-modality helpers --------------------------------------------------
     def _block_views(self, img_np, vp_np, call_index: int) -> list[ViewAttribution]:

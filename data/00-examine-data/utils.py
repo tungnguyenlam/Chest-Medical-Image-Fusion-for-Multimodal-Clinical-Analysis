@@ -830,7 +830,8 @@ def plot_dis_image_per_study(meta):
 def plot_sample_images_procedure(meta, mimic_cxr_jpg_dir: Path | str):
     procedure_col = "PerformedProcedureStepDescription"
     jpg_root = Path(mimic_cxr_jpg_dir) / "files"
-    procedures = meta[procedure_col].dropna().unique()
+    procedure_counts = meta[procedure_col].value_counts()
+    procedures = procedure_counts.index.to_numpy()
     ncols = 3
     nrows = math.ceil(len(procedures) / ncols)
 
@@ -838,6 +839,7 @@ def plot_sample_images_procedure(meta, mimic_cxr_jpg_dir: Path | str):
     axes = np.atleast_1d(axes).ravel()
 
     for ax, procedure in zip(axes, procedures):
+        count = int(procedure_counts[procedure])
         row = meta.loc[meta[procedure_col] == procedure].iloc[0]
         subject_id = str(row["subject_id"])
         study_id = normalize_study_id_value(row["study_id"])
@@ -846,13 +848,13 @@ def plot_sample_images_procedure(meta, mimic_cxr_jpg_dir: Path | str):
         img_path = jpg_root / f"p{subject_id[:2]}" / f"p{subject_id}" / f"s{study_id}" / f"{dicom_id}.jpg"
 
         if not img_path.exists():
-            ax.set_title(f"{procedure}\nmissing image")
+            ax.set_title(f"{procedure} (n={count:,})\nmissing image")
             ax.axis("off")
             continue
 
         img = plt.imread(img_path)
         ax.imshow(img, cmap="gray")
-        ax.set_title(f"{procedure}\n View: {view}")
+        ax.set_title(f"{procedure} (n={count:,})\n View: {view}")
         ax.axis("off")
 
     for ax in axes[len(procedures) :]:

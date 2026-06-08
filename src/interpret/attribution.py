@@ -139,9 +139,15 @@ class CaMCheXAttributor:
     @torch.no_grad()
     def predict_probs(self, sample) -> np.ndarray:
         """Cheap forward used by the selection pass (no backward, no hooks needed)."""
-        data_batch, _ = self._to_batch(sample, vitals_require_grad=False)
-        logits = self.model(data_batch)
-        return torch.sigmoid(logits)[0].detach().cpu().numpy()
+        self._acts.clear()
+        self._grads.clear()
+        try:
+            data_batch, _ = self._to_batch(sample, vitals_require_grad=False)
+            logits = self.model(data_batch)
+            return torch.sigmoid(logits)[0].detach().cpu().numpy()
+        finally:
+            self._acts.clear()
+            self._grads.clear()
 
     def attribute(self, sample, class_index: int) -> AttributionResult:
         (study_id, img_np, vp_np, _clin_ids, _clin_mask, _vit_vals, _vit_miss), label = sample
@@ -152,43 +158,50 @@ class CaMCheXAttributor:
         self._grads.clear()
         self.model.zero_grad(set_to_none=True)
 
-        logits = self.model(data_batch)
-        prob = torch.sigmoid(logits)[0, class_index].item()
-        logit = logits[0, class_index].item()
-        logits[0, class_index].backward()
+        try:
+            logits = self.model(data_batch)
+            prob = torch.sigmoid(logits)[0, class_index].item()
+            logit = logits[0, class_index].item()
+            logits[0, class_index].backward()
 
-        views = self._image_attribution(img_np, vp_np)
-        tokens, token_scores = self._text_attribution(clinical_ids, clinical_mask)
-        vital_scores = (vitals.grad[0] * vitals[0]).detach().cpu().numpy()
-        vital_display = self._format_vitals(_vit_vals, _vit_miss)
+            views = self._image_attribution(img_np, vp_np)
+            tokens, token_scores = self._text_attribution(clinical_ids, clinical_mask)
+            vital_scores = (vitals.grad[0] * vitals[0]).detach().cpu().numpy()
+            vital_display = self._format_vitals(_vit_vals, _vit_miss)
 
-        modality_contrib = self._modality_contrib(views, token_scores, vital_scores)
+            modality_contrib = self._modality_contrib(views, token_scores, vital_scores)
 
-        label_val = float(label[class_index]) if label is not None else None
-        true_labels = (
-            [self.classes[i] for i in range(len(self.classes)) if float(label[i]) == 1.0]
-            if label is not None else []
-        )
-        return AttributionResult(
-            study_id=str(study_id),
-            class_name=self.classes[class_index],
-            class_index=class_index,
-            prob=prob,
-            logit=logit,
-            label=label_val,
-            true_labels=true_labels,
-            views=views,
-            tokens=tokens,
-            token_scores=token_scores,
-            text=self.tokenizer.decode(
-                clinical_ids[0][clinical_mask[0].bool()], skip_special_tokens=True
-            ),
-            vital_names=list(self.vital_fields),
-            vital_display=vital_display,
-            vital_missing=np.asarray(_vit_miss, dtype=bool),
-            vital_scores=vital_scores,
-            modality_contrib=modality_contrib,
-        )
+            label_val = float(label[class_index]) if label is not None else None
+            true_labels = (
+                [self.classes[i] for i in range(len(self.classes)) if float(label[i]) == 1.0]
+                if label is not None else []
+            )
+            return AttributionResult(
+                study_id=str(study_id),
+                class_name=self.classes[class_index],
+                class_index=class_index,
+                prob=prob,
+                logit=logit,
+                label=label_val,
+                true_labels=true_labels,
+                views=views,
+                tokens=tokens,
+                token_scores=token_scores,
+                text=self.tokenizer.decode(
+                    clinical_ids[0][clinical_mask[0].bool()], skip_special_tokens=True
+                ),
+                vital_names=list(self.vital_fields),
+                vital_display=vital_display,
+                vital_missing=np.asarray(_vit_miss, dtype=bool),
+                vital_scores=vital_scores,
+                modality_contrib=modality_contrib,
+            )
+        finally:
+            self._acts.clear()
+            self._grads.clear()
+            self.model.zero_grad(set_to_none=True)
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
 
     # -- per-modality helpers --------------------------------------------------
     def _image_attribution(self, img_np, vp_np) -> list[ViewAttribution]:

@@ -1816,3 +1816,20 @@ The methodology section describes the entire CaMCheX framework, including ConvNe
 
 **Verification.**
 Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to resolve all references, outputting a fully compiled 14-page document `main.pdf`.
+
+## 2026-06-08 - release Grad-CAM attribution graphs after each panel
+
+**Goal.** Diagnose the prior_aware_v3nano crash that happens after epoch validation when automatic Grad-CAM runs, without disabling Grad-CAM.
+
+**Changes.**
+- `src/interpret/prior_attribution.py:210` - clear hook-captured activations after no-grad study-selection forwards, so selection does not keep the last current/prior branch tensors alive.
+- `src/interpret/prior_attribution.py:220` - wrap class attribution in `try/finally`; after the result has been converted to NumPy/Python values, clear saved hook activations/gradients, zero model grads, and release CUDA cache if used.
+- `src/interpret/attribution.py:139` - applied the same cleanup pattern to the shared non-prior Grad-CAM attributor because it had the same object-lifetime bug, just with a smaller graph.
+
+**Reasoning.** The trainer intentionally launches Grad-CAM after epoch validation for models that declare `gradcam_runner_module`, so disabling that path would only hide the issue. The bug was that attribution hooks stored forward activations and gradient tensors on the attributor object and kept the full backward graph alive until the next class/sample started. For prior_aware_v3nano this graph is large because it includes current and prior image branches plus multiple live CXR-BERT text forwards. Clearing immediately after materializing the attribution result preserves the generated panels while avoiding graph retention during PNG rendering and between classes.
+
+**Gotchas.** A normal Python exception in the Grad-CAM subprocess is already caught by the parent trainer and should not stop training. A host/GPU OOM kill can still terminate the process abruptly, so this fix targets the concrete memory-retention bug in the child attribution loop. I did not change Grad-CAM scheduling or model behavior.
+
+**Verification.** Ran `python -m py_compile src/interpret/attribution.py src/interpret/prior_attribution.py src/interpret/run_prior_gradcam.py training/common.py` and `git diff --check -- src/interpret/attribution.py src/interpret/prior_attribution.py`. I did not run a full epoch-end Grad-CAM job locally because no prior_aware_v3nano run checkpoint is present under `output/prior_aware_v3nano` in this workspace.
+
+**Follow-ups.** Re-run the original training command and watch whether it passes the `[gradcam] ... after epoch 1` phase. If it still dies, capture the last terminal lines and check `dmesg` for an OOM-killer or NVIDIA Xid entry; that would distinguish remaining resource pressure from a Python bug.
