@@ -1833,3 +1833,20 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Verification.** Ran `python -m py_compile src/interpret/attribution.py src/interpret/prior_attribution.py src/interpret/run_prior_gradcam.py training/common.py` and `git diff --check -- src/interpret/attribution.py src/interpret/prior_attribution.py`. I did not run a full epoch-end Grad-CAM job locally because no prior_aware_v3nano run checkpoint is present under `output/prior_aware_v3nano` in this workspace.
 
 **Follow-ups.** Re-run the original training command and watch whether it passes the `[gradcam] ... after epoch 1` phase. If it still dies, capture the last terminal lines and check `dmesg` for an OOM-killer or NVIDIA Xid entry; that would distinguish remaining resource pressure from a Python bug.
+
+## 2026-06-09 - default Grad-CAM to the training device
+
+**Goal.** Make automatic post-epoch Grad-CAM run on the same device chosen for training by default, instead of silently falling back to CPU.
+
+**Changes.**
+- `training/common.py:420` - updated the `--gradcam-device` help text to say the default is the training device.
+- `training/common.py:1995` - changed `_maybe_dump_gradcam` to derive the default Grad-CAM subprocess device from the trainer's resolved `device`; an explicit `--gradcam-device` still overrides it.
+- `training/TRAINING_FLAGS.md:105` - updated the flag map so the documented default matches runtime behavior.
+
+**Reasoning.** Grad-CAM is launched after a completed epoch/checkpoint, so the expected default should follow the accelerator selected for training. The old CPU default was especially bad for prior-aware runs because the child process forces the live CXR-BERT attribution path and can add a large host-RAM spike while the parent still holds training state. Keeping the override preserves manual CPU/MPS/CUDA selection for debugging or constrained machines.
+
+**Gotchas.** This change does not by itself release persistent DataLoader workers or make the Grad-CAM runner load only selected rows. Those are still the larger memory-safety fixes if the training parent remains resident while the subprocess runs.
+
+**Verification.** Ran `python -m py_compile training/common.py` and `git diff --check -- training/common.py training/TRAINING_FLAGS.md`.
+
+**Follow-ups.** Re-run the original prior_aware_v3nano command and confirm the epoch-0 Grad-CAM phase no longer host-OOMs; if it still does, fix the remaining lifecycle issue by tearing down/rebuilding persistent workers around Grad-CAM and/or making `run_prior_gradcam.py` build a selected-row dataset from `selection.json`.

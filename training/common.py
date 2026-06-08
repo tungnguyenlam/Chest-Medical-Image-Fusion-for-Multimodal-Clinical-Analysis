@@ -417,7 +417,10 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
              "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). "
              "Only models that define gradcam_runner_module emit panels.",
     )
-    g.add_argument("--gradcam-device", help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: cpu.")
+    g.add_argument(
+        "--gradcam-device",
+        help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: the training device.",
+    )
 
     # --- Eval-only ----------------------------------------------------------
     g = parser.add_argument_group("eval-only")
@@ -1989,7 +1992,11 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         }
         with open(sel_path, "w") as f:
             json.dump(sets, f, indent=2)
-        gradcam_device = str(resolve_trainer_arg(args, cfg, "gradcam_device", "cpu") or "cpu")
+        default_gradcam_device = str(device)
+        gradcam_device = str(
+            resolve_trainer_arg(args, cfg, "gradcam_device", default_gradcam_device)
+            or default_gradcam_device
+        )
         cmd = [
             sys.executable, "-m", runner_module,
             "--config", str(args.config),

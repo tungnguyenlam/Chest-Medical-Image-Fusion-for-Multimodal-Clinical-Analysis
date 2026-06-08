@@ -102,7 +102,7 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 | Flag | Use |
 |------|-----|
 | `--gradcam-epochs` | `all` (default) / `none` / comma list of epochs. Only models defining `gradcam_runner_module` emit panels. |
-| `--gradcam-device` | Device for the Grad-CAM subprocess (default cpu). |
+| `--gradcam-device` | Device for the Grad-CAM subprocess. Default is the training device. |
 
 ### eval-only
 | Flag | Use |
