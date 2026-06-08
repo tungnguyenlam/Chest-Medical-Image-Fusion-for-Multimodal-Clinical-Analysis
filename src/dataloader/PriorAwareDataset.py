@@ -157,6 +157,10 @@ class PriorAwareDataset(Dataset):
         parquet stores raw text only, so the tokenizer is the training config's)."""
         text = _text_value(row, text_key, fallback)
         if self.text_embedding_cache is not None and text_key in self.text_embedding_streams:
+            if getattr(self.text_embedding_cache, "index_mode", False):
+                # GPU-resident table: emit a row index; the model gathers on-device.
+                idx = self.text_embedding_cache.get_index(text, max_length=max_length)
+                return np.int64(idx), np.zeros(1, dtype=np.int64)
             embedding = self.text_embedding_cache.get_embedding(text, max_length=max_length)
             return embedding.astype(np.float32, copy=False), np.zeros(1, dtype=np.int64)
         if self.tokenizer is None:

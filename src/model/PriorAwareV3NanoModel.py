@@ -75,6 +75,10 @@ class PriorAwareV3NanoModel(nn.Module):
         self.d_model = d_model
         self.freeze_text_encoder = freeze_text_encoder
         self.use_precomputed_text_embeddings = use_precomputed_text_embeddings
+        # Opt-in GPU-resident text embedding table (attach_text_embedding_table).
+        # None by default -> per-sample float-embedding contract is unchanged.
+        # persistent=False: derived from the cache, kept out of checkpoints.
+        self.register_buffer("text_embedding_table", None, persistent=False)
 
         self.image_encoder = ConvNeXtV2NanoImageEncoder(
             timm_init_args=timm_init_args,
@@ -144,9 +148,19 @@ class PriorAwareV3NanoModel(nn.Module):
         block = einops.rearrange(pad_tokens, "(b s) c h w -> b s c h w", b=b, s=s)
         return block, nonzero_mask.view(b, s)
 
+    def attach_text_embedding_table(self, table: torch.Tensor) -> None:
+        """Register a frozen ``[N, d_model]`` precomputed embedding table as a
+        (non-persistent) buffer. It then rides ``.to(device)`` onto the GPU once,
+        and integer index batches from the dataset are gathered against it in
+        ``_encode_text``. Opt-in; default runs leave this None."""
+        self.register_buffer("text_embedding_table", table.float(), persistent=False)
+
     def _encode_text(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         if input_ids.is_floating_point() and input_ids.ndim == 2:
             return input_ids.float()
+        if self.text_embedding_table is not None and not input_ids.is_floating_point() and input_ids.ndim == 1:
+            # GPU-resident table path: (B,) row indices -> (B, d_model) CLS vectors.
+            return self.text_embedding_table[input_ids.long()]
         if self.use_precomputed_text_embeddings:
             raise TypeError("use_precomputed_text_embeddings=True requires float clinical embedding tensors")
         if self.text_encoder is None:

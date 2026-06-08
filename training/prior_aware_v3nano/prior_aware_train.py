@@ -33,6 +33,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freeze-text-encoder", action="store_true", help="Freeze BioBERT/CXR-BERT if token ids are used.")
     parser.add_argument("--use-precomputed-text-embeddings", action="store_true", help="Use the shared frozen text embedding cache and do not load CXR-BERT.")
     parser.add_argument("--text-embedding-cache-dir", help="Override the shared text embedding cache root.")
+    parser.add_argument(
+        "--text-embeddings-gpu-resident",
+        action="store_true",
+        help="(opt-in) Keep the precomputed text embeddings as one frozen table inside the model "
+        "(moved to the training device) and have the dataset emit integer row indices instead of "
+        "per-sample float vectors. Removes the ~0.7GB-per-worker RAM duplication under "
+        "persistent_workers. Requires --use-precomputed-text-embeddings.",
+    )
     return parser.parse_args()
 
 
@@ -60,6 +68,21 @@ def main() -> None:
         text_model=text_model,
         **model_init_args,
     )
+    if args.text_embeddings_gpu_resident:
+        import torch
+
+        if not model_init_args.get("use_precomputed_text_embeddings"):
+            raise SystemExit("--text-embeddings-gpu-resident requires --use-precomputed-text-embeddings.")
+        cache = getattr(train_loader.dataset, "text_embedding_cache", None)
+        if cache is None:
+            raise SystemExit("--text-embeddings-gpu-resident: no text embedding cache was built.")
+        # Switches the shared cache (train + val datasets) to index mode and frees the RAM dict.
+        table = cache.build_index_table()
+        model.attach_text_embedding_table(torch.from_numpy(table))
+        print(
+            f"[train] text embeddings GPU-resident: table {tuple(table.shape)} "
+            f"({table.nbytes / 1e6:.0f} MB), dataset emits row indices"
+        )
     train_model(
         model=model,
         train_loader=train_loader,

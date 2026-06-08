@@ -96,6 +96,11 @@ class TextEmbeddingCache:
         self._tokenizer = None
         self._model = None
         self._mem: dict[str, np.ndarray] = {}
+        # Index mode (opt-in): after build_index_table() the per-sample lookup
+        # returns an integer row into a single device-resident table instead of a
+        # float vector, so dataloader workers carry only this small key->row map.
+        self.index_mode = False
+        self._key_to_index: dict[str, int] = {}
         self._write_metadata()
 
     def _write_metadata(self) -> None:
@@ -225,6 +230,38 @@ class TextEmbeddingCache:
         to_load = [key for key in dict.fromkeys(keys) if key not in self._mem]
         for key in tqdm(to_load, desc=f"{desc} (load to RAM)", dynamic_ncols=True, disable=not to_load):
             self._mem[key] = np.load(self._embedding_path(key)).astype(np.float32, copy=False)
+
+    def build_index_table(self, free_ram_cache: bool = True) -> np.ndarray:
+        """Collapse the preloaded RAM embeddings into one contiguous ``[N, dim]``
+        float32 table plus a ``key -> row`` map, switching the cache to index mode.
+
+        After this call ``get_index`` replaces ``get_embedding`` for per-sample
+        lookups: the float vectors are meant to live exactly once on the training
+        device (inside the model), and each dataloader worker only inherits the
+        compact int map -- removing the ~0.7GB-per-worker RAM duplication that the
+        dict-of-numpy cache incurs under ``persistent_workers``. Call after
+        ``ensure_texts`` has preloaded every needed embedding.
+        """
+        if not self._mem:
+            raise RuntimeError(
+                "build_index_table requires embeddings preloaded in RAM; call ensure_texts first."
+            )
+        keys = list(self._mem.keys())
+        table = np.stack([self._mem[k] for k in keys], axis=0).astype(np.float32, copy=False)
+        self._key_to_index = {key: i for i, key in enumerate(keys)}
+        self.index_mode = True
+        if free_ram_cache:
+            self._mem = {}
+        return table
+
+    def get_index(self, text: str, max_length: int) -> int:
+        """Return the table row for a text stream (index mode only)."""
+        text = "" if text is None else str(text)
+        key = self._key(text, max_length)
+        idx = self._key_to_index.get(key)
+        if idx is None:
+            raise KeyError(f"Text embedding index miss for key {key} in {self.cache_dir}")
+        return idx
 
     def get_embedding(self, text: str, max_length: int) -> np.ndarray:
         text = "" if text is None else str(text)

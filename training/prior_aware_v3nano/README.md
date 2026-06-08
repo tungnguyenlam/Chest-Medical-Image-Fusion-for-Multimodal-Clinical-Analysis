@@ -21,6 +21,19 @@ python training/prior_aware_v3nano/prior_aware_eval.py \
 Tune `--batch-size` / `--num-workers` to your GPU; leave `val_num_workers` at 0; don't
 `--resume-from` an EMA checkpoint.
 
+### Low host-RAM mode (`--text-embeddings-gpu-resident`)
+
+With `--use-precomputed-text-embeddings` the embedding cache is a dict-of-numpy held in
+RAM, and under `persistent_workers` every dataloader worker inherits a copy (~0.7 GB
+each) — on a memory-tight box (e.g. 16–32 GB already under pressure) this can trigger the
+Linux OOM killer (`Killed`, while VRAM is nearly idle). Add `--text-embeddings-gpu-resident`
+(opt-in; requires `--use-precomputed-text-embeddings`) to instead keep the embeddings as a
+single frozen `[N, 768]` table inside the model — moved to the training device once — while
+the dataset emits int64 row indices that the model gathers on-device. Workers then carry
+only the compact `key→row` map, so you can raise `--num-workers` without multiplying RAM.
+The table is a non-persistent buffer, so checkpoints are unchanged and eval still runs
+without the flag.
+
 Single-token variant of [`prior_aware_v2nano`](../prior_aware_v2nano/). Same
 prior-aware design (current + prior branches sharing the ConvNeXtV2-Nano image
 router, CXR-BERT text encoder, numeric vitals projector, time-delta embedding, and
