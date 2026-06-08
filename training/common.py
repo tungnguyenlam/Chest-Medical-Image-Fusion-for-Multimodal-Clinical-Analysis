@@ -201,22 +201,33 @@ def _prior_aware_image_paths(dfs: list[pd.DataFrame]) -> list[str]:
 
 
 def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None) -> None:
-    parser.add_argument("--config", default=default_config or f"training/{model_name}/config.yaml")
-    parser.add_argument("--train-df-path")
-    parser.add_argument("--val-df-path")
-    parser.add_argument("--test-df-path")
-    parser.add_argument("--output-dir", default=f"output/{model_name}/runs")
-    parser.add_argument("--run-name", default="baseline")
-    parser.add_argument("--run-id")
-    parser.add_argument(
+    """Flags shared by every training/eval entry point, grouped by concern so the set
+    is easy to scan here and in ``--help``. Model-specific flags (image pretrained
+    paths, text-model / embedding-cache options, single-view position, eval output
+    paths) are added by each script's own ``parse_args``. See
+    ``training/TRAINING_FLAGS.md`` for the full map of which flag applies where."""
+
+    # --- Run identity & I/O -------------------------------------------------
+    g = parser.add_argument_group("run identity & I/O")
+    g.add_argument("--config", default=default_config or f"training/{model_name}/config.yaml")
+    g.add_argument("--train-df-path")
+    g.add_argument("--val-df-path")
+    g.add_argument("--test-df-path")
+    g.add_argument("--output-dir", default=f"output/{model_name}/runs")
+    g.add_argument("--run-name", default="baseline")
+    g.add_argument("--run-id")
+
+    # --- Checkpointing & resume --------------------------------------------
+    g = parser.add_argument_group("checkpointing & resume")
+    g.add_argument(
         "--checkpoint-path",
         help="Checkpoint path. In eval: weights to load. In train: weights-only init (fresh optimizer/scheduler/epoch).",
     )
-    parser.add_argument(
+    g.add_argument(
         "--resume-from",
         help="Train only: full resume from checkpoint (model + optimizer + scheduler + epoch + global_step + early-stop state). Run dir is inferred from the checkpoint path.",
     )
-    parser.add_argument(
+    g.add_argument(
         "--quick-continue",
         action="store_true",
         help=(
@@ -224,17 +235,20 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "Use --run-id to force one run."
         ),
     )
-    parser.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
-    parser.add_argument("--batch-size", type=int)
-    parser.add_argument(
+    g.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
+
+    # --- Data & batching ----------------------------------------------------
+    g = parser.add_argument_group("data & batching")
+    g.add_argument("--batch-size", type=int)
+    g.add_argument(
         "--val-batch-size",
         type=int,
         help="Batch size for validation/eval loaders (forward-only, so it can exceed the train "
         "batch size). Defaults to 2x the train batch size. A one-time OOM fallback downgrades it "
         "to the train batch size if the larger batch doesn't fit alongside the live training state.",
     )
-    parser.add_argument("--num-workers", type=int)
-    parser.add_argument(
+    g.add_argument("--num-workers", type=int)
+    g.add_argument(
         "--val-num-workers",
         type=int,
         help="DataLoader num_workers for validation/eval loaders. Defaults to 0 (from trainer.val_num_workers) "
@@ -242,38 +256,9 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "persistent train workers — avoids the host-RAM spike (and OOM kill) when mid-epoch validation "
         "fires. Quick-val is only a few batches, so in-process cost is small. Raise it to use val workers.",
     )
-    parser.add_argument(
-        "--loss",
-        nargs="+",
-        metavar="NAME",
-        help="Loss function(s), overriding model.loss / the default ASL. One name -> that loss "
-        f"(available: {', '.join(sorted(LOSS_REGISTRY))}); several -> their weighted sum, e.g. "
-        "'--loss FC ASL'. Per-loss kwargs come from model.loss_kwargs.<NAME>; ASL also inherits "
-        "model.loss_init_args. Weights: --loss-weights or model.loss_weights (default 1.0 each).",
-    )
-    parser.add_argument(
-        "--loss-weights",
-        nargs="+",
-        type=float,
-        metavar="W",
-        help="Weights for a multi-loss --loss, positionally matched (e.g. '--loss FC ASL "
-        "--loss-weights 1.0 0.5'). Must match the number of losses.",
-    )
-    parser.add_argument(
-        "--ema",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Maintain an exponential moving average of the weights and use it as the evaluated/saved "
-        "model. Off by default (config trainer.ema overrides). Best paired with schedule=single_cosine; "
-        "do NOT --resume-from an EMA checkpoint (saved weights are the EMA snapshot, not the raw state).",
-    )
-    parser.add_argument(
-        "--ema-decay",
-        type=float,
-        help="EMA decay factor (default 0.999, or trainer.ema_decay). Higher = smoother/slower.",
-    )
-    parser.add_argument("--image-size", type=int)
-    parser.add_argument(
+    g.add_argument("--prefetch-factor", type=int, help="DataLoader prefetch_factor (requires num_workers > 0).")
+    g.add_argument("--image-size", type=int)
+    g.add_argument(
         "--channel-mode",
         choices=ENABLED_CHANNEL_MODES + ["none"],
         help=(
@@ -285,7 +270,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "(image_channel_cache_dir) stays shared across models via config."
         ),
     )
-    parser.add_argument(
+    g.add_argument(
         "--cpu-fraction",
         type=float,
         help=(
@@ -295,7 +280,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "1.0 to use all cores."
         ),
     )
-    parser.add_argument(
+    g.add_argument(
         "--skip-precompute",
         action="store_true",
         help=(
@@ -304,36 +289,68 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "Use when the cache is already warm to shave startup latency."
         ),
     )
-    parser.add_argument("--max-epochs", type=int)
-    parser.add_argument("--lr", type=float)
-    parser.add_argument("--accelerator", default=None)
-    parser.add_argument("--devices", default=None)
-    parser.add_argument("--precision", default=None)
-    parser.add_argument(
-        "--compile-model",
-        action="store_true",
-        default=None,
-        help="Opt in to torch.compile (automatic dynamic) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Compile failures fall back to eager. Default comes from trainer.compile_model, or false if unset.",
+
+    # --- Optimization -------------------------------------------------------
+    g = parser.add_argument_group("optimization")
+    g.add_argument(
+        "--loss",
+        nargs="+",
+        metavar="NAME",
+        help="Loss function(s), overriding model.loss / the default ASL. One name -> that loss "
+        f"(available: {', '.join(sorted(LOSS_REGISTRY))}); several -> their weighted sum, e.g. "
+        "'--loss FC ASL'. Per-loss kwargs come from model.loss_kwargs.<NAME>; ASL also inherits "
+        "model.loss_init_args. Weights: --loss-weights or model.loss_weights (default 1.0 each).",
     )
-    parser.add_argument("--accumulate-grad-batches", type=int)
-    parser.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
-    parser.add_argument("--val-check-interval", type=float)
-    parser.add_argument("--log-every-n-steps", type=int, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
-    parser.add_argument("--early-stop-monitor", help="Epoch validation metric to monitor for early stopping. Default val_ap.")
-    parser.add_argument("--early-stop-mode", choices=["min", "max"], help="Whether early-stop monitor should decrease or increase. Default max.")
-    parser.add_argument("--early-stop-patience", type=int, help="Stop after this many non-improving epochs. Default 3; set 0 to disable.")
-    parser.add_argument("--early-stop-min-delta", type=float, help="Minimum metric change required to count as an improvement. Default 0.0.")
-    parser.add_argument(
+    g.add_argument(
+        "--loss-weights",
+        nargs="+",
+        type=float,
+        metavar="W",
+        help="Weights for a multi-loss --loss, positionally matched (e.g. '--loss FC ASL "
+        "--loss-weights 1.0 0.5'). Must match the number of losses.",
+    )
+    g.add_argument("--lr", type=float)
+    g.add_argument("--weight-decay", type=float)
+    g.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
+    g.add_argument("--max-epochs", type=int)
+    g.add_argument("--accumulate-grad-batches", type=int)
+    g.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
+
+    # --- EMA (weight averaging) --------------------------------------------
+    g = parser.add_argument_group("EMA (weight averaging)")
+    g.add_argument(
+        "--ema",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Maintain an exponential moving average of the weights and use it as the evaluated/saved "
+        "model. Off by default (config trainer.ema overrides). Best paired with schedule=single_cosine; "
+        "do NOT --resume-from an EMA checkpoint (saved weights are the EMA snapshot, not the raw state).",
+    )
+    g.add_argument(
+        "--ema-decay",
+        type=float,
+        help="EMA decay factor (default 0.999, or trainer.ema_decay). Higher = smoother/slower.",
+    )
+
+    # --- Validation, early stopping & logging ------------------------------
+    g = parser.add_argument_group("validation, early stopping & logging")
+    g.add_argument("--val-check-interval", type=float)
+    g.add_argument("--log-every-n-steps", type=int, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
+    g.add_argument("--early-stop-monitor", help="Epoch validation metric to monitor for early stopping. Default val_ap.")
+    g.add_argument("--early-stop-mode", choices=["min", "max"], help="Whether early-stop monitor should decrease or increase. Default max.")
+    g.add_argument("--early-stop-patience", type=int, help="Stop after this many non-improving epochs. Default 3; set 0 to disable.")
+    g.add_argument("--early-stop-min-delta", type=float, help="Minimum metric change required to count as an improvement. Default 0.0.")
+    g.add_argument(
         "--quick-val-every-steps",
         type=int,
         help="If set, run a partial validation every N optimizer steps (= N effective batches, where effective = batch_size * accumulate_grad_batches). Logged to val_quick.csv. Does not affect best-checkpoint tracking.",
     )
-    parser.add_argument(
+    g.add_argument(
         "--quick-val-frac",
         type=float,
         help="Fraction of val loader batches to use for quick validation (default 0.1).",
     )
-    parser.add_argument(
+    g.add_argument(
         "--full-val-fracs",
         type=float,
         nargs="*",
@@ -341,7 +358,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "Independent of batch size. End-of-epoch full validation always runs. Default 0.5. "
         "Pass with no values to disable mid-epoch full validation.",
     )
-    parser.add_argument(
+    g.add_argument(
         "--quick-val-fracs",
         type=float,
         nargs="*",
@@ -349,20 +366,41 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
         "batch size. Default 0.25 0.75. Pass with no values to disable.",
     )
-    parser.add_argument("--prefetch-factor", type=int, help="DataLoader prefetch_factor (requires num_workers > 0).")
-    parser.add_argument("--weight-decay", type=float)
-    parser.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
-    parser.add_argument("--backbone-name")
-    parser.add_argument("--no-pretrained", action="store_true")
-    parser.add_argument("--fast-dev-run", action="store_true")
-    parser.add_argument(
+
+    # --- Hardware, precision & compile -------------------------------------
+    g = parser.add_argument_group("hardware, precision & compile")
+    g.add_argument("--accelerator", default=None)
+    g.add_argument("--devices", default=None)
+    g.add_argument("--precision", default=None)
+    g.add_argument(
+        "--compile-model",
+        action="store_true",
+        default=None,
+        help="Opt in to torch.compile (automatic dynamic) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Compile failures fall back to eager. Default comes from trainer.compile_model, or false if unset.",
+    )
+
+    # --- Backbone -----------------------------------------------------------
+    g = parser.add_argument_group("backbone")
+    g.add_argument("--backbone-name")
+    g.add_argument("--no-pretrained", action="store_true")
+
+    # --- Debug --------------------------------------------------------------
+    g = parser.add_argument_group("debug")
+    g.add_argument("--fast-dev-run", action="store_true")
+
+    # --- Grad-CAM panels ----------------------------------------------------
+    g = parser.add_argument_group("Grad-CAM panels")
+    g.add_argument(
         "--gradcam-epochs",
         help="When to dump per-class Grad-CAM panels: 'all' (default, every epoch — it's cheap), "
              "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). "
              "Only models that define gradcam_runner_module emit panels.",
     )
-    parser.add_argument("--gradcam-device", help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: cpu.")
-    parser.add_argument(
+    g.add_argument("--gradcam-device", help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: cpu.")
+
+    # --- Eval-only ----------------------------------------------------------
+    g = parser.add_argument_group("eval-only")
+    g.add_argument(
         "--skip-report-ablation",
         action="store_true",
         help=(
