@@ -775,6 +775,35 @@ def resolve_malloc_arena_max(args: argparse.Namespace) -> int:
     return 2 if val is None else int(val)
 
 
+_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+_IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+def image_norm_stats(data_cfg: dict[str, Any]) -> tuple[list[float], list[float]]:
+    """Per-channel (mean, std) on the [0,1] scale for the configured channel_mode,
+    matching what A.Normalize applied on the CPU. Used to set up the model's
+    on-device normalization for --uint8-image-pipeline. ImageNet for mode=None."""
+    mode = data_cfg.get("channel_mode")
+    if mode:
+        from src.dataloader.image_channel_preprocessing import CHANNEL_STATS
+        stats = CHANNEL_STATS[mode]
+        return list(stats["mean"]), list(stats["std"])
+    return list(_IMAGENET_MEAN), list(_IMAGENET_STD)
+
+
+def resolve_uint8_image_pipeline(args: argparse.Namespace, data_cfg: dict[str, Any]) -> bool:
+    """Whether the loaders should emit uint8 images for on-device normalization.
+    Opt-in via --uint8-image-pipeline (scripts that support it define the flag).
+    Requires a channel_mode so every decode path yields uint8 [0,255]."""
+    enabled = bool(getattr(args, "uint8_image_pipeline", False))
+    if enabled and not data_cfg.get("channel_mode"):
+        raise SystemExit(
+            "--uint8-image-pipeline requires a channel mode (e.g. --channel-mode raw_clahe_histeq); "
+            "without one the legacy decode path is not guaranteed to be uint8."
+        )
+    return enabled
+
+
 def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, shuffle: bool, for_eval: bool = False) -> dict[str, Any]:
     # Cap glibc arenas before any DataLoader (and its workers) is built. Idempotent,
     # so calling it on every loader build (train/val/eval) is cheap.
@@ -1054,7 +1083,11 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     from transformers import AutoTokenizer
 
     data_cfg = data_cfg_from_config(cfg, args)
-    transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
+    uint8_pipeline = resolve_uint8_image_pipeline(args, data_cfg)
+    data_cfg["uint8_image_pipeline"] = uint8_pipeline
+    transforms_train, transforms_val = get_transforms(
+        data_cfg["size"], data_cfg.get("channel_mode"), normalize_on_gpu=uint8_pipeline
+    )
     train_df = read_dataframe(data_cfg["train_df_path"])
     val_df = read_dataframe(data_cfg["devel_df_path"])
     precompute_channel_cache(data_cfg, [train_df, val_df], desc="camchex_vitals channels", cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False))
@@ -1079,7 +1112,11 @@ def make_camchex_vitals_loaders(cfg: dict[str, Any], args: argparse.Namespace):
 def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     """Build train/val loaders backed by the pre-generated prior-aware parquet."""
     data_cfg = data_cfg_from_config(cfg, args)
-    transforms_train, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
+    uint8_pipeline = resolve_uint8_image_pipeline(args, data_cfg)
+    data_cfg["uint8_image_pipeline"] = uint8_pipeline
+    transforms_train, transforms_val = get_transforms(
+        data_cfg["size"], data_cfg.get("channel_mode"), normalize_on_gpu=uint8_pipeline
+    )
     label_dropout_p = float(data_cfg.get("label_dropout_p", 0.3))
     tokenizer = _prior_aware_tokenizer(cfg, data_cfg, args)
 

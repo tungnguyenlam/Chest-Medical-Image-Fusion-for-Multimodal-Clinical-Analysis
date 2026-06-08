@@ -148,6 +148,12 @@ class PriorAwareV3NanoModel(nn.Module):
         block = einops.rearrange(pad_tokens, "(b s) c h w -> b s c h w", b=b, s=s)
         return block, nonzero_mask.view(b, s)
 
+    def enable_input_normalization(self, mean, std) -> None:
+        """Normalize raw uint8 image batches on-device (see ConvNeXtV2NanoImageEncoder).
+        Both the current and prior branches route through the shared image encoder, so
+        this one call covers both. Used by --uint8-image-pipeline."""
+        self.image_encoder.enable_input_normalization(mean, std)
+
     def attach_text_embedding_table(self, table: torch.Tensor) -> None:
         """Register a frozen ``[N, d_model]`` precomputed embedding table as a
         (non-persistent) buffer. It then rides ``.to(device)`` onto the GPU once,

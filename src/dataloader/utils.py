@@ -13,13 +13,19 @@ from src.dataloader.image_channel_preprocessing import (
     build_channels,
 )
 
-def get_transforms(size, mode=None):
+def get_transforms(size, mode=None, normalize_on_gpu=False):
     """Build (train, val) albumentations pipelines.
 
     When ``mode`` is given, images are deterministic 3-channel float [0, 1]
     arrays from :func:`build_channels`, so normalization uses the precomputed
     per-channel stats with ``max_pixel_value=1.0``. When ``mode`` is ``None`` the
     legacy ImageNet uint8 normalization is preserved unchanged.
+
+    With ``normalize_on_gpu`` (the --uint8-image-pipeline path) the trailing
+    ``A.Normalize`` is dropped so the pipeline emits uint8 [0, 255]; the model
+    dequantizes + normalizes on-device instead. The geometric/photometric augs
+    are unchanged, but note they now run on uint8 rather than float, which shifts
+    the numerics of value-scale augs (noise/brightness) -- hence the opt-in flag.
     """
     if mode:
         stats = CHANNEL_STATS[mode]
@@ -30,7 +36,7 @@ def get_transforms(size, mode=None):
     # RandomResizedCrop already outputs (size, size) and every later aug here is
     # size-preserving, so a trailing A.Resize(size, size) would be a guaranteed
     # no-op (a wasted LANCZOS4 pass on every item). Omitted unconditionally.
-    transforms_train = A.Compose([
+    train_steps = [
         A.RandomResizedCrop((size,size), scale=(0.9, 1), p=1, interpolation=cv2.INTER_LANCZOS4),
         A.HorizontalFlip(p=0.5),
         A.Affine(
@@ -52,8 +58,10 @@ def get_transforms(size, mode=None):
             A.MotionBlur(),
             A.MedianBlur(),
         ], p=0.2),
-        normalize,
-    ])
+    ]
+    if not normalize_on_gpu:
+        train_steps.append(normalize)
+    transforms_train = A.Compose(train_steps)
 
     # With a channel ``mode``, build_channels emits arrays already resized to
     # (size, size) -- out_size is data_cfg["size"] and is folded into the cache
@@ -63,7 +71,8 @@ def get_transforms(size, mode=None):
     val_steps = []
     if not mode:
         val_steps.append(A.Resize(size, size, interpolation=cv2.INTER_LANCZOS4))
-    val_steps.append(normalize)
+    if not normalize_on_gpu:
+        val_steps.append(normalize)
     transforms_val = A.Compose(val_steps)
     return transforms_train, transforms_val
 
@@ -180,15 +189,20 @@ def _atomic_save_uint8(path, arr):
     os.replace(tmp, path)
 
 
-def load_or_build_channels(image_path, mode, preprocess_cfg, cache_dir=None):
-    """Return an HWC float32 [0, 1] 3-channel array for ``mode`` (or None).
+def load_or_build_channels(image_path, mode, preprocess_cfg, cache_dir=None, dequantize=True):
+    """Return an HWC 3-channel array for ``mode`` (or None).
+
+    By default a float32 [0, 1] array. With ``dequantize=False`` (the
+    --uint8-image-pipeline path) the raw uint8 [0, 255] array is returned instead
+    -- 4x smaller, with the /255 + normalize deferred to the model on-device. The
+    cache on-disk format is uint8 either way, so the flag needs no cache rebuild.
 
     ``image_path`` is the raw (dataframe) path string. With ``cache_dir`` set:
-    cache hit -> load uint8 and de-quantize (no source-FS access); miss -> resolve
-    the preferred on-disk file, decode, build channels, quantize to uint8, store
-    atomically. The uint8 round-trip is applied on the build path too so
-    cached/uncached epochs are numerically identical. Without ``cache_dir`` the
-    channels are built fresh each call (no quantization).
+    cache hit -> load uint8 (no source-FS access); miss -> resolve the preferred
+    on-disk file, decode, build channels, quantize to uint8, store atomically. The
+    uint8 round-trip is applied on the build path too so cached/uncached epochs are
+    numerically identical. Without ``cache_dir`` the channels are built fresh each
+    call (quantized to uint8 only when ``dequantize`` is False).
 
     Resolution (stat-heavy on slow mounts) is deferred to the miss path, so warm
     epochs and the precompute scan never stat the source filesystem.
@@ -200,8 +214,8 @@ def load_or_build_channels(image_path, mode, preprocess_cfg, cache_dir=None):
         cpath = channel_cache_path(cache_dir, image_path, mode, preprocess_cfg)
         if cpath.exists():
             try:
-                arr = np.load(cpath)
-                return arr.astype(np.float32) / 255.0
+                arr = np.load(cpath)  # uint8 [0, 255]
+                return arr if not dequantize else arr.astype(np.float32) / 255.0
             except (ValueError, OSError):
                 pass  # corrupt / partially-written file -> rebuild below
 
@@ -209,9 +223,8 @@ def load_or_build_channels(image_path, mode, preprocess_cfg, cache_dir=None):
     if rgb is None:
         return None
     channels = build_channels(rgb, mode, preprocess_cfg)  # float32 [0, 1]
+    quantized = np.clip(np.round(channels * 255.0), 0, 255).astype(np.uint8)
 
     if cache_dir:
-        quantized = np.clip(np.round(channels * 255.0), 0, 255).astype(np.uint8)
         _atomic_save_uint8(cpath, quantized)
-        return quantized.astype(np.float32) / 255.0
-    return channels
+    return quantized if not dequantize else quantized.astype(np.float32) / 255.0

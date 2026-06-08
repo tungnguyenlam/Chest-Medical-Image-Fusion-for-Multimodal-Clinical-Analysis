@@ -122,6 +122,7 @@ Added by each script's own `parse_args`, not by `add_common_args`.
 | `--text-embedding-cache-dir DIR` | text-fusion models with a cache² | Override the shared frozen text-embedding cache root. |
 | `--use-precomputed-text-embeddings` | prior-aware family³ | Use the shared frozen embedding cache instead of loading the text encoder. |
 | `--text-embeddings-gpu-resident` | **`prior_aware_v3nano` only** | Opt-in. Keep the precomputed embeddings as one frozen table on-device and emit row indices instead of per-sample float vectors; also precomputes indices and drops raw-text columns to keep per-worker RAM flat. Requires `--use-precomputed-text-embeddings`. |
+| `--uint8-image-pipeline` | **`camchex_v2nano_vitals_stable`, `prior_aware_v3nano`** | Opt-in. Ship images as uint8 [0,255] and dequantize + normalize on-device in the model instead of CPU float32 — ~4× smaller per-batch host buffer, pinned staging, and H2D copy. Requires a channel mode. Train-time augs then run on uint8, shifting value-scale aug numerics (noise/brightness), so validate with a short ablation before adopting. Eval stays on the (numerically identical) float path. |
 | `--view-position {AP,PA,LATERAL,...}` | **`singleview` only** | Which view the single-view model trains/evals on. |
 | `--predictions-path` / `--metrics-path` | most `*_eval.py`⁴ | Where eval writes predictions / metrics. |
 | `--output-csv PATH` | prior-aware family `*_eval.py` | Eval predictions CSV path. |
@@ -153,5 +154,10 @@ Added by each script's own `parse_args`, not by `add_common_args`.
 - **glibc arenas are capped to 2 by default** (`--malloc-arena-max`). With `num_workers > 0`
   this is often the single largest host-RAM reduction; set `--malloc-arena-max 0` to restore
   the glibc default if you need to compare.
+- **`--uint8-image-pipeline`** is the largest structural per-batch host-RAM cut (images ride as
+  uint8, ~4× smaller, normalized on-device). It changes train-time augmentation numerics
+  (augs run on uint8 [0,255] rather than float [0,1]), so it's opt-in and wants an ablation.
+  Eval/predict stay on the float path, which is numerically identical to the on-device normalize
+  (verified to float32 epsilon), so a uint8-trained checkpoint evaluates correctly without the flag.
 - **`--resume-from` vs `--checkpoint-path`**: resume = continue the same run (full state);
   checkpoint-path = start a fresh run from those weights only.

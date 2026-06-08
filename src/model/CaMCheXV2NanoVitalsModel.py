@@ -23,6 +23,9 @@ class ConvNeXtV2NanoImageEncoder(nn.Module):
         # which also halves the grid to 8x8 -> (B, 768, 8, 8). So 640<->16x16 here,
         # 768<->8x8 after projection. See image_proj in the model classes.
         self.feature_dim = feature_dim
+        # Set by enable_input_normalization for the --uint8-image-pipeline path.
+        # Off by default: forward expects pre-normalized float images, unchanged.
+        self._normalize_input = False
         self.frontal_encoder = TimmImageEncoder(
             timm_init_args=timm_init_args,
             pretrained_path=frontal_pretrained_path,
@@ -32,19 +35,38 @@ class ConvNeXtV2NanoImageEncoder(nn.Module):
             pretrained_path=lateral_pretrained_path,
         )
 
+    def enable_input_normalization(self, mean, std) -> None:
+        """Switch on on-device dequantize + normalize so the DataLoader can ship
+        raw uint8 [0,255] image batches instead of normalized float32 -- ~4x smaller
+        per-batch host buffer, pinned-memory staging, and H2D copy. ``mean``/``std``
+        are the per-channel stats on the [0,1] scale (the same values A.Normalize
+        used on the CPU). Registered non-persistently: derived config, not learned
+        weights, so it stays out of checkpoints but still rides .to(device)."""
+        mean_t = torch.tensor(list(mean), dtype=torch.float32).view(1, 3, 1, 1)
+        std_t = torch.tensor(list(std), dtype=torch.float32).view(1, 3, 1, 1)
+        self.register_buffer("_img_mean", mean_t, persistent=False)
+        self.register_buffer("_img_std", std_t, persistent=False)
+        self._normalize_input = True
+
     def forward(self, x, view_positions):
         b, s, _, h, w = x.shape
         x = x.reshape(b * s, *x.shape[2:])
         view_positions = view_positions.reshape(b * s)
 
+        # Padding slots are all-zero; detect them on the RAW input so that on-device
+        # normalization (which maps 0 -> -mean/std, i.e. nonzero) can't disguise a
+        # padded slot as a real view. uint8 sum promotes to int64, so no overflow.
         nonzero_mask = x.sum(dim=(1, 2, 3)) != 0
         x_nonzero = x[nonzero_mask]
+        if self._normalize_input:
+            # --uint8-image-pipeline: dequantize uint8 [0,255] -> [0,1] and normalize.
+            x_nonzero = (x_nonzero.float() / 255.0 - self._img_mean) / self._img_std
         view_positions_nonzero = view_positions[nonzero_mask]
 
         feats = torch.zeros(
             (x_nonzero.shape[0], self.feature_dim, h // 32, w // 32),
             device=x.device,
-            dtype=x.dtype,
+            dtype=x_nonzero.dtype,
         )
         frontal_mask = view_positions_nonzero == 1
         lateral_mask = view_positions_nonzero == 2
@@ -177,6 +199,11 @@ class CaMCheXV2NanoVitalsModel(nn.Module):
             input_ids=clinical_input_ids,
             attention_mask=clinical_attention_mask,
         )
+
+    def enable_input_normalization(self, mean, std) -> None:
+        """Normalize raw uint8 image batches on-device (see ConvNeXtV2NanoImageEncoder).
+        Lets the loader ship uint8 instead of float32. Used by --uint8-image-pipeline."""
+        self.image_encoder.enable_input_normalization(mean, std)
 
     def forward(self, data):
         (

@@ -61,6 +61,10 @@ class CaMCheXVitalsDataset(Dataset):
         self.channel_mode = cfg.get("channel_mode")
         self.channel_cache_dir = cfg.get("image_channel_cache_dir")
         self.channel_cfg = make_preprocess_config(cfg) if self.channel_mode else None
+        # --uint8-image-pipeline: ship uint8 [0,255] and let the model dequantize +
+        # normalize on-device (4x smaller batch/pinned/H2D). Off -> float32 as before.
+        self.normalize_on_gpu = bool(cfg.get("uint8_image_pipeline", False))
+        self._img_dtype = np.uint8 if self.normalize_on_gpu else np.float32
 
     def _resolve_path(self, path):
         p = Path(path)
@@ -151,7 +155,10 @@ class CaMCheXVitalsDataset(Dataset):
             if self.channel_mode:
                 # Pass the raw path: a cache hit is keyed on the string alone and
                 # never stats the (slow) source FS; resolution happens on a miss.
-                img = load_or_build_channels(path, self.channel_mode, self.channel_cfg, self.channel_cache_dir)
+                img = load_or_build_channels(
+                    path, self.channel_mode, self.channel_cfg, self.channel_cache_dir,
+                    dequantize=not self.normalize_on_gpu,
+                )
             else:
                 resolved = resolve_preferred_image_path(path)
                 img = load_cached_rgb(self.image_cache_dir, resolved)
@@ -183,7 +190,9 @@ class CaMCheXVitalsDataset(Dataset):
 
         n = len(imgs)
         img = np.stack(imgs, axis=0)
-        img = np.concatenate([img, np.zeros((4 - n, 3, self.cfg["size"], self.cfg["size"]))], axis=0).astype(np.float32)
+        img = np.concatenate(
+            [img, np.zeros((4 - n, 3, self.cfg["size"], self.cfg["size"]), dtype=self._img_dtype)], axis=0
+        ).astype(self._img_dtype)
         view_positions = np.array(view_positions + [0] * (4 - n), dtype=np.int64)
 
         row = df.iloc[0]

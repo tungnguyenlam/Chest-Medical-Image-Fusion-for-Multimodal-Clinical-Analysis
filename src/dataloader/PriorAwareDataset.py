@@ -63,8 +63,8 @@ def _text_value(row, text_key: str, fallback: str) -> str:
     return str(text)
 
 
-def _zero_image_block(size: int) -> np.ndarray:
-    return np.zeros((MAX_VIEWS, 3, size, size), dtype=np.float32)
+def _zero_image_block(size: int, dtype=np.float32) -> np.ndarray:
+    return np.zeros((MAX_VIEWS, 3, size, size), dtype=dtype)
 
 
 def _nan_vitals() -> np.ndarray:
@@ -108,6 +108,10 @@ class PriorAwareDataset(Dataset):
         self.channel_mode = cfg.get("channel_mode")
         self.channel_cache_dir = cfg.get("image_channel_cache_dir")
         self.channel_cfg = make_preprocess_config(cfg) if self.channel_mode else None
+        # --uint8-image-pipeline: ship uint8 [0,255] and let the model dequantize +
+        # normalize on-device (4x smaller batch/pinned/H2D). Off -> float32 as before.
+        self.normalize_on_gpu = bool(cfg.get("uint8_image_pipeline", False))
+        self._img_dtype = np.uint8 if self.normalize_on_gpu else np.float32
         self.text_embedding_cache = cfg.get("text_embedding_cache")
         self.text_embedding_streams = set(
             cfg.get("text_embedding_streams")
@@ -180,8 +184,10 @@ class PriorAwareDataset(Dataset):
             # Raw path -> cache hit is string-keyed, no source-FS stat; the file
             # is resolved + decoded only on a miss inside load_or_build_channels.
             return load_or_build_channels(
-                path, self.channel_mode, self.channel_cfg, self.channel_cache_dir
+                path, self.channel_mode, self.channel_cfg, self.channel_cache_dir,
+                dequantize=not self.normalize_on_gpu,
             )
+        # Legacy direct decode is already uint8; the float path casts it at stack time.
         return _safe_decode_jpeg(path)
 
     def __len__(self) -> int:
@@ -204,12 +210,12 @@ class PriorAwareDataset(Dataset):
             view_codes.append(int(vp))
 
         if len(imgs) == 0:
-            return _zero_image_block(self.size), np.zeros(MAX_VIEWS, dtype=np.int64)
+            return _zero_image_block(self.size, self._img_dtype), np.zeros(MAX_VIEWS, dtype=np.int64)
 
         n = len(imgs)
-        stacked = np.stack(imgs, axis=0).astype(np.float32)
+        stacked = np.stack(imgs, axis=0).astype(self._img_dtype)
         if n < MAX_VIEWS:
-            pad = np.zeros((MAX_VIEWS - n, 3, self.size, self.size), dtype=np.float32)
+            pad = np.zeros((MAX_VIEWS - n, 3, self.size, self.size), dtype=self._img_dtype)
             stacked = np.concatenate([stacked, pad], axis=0)
         vc = np.array(view_codes + [0] * (MAX_VIEWS - n), dtype=np.int64)
         return stacked, vc
@@ -300,7 +306,7 @@ class PriorAwareDataset(Dataset):
                 list(row["prior_img_paths"]), list(row["prior_view_positions"])
             )
         else:
-            prv_img = _zero_image_block(self.size)
+            prv_img = _zero_image_block(self.size, self._img_dtype)
             prv_views = np.zeros(MAX_VIEWS, dtype=np.int64)
 
         data = {

@@ -12,6 +12,8 @@ from src.model.CaMCheXV2NanoVitalsModel import CaMCheXV2NanoVitalsModel
 from training.common import (
     add_common_args,
     classes_from_config,
+    data_cfg_from_config,
+    image_norm_stats,
     load_config,
     loss_args_from_config,
     lr_from_config,
@@ -41,6 +43,15 @@ def parse_args() -> argparse.Namespace:
         help="Use the shared frozen text embedding cache and skip loading CXR-BERT in the model.",
     )
     parser.add_argument("--text-embedding-cache-dir", help="Override the shared text embedding cache root.")
+    parser.add_argument(
+        "--uint8-image-pipeline",
+        action="store_true",
+        help="(opt-in) Ship images through the DataLoader as uint8 [0,255] and dequantize + "
+        "normalize on-device in the model, instead of CPU float32 normalization. ~4x smaller "
+        "per-batch host buffer, pinned-memory staging, and H2D copy. Requires a channel mode. "
+        "Note: train-time augmentations then run on uint8, which shifts value-scale aug numerics "
+        "(noise/brightness) -- validate with a short ablation before adopting.",
+    )
     return parser.parse_args()
 
 
@@ -68,6 +79,10 @@ def main() -> None:
         text_model=text_model,
         **model_init_args,
     )
+    if args.uint8_image_pipeline:
+        mean, std = image_norm_stats(data_cfg_from_config(cfg, args))
+        model.enable_input_normalization(mean, std)
+        print(f"[train] uint8 image pipeline: model normalizes on-device (mean={mean}, std={std})")
     train_model(
         model=model,
         train_loader=train_loader,

@@ -49,6 +49,13 @@ Two related RAM measures apply to every v3nano run, not just this flag:
 - **`gc.freeze()` before fork.** The training entry point freezes the long-lived heap before
   the dataloader workers fork, so the cyclic GC doesn't dirty shared object pages (another
   copy-on-write RAM-growth source) during the run.
+- **glibc malloc arenas are capped** (`--malloc-arena-max`, default 2) before the workers fork,
+  so each worker doesn't grow its own arena set (up to ~8×ncpu) and fragment RSS.
+- **`--uint8-image-pipeline`** (opt-in) ships images as uint8 [0,255] and dequantizes +
+  normalizes on-device, cutting the per-batch host buffer, pinned staging, and H2D copy ~4×.
+  Requires a channel mode; train-time augs then run on uint8 (a numerics change worth an
+  ablation). Eval stays on the numerically identical float path. See
+  [`TRAINING_FLAGS.md`](../TRAINING_FLAGS.md#model-specific-flags).
 
 Single-token variant of [`prior_aware_v2nano`](../prior_aware_v2nano/). Same
 prior-aware design (current + prior branches sharing the ConvNeXtV2-Nano image
