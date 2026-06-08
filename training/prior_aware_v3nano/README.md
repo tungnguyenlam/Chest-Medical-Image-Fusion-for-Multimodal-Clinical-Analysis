@@ -29,10 +29,26 @@ each) — on a memory-tight box (e.g. 16–32 GB already under pressure) this ca
 Linux OOM killer (`Killed`, while VRAM is nearly idle). Add `--text-embeddings-gpu-resident`
 (opt-in; requires `--use-precomputed-text-embeddings`) to instead keep the embeddings as a
 single frozen `[N, 768]` table inside the model — moved to the training device once — while
-the dataset emits int64 row indices that the model gathers on-device. Workers then carry
-only the compact `key→row` map, so you can raise `--num-workers` without multiplying RAM.
-The table is a non-persistent buffer, so checkpoints are unchanged and eval still runs
-without the flag.
+the dataset emits int64 row indices that the model gathers on-device.
+
+It also resolves every row→table-index up front (in the parent) and drops the raw-text
+columns from the worker DataFrames. This matters under `persistent_workers`: otherwise each
+`__getitem__` reads the raw clinical/report strings to hash them, and touching those Python
+`str` objects forces copy-on-write page copies into every worker, so per-worker RAM climbs
+across the epoch. With indices precomputed, workers touch only fork-stable numeric arrays,
+so RAM stays flat and you can raise `--num-workers` without multiplying it. The table is a
+non-persistent buffer, so checkpoints are unchanged and eval still runs without the flag.
+
+Two related RAM measures apply to every v3nano run, not just this flag:
+- **Dead `obs` streams are skipped.** v3nano feeds vitals numerically (`VitalsTokenProjector`),
+  so the vitals-as-text `obs` / `prior_obs` streams are never read by the model. Whenever the
+  embedding cache is active the dataset emits only `text_embedding_streams`
+  (`clin`, `prior_clin`, `prior_report`) and skips `obs`, so those raw-text columns are never
+  touched. (Token-mode / attribution runs, cache off, still emit all streams — the base
+  `PriorAwareCaMCheXModel` consumes `obs`.)
+- **`gc.freeze()` before fork.** The training entry point freezes the long-lived heap before
+  the dataloader workers fork, so the cyclic GC doesn't dirty shared object pages (another
+  copy-on-write RAM-growth source) during the run.
 
 Single-token variant of [`prior_aware_v2nano`](../prior_aware_v2nano/). Same
 prior-aware design (current + prior branches sharing the ConvNeXtV2-Nano image

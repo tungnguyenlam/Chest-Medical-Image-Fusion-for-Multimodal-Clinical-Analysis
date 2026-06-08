@@ -83,6 +83,20 @@ def main() -> None:
             f"[train] text embeddings GPU-resident: table {tuple(table.shape)} "
             f"({table.nbytes / 1e6:.0f} MB), dataset emits row indices"
         )
+        # Resolve row->index up front and drop the raw-text columns so dataloader
+        # workers touch only fork-stable numeric data (keeps per-worker RAM flat).
+        print("[train] precomputing text-stream row indices and dropping raw-text columns ...", flush=True)
+        for loader in (train_loader, val_loader):
+            loader.dataset.precompute_text_indices()
+        del table  # GPU copy lives in the model buffer; release the host-side numpy
+    # Move all currently-live objects (model, parquet-backed datasets, caches) to gc's
+    # permanent generation BEFORE the dataloader workers fork. The cyclic collector
+    # writes to each tracked object's gc header when it scans; under copy-on-write fork
+    # those writes dirty shared pages and inflate per-worker RAM. Freezing the long-lived
+    # heap stops that scan (objects created after fork are still collected normally).
+    import gc
+
+    gc.freeze()
     train_model(
         model=model,
         train_loader=train_loader,

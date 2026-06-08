@@ -28,6 +28,17 @@ CLIN_MAX_LEN = 384
 OBS_MAX_LEN = 128
 REPORT_MAX_LEN = 384  # prior study's findings + impression (legitimate prior info, not leakage)
 
+_VITALS_NA = "Temperature: NA | Heart rate: NA | Respiratory rate: NA | O2 Saturation: NA | Systolic BP: NA | Diastolic BP: NA | Gender: NA"
+
+# (raw-text column, max token length, fallback when blank) for every text stream.
+_TEXT_STREAM_SPECS = (
+    ("clin_text", CLIN_MAX_LEN, "No clinical history available."),
+    ("obs_text", OBS_MAX_LEN, _VITALS_NA),
+    ("prior_clin_text", CLIN_MAX_LEN, "No clinical history available."),
+    ("prior_obs_text", OBS_MAX_LEN, _VITALS_NA),
+    ("prior_report_text", REPORT_MAX_LEN, "No prior report available."),
+)
+
 
 def _to_array(x, dtype):
     """parquet list/array → np.ndarray with the right dtype."""
@@ -104,6 +115,41 @@ class PriorAwareDataset(Dataset):
         )
         self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
 
+    def precompute_text_indices(self) -> None:
+        """Index-mode only: resolve every (row, text stream) to its embedding-table
+        row once, in the parent process, then DROP the raw-text columns.
+
+        Without this, every ``__getitem__`` reads the raw clinical/report strings to
+        hash them into an index. Touching those Python ``str`` objects bumps their
+        refcounts, which forces the OS to copy the shared parquet pages into each
+        dataloader worker -- so worker RAM climbs across an epoch under copy-on-write
+        ``fork`` until all text has been touched. Precomputing into a contiguous
+        int64 array (and dropping the now-unused text columns) means workers touch
+        only fork-stable numeric data, so per-worker RAM stays flat. No-op unless the
+        cache is in index mode (see TextEmbeddingCache.build_index_table)."""
+        cache = self.text_embedding_cache
+        if cache is None or not getattr(cache, "index_mode", False):
+            return
+        self._text_idx: dict[str, np.ndarray] = {}
+        drop: list[str] = []
+        for key, max_len, fallback in _TEXT_STREAM_SPECS:
+            if key not in self.text_embedding_streams:
+                continue
+            if key not in self.df.columns:
+                raise KeyError(
+                    f"Prior-aware parquet is missing {key!r}; rebuild it with "
+                    "src/prepare/04_build_prior_aware_dataset.py."
+                )
+            col = self.df[key].tolist()
+            idxs = np.empty(len(col), dtype=np.int64)
+            for i, value in enumerate(col):
+                text = fallback if (pd.isna(value) or str(value).strip() == "") else str(value)
+                idxs[i] = cache.get_index(text, max_length=max_len)
+            self._text_idx[key] = idxs
+            drop.append(key)
+        if drop:
+            self.df = self.df.drop(columns=drop)
+
     def _decode(self, path: str):
         """Decode one image: built 3-channel array when channel_mode is set, else
         the legacy direct RGB decode (plain 3-channel duplicate)."""
@@ -145,16 +191,34 @@ class PriorAwareDataset(Dataset):
         vc = np.array(view_codes + [0] * (MAX_VIEWS - n), dtype=np.int64)
         return stacked, vc
 
+    @property
+    def _emit_streams(self) -> set[str]:
+        """Text streams ``__getitem__`` actually produces. With a precomputed-embedding
+        cache the model consumes exactly ``text_embedding_streams`` -- the rest (the
+        vitals-as-text ``obs`` streams, dead weight for the Nano variants that feed
+        vitals numerically) are skipped, so their raw-text columns are never touched
+        and never copy-on-write duplicated into workers. In tokenizer mode (cache off,
+        e.g. attribution or the base model's token runs) every stream is emitted."""
+        if self.text_embedding_cache is not None:
+            return self.text_embedding_streams
+        return {key for key, _, _ in _TEXT_STREAM_SPECS}
+
     def _text_input(
         self,
         row,
         text_key: str,
         max_length: int,
         fallback: str,
+        index: int | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Encode one raw-text stream. Frozen-encoder runs read a cached CLS vector;
         otherwise the text is tokenized at load time with ``self.tokenizer`` (the
         parquet stores raw text only, so the tokenizer is the training config's)."""
+        # Precomputed index mode (precompute_text_indices): the text column is gone;
+        # read the row's table index straight from the contiguous int array.
+        precomputed = getattr(self, "_text_idx", None)
+        if precomputed is not None and index is not None and text_key in precomputed:
+            return np.int64(precomputed[text_key][index]), np.zeros(1, dtype=np.int64)
         text = _text_value(row, text_key, fallback)
         if self.text_embedding_cache is not None and text_key in self.text_embedding_streams:
             if getattr(self.text_embedding_cache, "index_mode", False):
@@ -216,34 +280,26 @@ class PriorAwareDataset(Dataset):
             prv_img = _zero_image_block(self.size)
             prv_views = np.zeros(MAX_VIEWS, dtype=np.int64)
 
-        _VITALS_NA = "Temperature: NA | Heart rate: NA | Respiratory rate: NA | O2 Saturation: NA | Systolic BP: NA | Diastolic BP: NA | Gender: NA"
-        clin_input, clin_mask = self._text_input(row, "clin_text", CLIN_MAX_LEN, "No clinical history available.")
-        obs_input, obs_mask = self._text_input(row, "obs_text", OBS_MAX_LEN, _VITALS_NA)
-        prior_clin_input, prior_clin_mask = self._text_input(row, "prior_clin_text", CLIN_MAX_LEN, "No clinical history available.")
-        prior_obs_input, prior_obs_mask = self._text_input(row, "prior_obs_text", OBS_MAX_LEN, _VITALS_NA)
-        prior_report_input, prior_report_mask = self._text_input(row, "prior_report_text", REPORT_MAX_LEN, "No prior report available.")
-
         data = {
             "study_id": int(row["study_id"]),
             "img": cur_img,
             "view_positions": cur_views,
-            "clin_input_ids": clin_input,
-            "clin_attn_mask": clin_mask,
-            "obs_input_ids": obs_input,
-            "obs_attn_mask": obs_mask,
-
             "has_prior": bool(has_prior),
             "prior_img": prv_img,
             "prior_view_positions": prv_views,
-            "prior_clin_input_ids": prior_clin_input,
-            "prior_clin_attn_mask": prior_clin_mask,
-            "prior_obs_input_ids": prior_obs_input,
-            "prior_obs_attn_mask": prior_obs_mask,
-            "prior_report_input_ids": prior_report_input,
-            "prior_report_attn_mask": prior_report_mask,
             "prior_label": _to_array(row["prior_label"], np.float32) if has_prior else np.zeros(N_CLASSES, dtype=np.float32),
             "days_since_prior": float(row["days_since_prior"]) if has_prior and not pd.isna(row["days_since_prior"]) else 0.0,
         }
+        # Emit only the text streams the model consumes (see _emit_streams). The
+        # dict key prefix is the column name without the trailing "_text".
+        emit = self._emit_streams
+        for text_key, max_len, fallback in _TEXT_STREAM_SPECS:
+            if text_key not in emit:
+                continue
+            ids, mask = self._text_input(row, text_key, max_len, fallback, index)
+            prefix = text_key[: -len("_text")]
+            data[f"{prefix}_input_ids"] = ids
+            data[f"{prefix}_attn_mask"] = mask
         vital_values, vital_missing = self._normalize_vitals(row["vital_values_raw"] if _has_value(row, "vital_values_raw") else None)
         prior_vital_values, prior_vital_missing = self._normalize_vitals(
             row["prior_vital_values_raw"] if has_prior and _has_value(row, "prior_vital_values_raw") else None
