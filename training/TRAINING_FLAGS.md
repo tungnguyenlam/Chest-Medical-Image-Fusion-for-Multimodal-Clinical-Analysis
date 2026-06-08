@@ -85,6 +85,7 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 |------|-----|
 | `--accelerator` / `--devices` / `--precision` | Device & precision selection. |
 | `--compile-model` | *Train.* `torch.compile` (automatic dynamic) on compile-safe submodules; fusion stays eager; failures fall back to eager. RAM-heavy during compile. |
+| `--channels-last` | *Train.* Run the conv backbone(s) in `torch.channels_last` (NHWC). Layout-only (numerics identical); enables cuDNN's native NHWC Tensor-Core conv kernels, typically a 10–30% throughput win on ConvNeXtV2. Pure GPU-side change, no host-RAM cost. |
 
 ### backbone
 | Flag | Use |
@@ -141,7 +142,15 @@ Added by each script's own `parse_args`, not by `add_common_args`.
 
 - **`--compile-model` is RAM-heavy** during Inductor compilation and gives little on
   small GPUs (e.g. "Not enough SMs to use max_autotune"). Drop it first if you hit a
-  host-RAM OOM (`Killed` while VRAM is idle).
+  host-RAM OOM (`Killed` while VRAM is idle). To curb the compile-time spike, Inductor's
+  parallel compile workers are **capped to 1 by default** (`TORCHINDUCTOR_COMPILE_THREADS=1`,
+  set automatically when `--compile-model` is on) — serial compilation is slower for the
+  first epoch but avoids the fork-worker RAM spike. Export the var (e.g. `=4`) to override
+  on a roomy box.
+- **`--channels-last` is the cheap throughput lever** for the conv backbone — it changes
+  only the GPU memory layout (NHWC), costs no host RAM, and is independent of
+  `--compile-model`. Safe to keep on even when you've dropped `--compile-model` to dodge a
+  host-RAM OOM. Numerics are identical, so A/B it purely on GPU throughput.
 - **`--use-precomputed-text-embeddings`** needs the embedding cache built once up front
   (it runs at startup). The text encoder is then not loaded, so the run can't be fine-tuned
   on text — it's frozen by construction.
@@ -151,6 +160,13 @@ Added by each script's own `parse_args`, not by `add_common_args`.
   text stream the model never consumes (e.g. the `obs` streams when vitals are fed numerically)
   from the in-RAM parquet right after the embedding cache is attached — no flag needed. This
   shrinks steady-state host RAM and the copy-on-write duplication into fork workers.
+- **DataLoader worker `Bus error` / "out of shared memory"** is `/dev/shm` exhaustion, *not*
+  host-RAM OOM — distinct from a `Killed`. Common on WSL (small `/dev/shm` tmpfs) once
+  `num_workers > 0` ships multi-view image batches between workers and the main process. The
+  loaders now switch the worker IPC sharing strategy to `file_system` (disk-backed temp files)
+  automatically when `num_workers > 0`, which sidesteps the `/dev/shm` size limit. Override with
+  `CAMCHEX_MP_SHARING_STRATEGY=file_descriptor`. The complementary host-side fix is to enlarge
+  `/dev/shm` (in `.wslconfig`/`/etc/wsl.conf`, then `wsl --shutdown`).
 - **glibc arenas are capped to 2 by default** (`--malloc-arena-max`). With `num_workers > 0`
   this is often the single largest host-RAM reduction; set `--malloc-arena-max 0` to restore
   the glibc default if you need to compare.

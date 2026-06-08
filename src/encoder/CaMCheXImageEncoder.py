@@ -15,6 +15,22 @@ class CaMCheXImageEncoder(nn.Module):
             timm_init_args=timm_init_args,
             pretrained_path=lateral_pretrained_path,
         )
+        # Set by enable_channels_last (--channels-last): feed conv inputs as NHWC.
+        self._channels_last = False
+
+    def enable_channels_last(self) -> None:
+        """Feed conv inputs and the output buffer in channels_last (NHWC) so cuDNN
+        runs its native Tensor-Core conv kernels. Layout-only; numerics unchanged.
+        Conv weights are converted separately by maybe_channels_last."""
+        self._channels_last = True
+
+    def _to_conv_format(self, x):
+        # Boolean-mask indexing returns a fresh contiguous (NCHW) tensor, so convert
+        # the per-branch conv input here rather than upstream (the masked gather would
+        # otherwise undo it).
+        if self._channels_last:
+            return x.contiguous(memory_format=torch.channels_last)
+        return x
 
     def forward(self, x, view_positions):
         b, s, _, h, w = x.shape
@@ -34,10 +50,12 @@ class CaMCheXImageEncoder(nn.Module):
             device=x.device,
             dtype=x.dtype,
         )
+        if self._channels_last:
+            feats = feats.contiguous(memory_format=torch.channels_last)
 
         if frontal_mask.any():
-            feats[frontal_mask] = self.frontal_encoder(x_nonzero[frontal_mask])
+            feats[frontal_mask] = self.frontal_encoder(self._to_conv_format(x_nonzero[frontal_mask]))
         if lateral_mask.any():
-            feats[lateral_mask] = self.lateral_encoder(x_nonzero[lateral_mask])
+            feats[lateral_mask] = self.lateral_encoder(self._to_conv_format(x_nonzero[lateral_mask]))
 
         return feats, nonzero_mask

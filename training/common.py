@@ -388,6 +388,17 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         default=None,
         help="Opt in to torch.compile (automatic dynamic) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Compile failures fall back to eager. Default comes from trainer.compile_model, or false if unset.",
     )
+    g.add_argument(
+        "--channels-last",
+        action="store_true",
+        default=None,
+        help="(opt-in) Run the conv image backbone(s) in torch.channels_last (NHWC) memory format. "
+        "Layout-only (numerics identical), but it lets cuDNN use the native NHWC fp16/bf16 "
+        "Tensor-Core conv kernels and skip the per-layer NCHW<->NHWC transposes, typically a "
+        "10-30%% throughput win on conv-heavy nets (ConvNeXtV2). Converts the model's 4D conv "
+        "weights and feeds conv inputs as channels_last. Default comes from trainer.channels_last, "
+        "or false if unset.",
+    )
 
     # --- Backbone -----------------------------------------------------------
     g = parser.add_argument_group("backbone")
@@ -775,6 +786,40 @@ def resolve_malloc_arena_max(args: argparse.Namespace) -> int:
     return 2 if val is None else int(val)
 
 
+_MP_SHARING_TUNED = False
+
+
+def configure_dataloader_sharing(num_workers: int) -> None:
+    """Avoid the '/dev/shm out of shared memory' Bus error that kills DataLoader workers
+    on shm-constrained boxes (notably WSL, where /dev/shm is a small tmpfs). PyTorch's
+    default 'file_descriptor' strategy backs every worker->main tensor with a /dev/shm
+    segment; with multi-view image batches in flight (8 views/sample for prior-aware) that
+    pool fills and a worker takes SIGBUS mid-epoch (seen as "DataLoader worker ... killed by
+    signal: Bus error"). The 'file_system' strategy backs shared tensors with files in the
+    system temp dir (disk-backed on WSL) instead, sidestepping the /dev/shm size limit.
+
+    Idempotent; no-op when num_workers==0 (no worker IPC). Set
+    CAMCHEX_MP_SHARING_STRATEGY=file_descriptor to restore the PyTorch default."""
+    global _MP_SHARING_TUNED
+    if _MP_SHARING_TUNED or num_workers <= 0:
+        return
+    _MP_SHARING_TUNED = True
+    strategy = os.environ.get("CAMCHEX_MP_SHARING_STRATEGY", "file_system")
+    try:
+        import torch.multiprocessing as mp
+        if strategy not in mp.get_all_sharing_strategies():
+            return
+        if mp.get_sharing_strategy() != strategy:
+            mp.set_sharing_strategy(strategy)
+            print(
+                f"[mem] DataLoader IPC sharing strategy -> {strategy} (avoids the /dev/shm "
+                f"Bus error under num_workers>0; set CAMCHEX_MP_SHARING_STRATEGY to override)",
+                flush=True,
+            )
+    except (RuntimeError, ImportError):
+        return  # leave the default in place if the platform rejects the strategy
+
+
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
 
@@ -825,6 +870,8 @@ def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, s
     if dl_args.get("num_workers", 0) == 0:
         dl_args["persistent_workers"] = False
         dl_args.pop("prefetch_factor", None)
+    # Pick a shm-safe worker IPC strategy before this loader's workers fork.
+    configure_dataloader_sharing(dl_args.get("num_workers", 0))
     dl_args["shuffle"] = shuffle
     return dl_args
 
@@ -1346,6 +1393,23 @@ def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: d
     # it; this dynamo flag is the only place to degrade gracefully.
     import torch._dynamo as _dynamo  # aliased: `import torch._dynamo` would bind `torch` as a function-local and break the torch.* refs above
     _dynamo.config.suppress_errors = True
+    # Cap Inductor's parallel compile workers to 1 by default. Inductor otherwise forks
+    # min(32, ncpu) compile-worker subprocesses; each is a fork of the already-large
+    # training process, and their copy-on-write pages dirty during compilation -- a host-RAM
+    # spike exactly when the model, parquet caches and (warm) dataloader are all resident,
+    # which is what tips a 15.5GB box into the OOM killer. Serial compilation is slower
+    # (first epoch only, while graphs are built) but flattens the spike. Set this BEFORE the
+    # first forward triggers lazy compilation so the worker pool is sized to 1. Export
+    # TORCHINDUCTOR_COMPILE_THREADS to override (e.g. =4 on a roomy box for faster compile).
+    import torch._inductor.config as _inductor_config
+    env_threads = os.environ.get("TORCHINDUCTOR_COMPILE_THREADS")
+    if env_threads is None:
+        os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
+        _inductor_config.compile_threads = 1
+        print("[train] capped Inductor compile workers to 1 (TORCHINDUCTOR_COMPILE_THREADS=1) "
+              "to avoid the compile-time host-RAM spike; export the var to override", flush=True)
+    else:
+        print(f"[train] Inductor compile workers from env: TORCHINDUCTOR_COMPILE_THREADS={env_threads}", flush=True)
     # Attribute chains to the submodules whose forwards are static-shape and safe to
     # compile. Missing ones are skipped (e.g. text_encoder is None with precomputed
     # embeddings; some model variants lack frontal/lateral splits).
@@ -1377,6 +1441,35 @@ def maybe_compile_model(model: torch.nn.Module, args: argparse.Namespace, cfg: d
         print(f"[train] compiled submodules with torch.compile(dynamic=None, automatic): {', '.join(compiled)}")
     else:
         print("[train] --compile-model set but found no compile-safe submodules to compile; running eager")
+    return model
+
+
+def maybe_channels_last(model: torch.nn.Module, args: argparse.Namespace, cfg: dict[str, Any] | None) -> torch.nn.Module:
+    """Convert the model to channels_last (NHWC) memory format when opted in via
+    --channels-last / trainer.channels_last. This is a layout-only change (numerics
+    are identical) that lets cuDNN dispatch the native NHWC Tensor-Core conv kernels
+    and skip the per-layer NCHW<->NHWC transposes it would otherwise insert around
+    each conv. Only 4D tensors (conv weights) change layout; 1D/2D params (norms,
+    linears, the transformer, text encoder) are untouched.
+
+    model.to(memory_format=...) flips the conv *weights*; the matching conv *inputs*
+    must also be channels_last for the NHWC path to actually fire end to end, so we
+    tell the image encoder to feed its backbone inputs in channels_last too. Call
+    this BEFORE the optimizer is built and before torch.compile, so the compiled
+    graphs capture the NHWC layout and the optimizer tracks the same Parameters."""
+    enabled = bool(resolve_trainer_arg(args, cfg, "channels_last", False))
+    if not enabled:
+        return model
+    model.to(memory_format=torch.channels_last)
+    encoder = getattr(model, "image_encoder", None)
+    if encoder is not None and hasattr(encoder, "enable_channels_last"):
+        encoder.enable_channels_last()
+        print("[train] channels_last (NHWC) enabled: conv weights + image inputs")
+    else:
+        # Weights are converted but inputs aren't routed -- cuDNN would re-transpose
+        # at the first conv, negating the win. Surface it rather than silently no-op.
+        print("[train] channels_last requested but image_encoder has no enable_channels_last(); "
+              "conv weights converted but inputs stay NCHW (no speedup expected)")
     return model
 
 
@@ -1583,6 +1676,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     accelerator = resolve_trainer_arg(args, cfg, "accelerator", None)
     device = select_device(accelerator)
     model.to(device)
+    model = maybe_channels_last(model, args, cfg)
     criterion = build_criterion(args, cfg, loss_init_args).to(device)
     optimizer = build_adamw_optimizer(model, lr=lr, **optimizer_args_from_config(cfg, args))
     max_epochs = resolve_trainer_arg(args, cfg, "max_epochs", 1000)

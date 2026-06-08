@@ -26,6 +26,9 @@ class ConvNeXtV2NanoImageEncoder(nn.Module):
         # Set by enable_input_normalization for the --uint8-image-pipeline path.
         # Off by default: forward expects pre-normalized float images, unchanged.
         self._normalize_input = False
+        # Set by enable_channels_last (--channels-last): feed conv inputs as NHWC so
+        # cuDNN runs the native channels_last Tensor-Core kernels. Off by default.
+        self._channels_last = False
         self.frontal_encoder = TimmImageEncoder(
             timm_init_args=timm_init_args,
             pretrained_path=frontal_pretrained_path,
@@ -48,6 +51,13 @@ class ConvNeXtV2NanoImageEncoder(nn.Module):
         self.register_buffer("_img_std", std_t, persistent=False)
         self._normalize_input = True
 
+    def enable_channels_last(self) -> None:
+        """Feed conv inputs (and the backbone-output buffer) in channels_last so the
+        whole backbone runs cuDNN's NHWC kernels. Layout-only -- numerics unchanged.
+        The model's conv weights are converted separately (model.to(memory_format=...))
+        by maybe_channels_last; both sides must agree for the fast path to fire."""
+        self._channels_last = True
+
     def forward(self, x, view_positions):
         b, s, _, h, w = x.shape
         x = x.reshape(b * s, *x.shape[2:])
@@ -68,17 +78,29 @@ class ConvNeXtV2NanoImageEncoder(nn.Module):
             device=x.device,
             dtype=x_nonzero.dtype,
         )
+        if self._channels_last:
+            # Allocate the output buffer NHWC so the scatter writes (and the
+            # downstream image_proj conv) stay channels_last with no re-transpose.
+            feats = feats.contiguous(memory_format=torch.channels_last)
         frontal_mask = view_positions_nonzero == 1
         lateral_mask = view_positions_nonzero == 2
         if frontal_mask.any():
             feats[frontal_mask] = self.frontal_encoder(
-                x_nonzero[frontal_mask]
+                self._to_conv_format(x_nonzero[frontal_mask])
             ).to(feats.dtype)
         if lateral_mask.any():
             feats[lateral_mask] = self.lateral_encoder(
-                x_nonzero[lateral_mask]
+                self._to_conv_format(x_nonzero[lateral_mask])
             ).to(feats.dtype)
         return feats, nonzero_mask
+
+    def _to_conv_format(self, x: torch.Tensor) -> torch.Tensor:
+        # Boolean-mask indexing always returns a fresh contiguous (NCHW) tensor, so
+        # the channels_last conversion must happen here, on the per-branch conv input,
+        # not on x_nonzero upstream (it would be undone by the masked gather).
+        if self._channels_last:
+            return x.contiguous(memory_format=torch.channels_last)
+        return x
 
 
 class VitalsTokenProjector(nn.Module):
