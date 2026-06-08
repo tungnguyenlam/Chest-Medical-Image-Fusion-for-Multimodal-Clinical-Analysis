@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import functools
 import json
 import math
 import multiprocessing
 import os
+import platform
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -257,6 +259,14 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "fires. Quick-val is only a few batches, so in-process cost is small. Raise it to use val workers.",
     )
     g.add_argument("--prefetch-factor", type=int, help="DataLoader prefetch_factor (requires num_workers > 0).")
+    g.add_argument(
+        "--malloc-arena-max",
+        type=int,
+        help="Cap glibc malloc arenas to control host-RAM/RSS under num_workers>0 (each fork "
+        "worker otherwise grows its own arena set, up to ~8*ncpu, fragmenting RSS). Default 2; "
+        "0 leaves the glibc default (no cap). Applied via mallopt + MALLOC_ARENA_MAX before "
+        "workers fork. No effect off glibc (musl/non-Linux).",
+    )
     g.add_argument("--image-size", type=int)
     g.add_argument(
         "--channel-mode",
@@ -728,7 +738,47 @@ def resolve_val_batch_size(cfg: dict[str, Any], args: argparse.Namespace) -> int
     return 2 * resolve_train_batch_size(cfg, args)
 
 
+_MALLOC_TUNED = False
+
+
+def cap_malloc_arenas(max_arenas: int = 2) -> None:
+    """Limit glibc's per-process malloc arenas to curb host-RAM (RSS) growth.
+
+    glibc defaults to up to ``8 * ncpu`` allocator arenas; with DataLoader
+    ``num_workers > 0`` every forked worker inherits and independently grows its
+    own arena set, fragmenting RSS — a large, silent host-RAM cost on Linux/WSL.
+    Capping arenas (and trimming eagerly) is a near-free reduction. ``mallopt`` is
+    applied to the live parent allocator so workers forked later inherit it; the
+    env vars cover any *child* processes spawned afterwards (the channel-cache
+    pool). Idempotent. No-op when ``max_arenas <= 0`` or off glibc (musl/non-Linux)."""
+    global _MALLOC_TUNED
+    if _MALLOC_TUNED or max_arenas <= 0:
+        return
+    _MALLOC_TUNED = True
+    os.environ.setdefault("MALLOC_ARENA_MAX", str(max_arenas))
+    os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "0")
+    if platform.system() != "Linux":
+        return
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        M_TRIM_THRESHOLD, M_ARENA_MAX = -1, -8
+        libc.mallopt(M_ARENA_MAX, int(max_arenas))
+        libc.mallopt(M_TRIM_THRESHOLD, 0)
+        print(f"[mem] capped glibc malloc arenas to {max_arenas} (MALLOC_ARENA_MAX)", flush=True)
+    except (OSError, AttributeError):
+        return  # not glibc, or mallopt unavailable
+
+
+def resolve_malloc_arena_max(args: argparse.Namespace) -> int:
+    """CLI --malloc-arena-max wins; default 2. 0 leaves the glibc default (no cap)."""
+    val = getattr(args, "malloc_arena_max", None)
+    return 2 if val is None else int(val)
+
+
 def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, shuffle: bool, for_eval: bool = False) -> dict[str, Any]:
+    # Cap glibc arenas before any DataLoader (and its workers) is built. Idempotent,
+    # so calling it on every loader build (train/val/eval) is cheap.
+    cap_malloc_arenas(resolve_malloc_arena_max(args))
     dl_args = dict(cfg["data"]["dataloader_init_args"])
     if for_eval:
         dl_args["batch_size"] = resolve_val_batch_size(cfg, args)
@@ -1052,6 +1102,10 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
     train_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     val_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
+    for ds in (train_ds, val_ds):
+        dropped = ds.drop_unused_text_columns()
+    if dropped:
+        print(f"[dataloader] dropped {dropped} unused raw-text column(s) from the parquet to save host RAM")
     precompute_channels_for_paths(
         data_cfg, _prior_aware_image_paths([train_ds.df, val_ds.df]), desc="prior_aware channels",
         cpu_fraction=resolve_cpu_fraction(args),
@@ -1080,6 +1134,7 @@ def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, 
         _blank_prior_aware_current_indication(ds)
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [ds.df], args=args)
     ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
+    ds.drop_unused_text_columns()
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     labels_available = True  # label column is always present in the pregenerated parquet
     return loader, labels_available

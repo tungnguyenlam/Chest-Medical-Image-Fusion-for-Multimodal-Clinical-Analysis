@@ -42,6 +42,7 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 | `--num-workers INT` | Train DataLoader workers. |
 | `--val-num-workers INT` | Val/eval workers. **Default 0** so mid-epoch val doesn't fork a second pool on top of persistent train workers (host-RAM/OOM guard). |
 | `--prefetch-factor INT` | DataLoader prefetch (needs `num_workers > 0`). |
+| `--malloc-arena-max INT` | Cap glibc malloc arenas (host-RAM/RSS control under `num_workers > 0`; each fork worker otherwise grows its own arena set up to ~8×ncpu, fragmenting RSS). **Default 2**; `0` leaves the glibc default. Applied via `mallopt` + `MALLOC_ARENA_MAX` before workers fork; no effect off glibc. |
 | `--image-size INT` | Square resize fed to the backbone. |
 | `--channel-mode MODE` | 3-channel CXR build (raw + CLAHE + third channel), or `none` for legacy ImageNet RGB. |
 | `--cpu-fraction FLOAT` | Fraction of cores for the channel-cache precompute. |
@@ -145,5 +146,12 @@ Added by each script's own `parse_args`, not by `add_common_args`.
   on text — it's frozen by construction.
 - **`--text-embeddings-gpu-resident`** is the host-RAM mitigation for the prior-aware v3nano
   path; see [`prior_aware_v3nano/README.md`](prior_aware_v3nano/README.md#low-host-ram-mode---text-embeddings-gpu-resident).
+- **Unused raw-text columns are dropped automatically.** The prior-aware loaders prune any
+  text stream the model never consumes (e.g. the `obs` streams when vitals are fed numerically)
+  from the in-RAM parquet right after the embedding cache is attached — no flag needed. This
+  shrinks steady-state host RAM and the copy-on-write duplication into fork workers.
+- **glibc arenas are capped to 2 by default** (`--malloc-arena-max`). With `num_workers > 0`
+  this is often the single largest host-RAM reduction; set `--malloc-arena-max 0` to restore
+  the glibc default if you need to compare.
 - **`--resume-from` vs `--checkpoint-path`**: resume = continue the same run (full state);
   checkpoint-path = start a fresh run from those weights only.

@@ -150,6 +150,29 @@ class PriorAwareDataset(Dataset):
         if drop:
             self.df = self.df.drop(columns=drop)
 
+    def drop_unused_text_columns(self) -> int:
+        """Free raw-text columns the model never consumes, shrinking steady-state
+        host RAM (and the copy-on-write duplication into each fork worker the moment
+        a row is touched). ``_emit_streams`` is the set of streams ``__getitem__``
+        actually produces; any other text column is dead weight. For the Nano
+        variants that feed vitals numerically, the ``obs`` streams are never emitted,
+        so their (often long) strings sit unused in the parquet otherwise.
+
+        Safe in every mode: in tokenizer mode every stream is emitted so this is a
+        no-op; in cache mode the emitted streams' text is still needed for the lookup
+        and is kept. Call AFTER the text-embedding cache is attached (so _emit_streams
+        is final) and after the cache is built (the build still reads emitted streams).
+        Disjoint from precompute_text_indices, which drops the *emitted* columns once
+        they are resolved to indices. Returns the number of columns dropped."""
+        emit = self._emit_streams
+        drop = [
+            key for key, _, _ in _TEXT_STREAM_SPECS
+            if key not in emit and key in self.df.columns
+        ]
+        if drop:
+            self.df = self.df.drop(columns=drop)
+        return len(drop)
+
     def _decode(self, path: str):
         """Decode one image: built 3-channel array when channel_mode is set, else
         the legacy direct RGB decode (plain 3-channel duplicate)."""
