@@ -53,6 +53,8 @@ training/
   prior_aware/       current study + nearest previous study variant
                      (also: prior_aware_v2nano = Nano backbone + numeric vitals;
                      prior_aware_v3nano = same, single-token fusion)
+  camchex_v4nano/    prior-aware v4: single-token fusion + asymmetric prior
+                     cross-attention (current = queries, prior = memory)
   singleview/        train/eval entrypoints for single-view image models
   common.py          plain PyTorch train/eval helpers
 scripts/
@@ -220,8 +222,13 @@ default) — and normalized with precomputed per-channel stats. Override per run
 
 ```bash
 --channel-mode raw_clahe_histeq   # default (config: data.datamodule_cfg.channel_mode)
+--channel-mode raw_clahe_lbp      # raw + CLAHE + uniform Local Binary Pattern (local micro-texture)
 --channel-mode none               # legacy ImageNet RGB (plain grayscale-duplicated decode)
 ```
+
+`raw_clahe_lbp`'s precomputed stats assume scikit-image's *uniform* LBP (in
+`requirements.txt`); without it the build falls back to a plain 8-neighbour LBP whose
+distribution won't match those stats.
 
 Prior-aware models support this too; `--channel-mode none` reverts them to the plain
 decode. New modes are gated by `ENABLED_CHANNEL_MODES` in `training/common.py` — append

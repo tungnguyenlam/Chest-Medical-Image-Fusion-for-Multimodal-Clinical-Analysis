@@ -56,9 +56,12 @@ VIEW_ALIASES = {
 
 # 3-channel CXR modes exposed on the CLI. Every mode in CHANNEL_MODES is
 # raw + CLAHE + a third channel -- only the third varies (hist_eq / sobel /
-# laplacian / log / lbp). We only enable hist-eq for now; to allow another,
-# append its mode name here (e.g. "raw_clahe_sobel") -- no other change needed.
-ENABLED_CHANNEL_MODES = ["raw_clahe_histeq"]
+# laplacian / log / lbp). To allow another, append its mode name here (e.g.
+# "raw_clahe_sobel") -- no other change needed (CHANNEL_STATS must have it).
+# raw_clahe_histeq = raw + CLAHE + global histogram equalization (dense, balanced
+# std); raw_clahe_lbp = raw + CLAHE + uniform Local Binary Pattern (a dense local
+# micro-texture channel, std ~0.11 -- denser than the edge channels).
+ENABLED_CHANNEL_MODES = ["raw_clahe_histeq", "raw_clahe_lbp"]
 assert all(m in CHANNEL_MODES for m in ENABLED_CHANNEL_MODES), (
     "ENABLED_CHANNEL_MODES has names not in CHANNEL_MODES: "
     f"{[m for m in ENABLED_CHANNEL_MODES if m not in CHANNEL_MODES]}"
