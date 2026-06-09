@@ -31,7 +31,7 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 |------|-----|
 | `--checkpoint-path PATH` | Eval: weights to load. Train: **weights-only** warm-start (fresh optimizer/scheduler/epoch). |
 | `--resume-from PATH` | *Train only.* Full resume (model + optimizer + scheduler + epoch + step + early-stop state); run dir inferred from the path. |
-| `--quick-continue` | *Train only.* Resume the latest checkpoint of the latest run under `--output-dir`. |
+| `--quick-continue` | *Train only.* Resume the **most recently created** run under `--output-dir` (its latest checkpoint). Pass `--run-id` to target a specific run instead. |
 | `--seed INT` | Seed python/numpy/torch RNGs. |
 
 ### data & batching

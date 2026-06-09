@@ -10,7 +10,6 @@ from pathlib import Path
 import numpy as np
 import torch
 from tqdm.auto import tqdm
-from transformers import AutoModel, AutoTokenizer
 
 from src.utils.attention import from_pretrained_best_attention
 
@@ -162,6 +161,11 @@ class TextEmbeddingCache:
     def _load_model(self) -> None:
         if self._model is not None:
             return
+        # Imported lazily: with --use-precomputed-text-embeddings every embedding
+        # is already cached, so _load_model is never reached and the (heavy)
+        # transformers import is skipped entirely, saving import time and RAM.
+        from transformers import AutoModel, AutoTokenizer
+
         print(f"[text-cache] loading tokenizer: {self.text_model}", flush=True)
         self._tokenizer = AutoTokenizer.from_pretrained(self.text_model, trust_remote_code=True)
         print(

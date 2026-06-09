@@ -233,8 +233,8 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "--quick-continue",
         action="store_true",
         help=(
-            "Train only: find the latest checkpoint from the latest run under --output-dir and resume it. "
-            "Use --run-id to force one run."
+            "Train only: resume the most recently created run under --output-dir (its latest checkpoint). "
+            "Use --run-id to force a specific run instead."
         ),
     )
     g.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
@@ -490,12 +490,15 @@ def _checkpoint_sort_key(path: Path) -> tuple[int, float, str]:
     return epoch, mtime, str(path)
 
 
-def _run_sort_key(path: Path) -> tuple[str, float]:
+def _run_sort_key(path: Path) -> tuple[float, str]:
+    # Order by mtime first so sorting reverse=True puts the most recently
+    # created run dir first, regardless of how the dir is named. Name is a
+    # stable tiebreaker for runs sharing an mtime.
     try:
         mtime = path.stat().st_mtime
     except OSError:
         mtime = 0.0
-    return path.name, mtime
+    return mtime, path.name
 
 
 def find_quick_continue_checkpoint(args: argparse.Namespace) -> Path:
@@ -518,6 +521,8 @@ def find_quick_continue_checkpoint(args: argparse.Namespace) -> Path:
         )
 
     saw_checkpoint_dir = False
+    # run_dirs are sorted most-recent-first, so the first run with a checkpoint
+    # is the most recently created run.
     for run_dir in run_dirs:
         ckpt_dir = run_dir / "checkpoints"
         if not ckpt_dir.exists():
