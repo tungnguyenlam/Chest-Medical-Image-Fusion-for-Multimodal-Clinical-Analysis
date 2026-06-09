@@ -364,18 +364,19 @@ class PriorAwareAttributor(CaMCheXAttributor):
         if grad is None:
             return [], np.zeros(0)
         scores = (grad * act).sum(dim=-1)[0]                       # (seq,)
-        keep = torch.as_tensor(np.asarray(mask)[0] if np.asarray(mask).ndim == 2 else np.asarray(mask)).bool()
+        mask_np = self._to_numpy(mask)
+        keep = torch.as_tensor(mask_np[0] if mask_np.ndim == 2 else mask_np).bool()
         keep = keep.to(scores.device)
-        ids_t = torch.as_tensor(np.asarray(ids))
+        ids_t = torch.as_tensor(self._to_numpy(ids))
         ids_t = ids_t[0] if ids_t.ndim == 2 else ids_t
         kept_ids = ids_t[keep.cpu()].tolist()
         tokens = self.tokenizer.convert_ids_to_tokens(kept_ids)
         return tokens, scores[keep].detach().cpu().numpy()
 
     def _decode(self, ids, mask) -> str:
-        ids_t = torch.as_tensor(np.asarray(ids))
+        ids_t = torch.as_tensor(self._to_numpy(ids))
         ids_t = ids_t[0] if ids_t.ndim == 2 else ids_t
-        mask_t = torch.as_tensor(np.asarray(mask))
+        mask_t = torch.as_tensor(self._to_numpy(mask))
         mask_t = (mask_t[0] if mask_t.ndim == 2 else mask_t).bool()
         return self.tokenizer.decode(ids_t[mask_t], skip_special_tokens=True)
 
@@ -385,6 +386,13 @@ class PriorAwareAttributor(CaMCheXAttributor):
         act, grad = self._delta_act[0], self._delta_grad[0]
         prod = (grad * act)[0]
         return float(prod.sum().item()), float(prod.abs().sum().item())
+
+    @staticmethod
+    def _to_numpy(x) -> np.ndarray:
+        """Convert a tensor (possibly CUDA) or array-like to a host numpy array."""
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
 
     @staticmethod
     def _grad_x_input(tensor) -> np.ndarray:

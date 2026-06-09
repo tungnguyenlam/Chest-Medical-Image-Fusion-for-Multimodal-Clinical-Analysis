@@ -39,7 +39,15 @@ across the epoch. With indices precomputed, workers touch only fork-stable numer
 so RAM stays flat and you can raise `--num-workers` without multiplying it. The table is a
 non-persistent buffer, so checkpoints are unchanged and eval still runs without the flag.
 
-Two related RAM measures apply to every v3nano run, not just this flag:
+Related RAM measures apply to every v3nano run, not just this flag:
+- **The parquet loads with the pyarrow dtype backend.** `PriorAwareDataset` reads with
+  `dtype_backend="pyarrow"`, so string/list columns (image paths, labels, vitals) are stored
+  as immutable Arrow buffers outside the Python object graph rather than object columns of
+  per-element `str`/`list`/`int`. Reading an Arrow cell under fork doesn't bump a per-element
+  refcount, so the shared parquet pages stay clean and per-worker RSS no longer climbs across
+  the epoch — the same copy-on-write fix as the text-index precompute above, generalized to
+  every remaining column. (Null cells then surface as `pd.NA`, not `None`; the dataset's
+  null-checks handle both.)
 - **Dead `obs` streams are skipped.** v3nano feeds vitals numerically (`VitalsTokenProjector`),
   so the vitals-as-text `obs` / `prior_obs` streams are never read by the model. Whenever the
   embedding cache is active the dataset emits only `text_embedding_streams`
@@ -161,13 +169,25 @@ are dumped automatically after each epoch's validation (controlled by `--gradcam
 representative studies per class (`best/` and `first/`). Studies without a prior render
 placeholder prior panels and a masked time-delta. The dump forces the live CXR-BERT path
 (cache off, grads on) so per-token attribution works even with cached-embedding training;
-predictions are identical.
+predictions are identical. The subprocess defaults to the **training device** (override
+with `--gradcam-device`); attribution host-copies any device tensors, so CPU/CUDA/MPS all
+work.
 
-Standalone:
+Standalone (run any checkpoint by hand). `--device` defaults to auto-detect; pass
+`--studies-json` to reuse the trainer's per-class picks and skip the selection scan:
 
 ```bash
+# scan the split for the best true-positive study per class
 python -m src.interpret.run_prior_gradcam \
   --config training/prior_aware_v3nano/config.yaml \
-  --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/best.pt \
-  --split val --scan-limit 800
+  --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/epoch_000.pt \
+  --split val --scan-limit 800 --device cuda
+
+# or reuse the studies the trainer already selected (no scan)
+python -m src.interpret.run_prior_gradcam \
+  --config training/prior_aware_v3nano/config.yaml \
+  --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/epoch_000.pt \
+  --split val --device cuda \
+  --studies-json output/prior_aware_v3nano/runs/<run>/gradcam/epoch_0/selection.json \
+  --gradcam-out output/prior_aware_v3nano/runs/<run>/gradcam/epoch_0
 ```

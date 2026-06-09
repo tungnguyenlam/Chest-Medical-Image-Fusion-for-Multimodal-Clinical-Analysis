@@ -40,15 +40,24 @@ _TEXT_STREAM_SPECS = (
 )
 
 
+def _is_missing(value) -> bool:
+    """True for a null cell. The pyarrow dtype backend (see ``__init__``) yields
+    ``pd.NA`` -- not ``None`` -- for null cells, so an ``is None`` check alone
+    would treat a missing value as present and then crash downstream. Guard with
+    ``is_scalar`` so we never call ``pd.isna`` on a list/array cell (which would
+    return an elementwise array, not a bool)."""
+    return value is None or (pd.api.types.is_scalar(value) and pd.isna(value))
+
+
 def _to_array(x, dtype):
     """parquet list/array → np.ndarray with the right dtype."""
-    if x is None:
+    if _is_missing(x):
         return np.zeros(0, dtype=dtype)
     return np.asarray(list(x), dtype=dtype)
 
 
 def _has_value(row, key: str) -> bool:
-    return key in row.index and row[key] is not None
+    return key in row.index and not _is_missing(row[key])
 
 
 def _text_value(row, text_key: str, fallback: str) -> str:
@@ -99,7 +108,15 @@ class PriorAwareDataset(Dataset):
                 May be None only when every text stream is served by the embedding cache.
         """
         super().__init__()
-        self.df = pd.read_parquet(parquet_path).reset_index(drop=True)
+        # dtype_backend="pyarrow": store string/list columns as immutable Arrow
+        # buffers (offsets + data) living outside the Python object graph, instead
+        # of object columns full of per-element Python str/list/int. Under
+        # DataLoader num_workers>0 (fork), reading an Arrow cell does not bump a
+        # per-element refcount, so the shared parquet pages stay clean and
+        # per-worker RSS no longer climbs across the epoch via copy-on-write. This
+        # generalizes the copy-on-write fix that precompute_text_indices applied to
+        # the text columns to every remaining column (image paths, labels, vitals).
+        self.df = pd.read_parquet(parquet_path, dtype_backend="pyarrow").reset_index(drop=True)
         self.size = int(image_size)
         self.transform = transform
         self.label_dropout_p = float(label_dropout_p)

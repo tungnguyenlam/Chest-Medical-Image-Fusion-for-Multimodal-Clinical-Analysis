@@ -1850,3 +1850,16 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Verification.** Ran `python -m py_compile training/common.py` and `git diff --check -- training/common.py training/TRAINING_FLAGS.md`.
 
 **Follow-ups.** Re-run the original prior_aware_v3nano command and confirm the epoch-0 Grad-CAM phase no longer host-OOMs; if it still does, fix the remaining lifecycle issue by tearing down/rebuilding persistent workers around Grad-CAM and/or making `run_prior_gradcam.py` build a selected-row dataset from `selection.json`.
+
+## 2026-06-09 - fix CUDA-tensor crash in prior-aware text attribution
+
+**Goal.** Stop the post-epoch Grad-CAM subprocess from crashing (`TypeError: can't convert cuda:0 device type tensor to numpy`) now that it defaults to the training device.
+
+**Changes.**
+- `src/interpret/prior_attribution.py` - added a `_to_numpy` static helper that detaches and host-copies tensors before conversion, and routed `_text_attr` and `_decode` through it for both `ids` and `mask`.
+
+**Reasoning.** Token `ids`/`mask` for the text streams come from `self._text_slots(batch)`, and `batch` is moved to the device in `_to_dict_batch`. When Grad-CAM ran on CPU (the old default) these were CPU tensors and `np.asarray(...)` worked. The previous change defaulting the Grad-CAM subprocess to the training device (CUDA) made them CUDA tensors, so `np.asarray` hit `Tensor.__array__` -> `.numpy()` and raised. The fix host-copies generically, so the attribution path is correct on CPU, CUDA, or MPS. The `data[...]` dict entries used by the other `np.asarray` calls stay on CPU, so only the text path needed the change.
+
+**Gotchas.** This is a pure CPU/GPU placement fix; it is independent of `--text-embeddings-gpu-resident` (the runner forces the live CXR-BERT path with the cache off, so the GPU-resident embedding table is not used during attribution). The parent trainer already catches the subprocess failure and continues training, so earlier runs only lost that epoch's panels.
+
+**Verification.** Ran `python -m py_compile src/interpret/prior_attribution.py`. A live CUDA Grad-CAM run requires a GPU + data not present in this checkout.
