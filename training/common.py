@@ -794,6 +794,35 @@ def resolve_malloc_arena_max(args: argparse.Namespace) -> int:
     return 2 if val is None else int(val)
 
 
+def host_rss_mb() -> tuple[float, float]:
+    """Return ``(current_rss_mb, peak_rss_mb)`` for this process by reading
+    ``/proc/self/status`` (VmRSS / VmHWM). No psutil dependency. VmHWM is the
+    monotonic high-water mark, so it captures transient spikes (torch.compile /
+    Inductor, the embedding-table ``np.stack``) even after they are freed.
+    Returns ``(nan, nan)`` off Linux or if the file is unreadable."""
+    try:
+        rss = hwm = float("nan")
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    rss = float(line.split()[1]) / 1024.0  # kB -> MB
+                elif line.startswith("VmHWM:"):
+                    hwm = float(line.split()[1]) / 1024.0
+        return rss, hwm
+    except (OSError, ValueError, IndexError):
+        return float("nan"), float("nan")
+
+
+def log_rss(tag: str) -> None:
+    """Print a host-RAM milestone in the existing ``[mem]`` style: current RSS and
+    the process peak (VmHWM). Used to localize where the main-process footprint is
+    spent during startup (loaders, embedding-table build, model->device, compile)."""
+    rss, hwm = host_rss_mb()
+    if rss != rss:  # NaN: not Linux / unreadable
+        return
+    print(f"[mem] {tag}: RSS={rss:,.0f} MB (peak {hwm:,.0f} MB)", flush=True)
+
+
 _MP_SHARING_TUNED = False
 
 
@@ -1114,6 +1143,7 @@ def maybe_add_prior_aware_text_embeddings(
     if obs_texts:
         cache.ensure_texts(list(dict.fromkeys(obs_texts)), max_length=128, desc=f"{text_model} prior observation embeddings")
     cache.unload_model()
+    log_rss("text embeddings loaded to RAM (per-row dict cache before build_index_table)")
     data_cfg = dict(data_cfg)
     data_cfg["text_embedding_cache"] = cache
     return data_cfg
@@ -1208,6 +1238,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     print(f"[dataloader] val:   {val_dl_args}")
     train_loader = DataLoader(train_ds, **train_dl_args)
     val_loader = DataLoader(val_ds, **val_dl_args)
+    log_rss("loaders built (parquet dfs + text-embedding RAM cache resident)")
     return train_loader, val_loader
 
 
@@ -1684,6 +1715,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     accelerator = resolve_trainer_arg(args, cfg, "accelerator", None)
     device = select_device(accelerator)
     model.to(device)
+    log_rss("model -> device (GPU-resident embedding table host copy released)")
     model = maybe_channels_last(model, args, cfg)
     criterion = build_criterion(args, cfg, loss_init_args).to(device)
     optimizer = build_adamw_optimizer(model, lr=lr, **optimizer_args_from_config(cfg, args))
@@ -1741,6 +1773,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         print(f"initialized weights from {args.checkpoint_path} (fresh optimizer/scheduler)")
 
     model = maybe_compile_model(model, args, cfg)
+    log_rss("after compile setup (Inductor graphs build lazily on first batch)")
 
     # EMA is initialised after weights are loaded (resume/checkpoint_path) and after
     # compile, so the shadow tracks the same parameters the optimizer updates.
@@ -2141,6 +2174,11 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             else:
                 vram = "n/a"
 
+            # Host RSS / process peak (GB): catches main-process RAM growth across the
+            # epoch and the torch.compile spike (peak) that num_workers tuning can't touch.
+            rss_mb, hwm_mb = host_rss_mb()
+            ram = "n/a" if rss_mb != rss_mb else f"{rss_mb/1024:.1f}/{hwm_mb/1024:.1f}"
+
             pbar.set_postfix(
                 loss=f"{epoch_loss_avg:.4f}",
                 run_loss=f"{running_loss_avg:.4f}",
@@ -2148,6 +2186,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 grad_norm=f"{last_grad_norm:.3f}",
                 step=global_step,
                 vram=vram,
+                ram=ram,
             )
 
             if stepped and (global_step % log_every_n_steps == 0):

@@ -1863,3 +1863,10 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Gotchas.** This is a pure CPU/GPU placement fix; it is independent of `--text-embeddings-gpu-resident` (the runner forces the live CXR-BERT path with the cache off, so the GPU-resident embedding table is not used during attribution). The parent trainer already catches the subprocess failure and continues training, so earlier runs only lost that epoch's panels.
 
 **Verification.** Ran `python -m py_compile src/interpret/prior_attribution.py`. A live CUDA Grad-CAM run requires a GPU + data not present in this checkout.
+
+## 2026-06-09 — Host-RSS milestone tracer to localize main-process RAM
+
+- Added `host_rss_mb()` / `log_rss(tag)` in [training/common.py](training/common.py) (reads `/proc/self/status` VmRSS/VmHWM, no psutil). Prints `[mem] <tag>: RSS=X MB (peak Y MB)` at the startup points that move the footprint: loaders built, text embeddings→RAM, after `build_index_table`, `model -> device`, after compile setup. Also added a live `ram=RSS/peak` (GB) field to the training pbar postfix next to `vram=`.
+- Motivation: user saw ~8.5/15 GB host RAM at `--num-workers 0` and thought it had regressed. Non-obvious finding: **none of the existing host-RAM optimizations (pyarrow backend, text-index precompute, `gc.freeze()`, `MALLOC_ARENA_MAX`) help at `num_workers 0`** — they all target per-worker copy-on-write under fork. At 0 workers the footprint is CUDA context + cuDNN/cuBLAS + the `torch.compile`/Inductor spike + two parquet DataFrames + the transient `np.stack` in `build_index_table` (doubles the 748 MB table until `model.to(device)`). Lowering `--num-workers` is not a host-RAM lever.
+- VmHWM (peak) is the key signal — it's monotonic, so it surfaces the transient compile/stack spikes that have already been freed by the time you look at steady-state RSS.
+- Docs: documented the milestones + the `num_workers 0` caveat in [training/prior_aware_v3nano/README.md](training/prior_aware_v3nano/README.md) Low host-RAM section.

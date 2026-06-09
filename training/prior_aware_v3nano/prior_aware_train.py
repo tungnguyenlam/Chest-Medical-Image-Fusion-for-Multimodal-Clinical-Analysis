@@ -15,6 +15,7 @@ from training.common import (
     data_cfg_from_config,
     image_norm_stats,
     load_config,
+    log_rss,
     loss_args_from_config,
     lr_from_config,
     make_prior_aware_loaders,
@@ -100,6 +101,7 @@ def main() -> None:
         for loader in (train_loader, val_loader):
             loader.dataset.precompute_text_indices()
         del table  # GPU copy lives in the model buffer; release the host-side numpy
+        log_rss("after build_index_table (RAM dict freed; host table awaits model->device)")
     if args.uint8_image_pipeline:
         mean, std = image_norm_stats(data_cfg_from_config(cfg, args))
         model.enable_input_normalization(mean, std)

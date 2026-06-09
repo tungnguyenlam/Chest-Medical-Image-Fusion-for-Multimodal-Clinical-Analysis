@@ -65,6 +65,23 @@ Related RAM measures apply to every v3nano run, not just this flag:
   ablation). Eval stays on the numerically identical float path. See
   [`TRAINING_FLAGS.md`](../TRAINING_FLAGS.md#model-specific-flags).
 
+> **Most of the list above only helps when `--num-workers > 0`.** The pyarrow backend,
+> text-index precompute, `gc.freeze()`, and arena capping all exist to stop *per-worker* RSS
+> from climbing via copy-on-write fork. At `--num-workers 0` there are no workers, so they do
+> nothing — you pay the full main-process footprint with none of the worker-side savings.
+> Lowering `--num-workers` is therefore **not** a host-RAM lever; it just removes the
+> optimizations' reason to exist. At `num_workers 0` the dominant consumers are the CUDA
+> context + cuDNN/cuBLAS, the `torch.compile`/Inductor working set (a transient spike — hence
+> `TORCHINDUCTOR_COMPILE_THREADS=1`), the two parquet DataFrames, and the brief embedding-table
+> build (`np.stack` doubles the 748 MB table momentarily, freed after `model.to(device)`).
+
+**Seeing where the RAM goes.** Every run prints `[mem]` host-RSS milestones at the points that
+move the footprint — `loaders built`, `text embeddings loaded to RAM`, `after build_index_table`,
+`model -> device`, and `after compile setup` — each as `RSS=X MB (peak Y MB)`, where peak is the
+process high-water mark (`VmHWM`) so it captures transient spikes even after they're freed. The
+training progress bar also carries a live `ram=RSS/peak` (GB) field next to `vram=`, so growth
+across an epoch (or the compile spike on the first batch) is visible without extra tooling.
+
 Single-token variant of [`prior_aware_v2nano`](../prior_aware_v2nano/). Same
 prior-aware design (current + prior branches sharing the ConvNeXtV2-Nano image
 router, CXR-BERT text encoder, numeric vitals projector, time-delta embedding, and
