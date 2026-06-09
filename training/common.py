@@ -1224,6 +1224,15 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         cfg=data_cfg,
         tokenizer=tokenizer,
     )
+    # Build the image channel cache BEFORE the text-embedding cache. The channel
+    # prebuild is the more time-costly step, and it forks a multiprocessing pool --
+    # running it first means the pool forks before the ~0.7GB text-embedding RAM dict
+    # exists, so copy-on-write can't duplicate that dict across the pool workers.
+    # (image paths don't depend on the text cache; the text columns are dropped after.)
+    precompute_channels_for_paths(
+        data_cfg, _prior_aware_image_paths([train_ds.df, val_ds.df]), desc="prior_aware channels",
+        cpu_fraction=resolve_cpu_fraction(args),
+    )
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
     train_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     val_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
@@ -1231,10 +1240,6 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         dropped = ds.drop_unused_text_columns()
     if dropped:
         print(f"[dataloader] dropped {dropped} unused raw-text column(s) from the parquet to save host RAM")
-    precompute_channels_for_paths(
-        data_cfg, _prior_aware_image_paths([train_ds.df, val_ds.df]), desc="prior_aware channels",
-        cpu_fraction=resolve_cpu_fraction(args),
-    )
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
     val_dl_args = dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True)
     print(f"[dataloader] train: {train_dl_args} (label_dropout_p={label_dropout_p})")
