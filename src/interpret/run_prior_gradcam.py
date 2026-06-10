@@ -50,7 +50,7 @@ from src.dataloader.PriorAwareDataset import PriorAwareDataset
 from src.dataloader.utils import get_transforms
 from src.interpret.prior_attribution import PriorAwareAttributor
 from src.interpret.visualize import render_prior_attribution_split
-from src.model.CaMCheXV4NanoModel import CaMCheXV4NanoModel
+from src.model.PriorAwareV4NanoModel import PriorAwareV4NanoModel
 from src.model.PriorAwareCaMCheXModel import PriorAwareCaMCheXModel
 from src.model.PriorAwareV2NanoModel import PriorAwareV2NanoModel
 from src.model.PriorAwareV3NanoModel import PriorAwareV3NanoModel
@@ -72,13 +72,13 @@ _MODEL_CLASSES = {
     "prior_aware": PriorAwareCaMCheXModel,
     "prior_aware_v2nano": PriorAwareV2NanoModel,
     "prior_aware_v3nano": PriorAwareV3NanoModel,
-    "camchex_v4nano": CaMCheXV4NanoModel,
+    "prior_aware_v4nano": PriorAwareV4NanoModel,
 }
 _DEFAULT_TEXT_MODEL = {
     "prior_aware": "dmis-lab/biobert-v1.1",
     "prior_aware_v2nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
     "prior_aware_v3nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
-    "camchex_v4nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
+    "prior_aware_v4nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
 }
 
 

@@ -40,7 +40,7 @@ DEFAULT_CONFIGS = {
     "prior_aware_cxrbert": "training/prior_aware_cxrbert/config.yaml",
     "prior_aware_v2nano": "training/prior_aware_v2nano/config.yaml",
     "prior_aware_v3nano": "training/prior_aware_v3nano/config.yaml",
-    "camchex_v4nano": "training/camchex_v4nano/config.yaml",
+    "prior_aware_v4nano": "training/prior_aware_v4nano/config.yaml",
 }
 
 
@@ -179,10 +179,10 @@ def build_model(args: argparse.Namespace, cfg: dict[str, Any]) -> torch.nn.Modul
             **init_args,
         )
 
-    if model_key == "camchex_v4nano":
-        from src.model.CaMCheXV4NanoModel import CaMCheXV4NanoModel
+    if model_key == "prior_aware_v4nano":
+        from src.model.PriorAwareV4NanoModel import PriorAwareV4NanoModel
 
-        return CaMCheXV4NanoModel(
+        return PriorAwareV4NanoModel(
             timm_init_args=timm_args,
             text_model=text_model,
             **init_args,

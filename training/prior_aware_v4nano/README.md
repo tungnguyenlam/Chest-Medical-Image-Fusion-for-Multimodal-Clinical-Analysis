@@ -1,11 +1,11 @@
-# CaMCheX v4 Nano
+# Prior-Aware v4 Nano
 
-Prior-aware successor to [`prior_aware_v3nano`](../prior_aware_v3nano/), branded into the
-flagship `camchex` line. Same prior-aware design and same single-token-per-signal layout
+Prior-aware successor to [`prior_aware_v3nano`](../prior_aware_v3nano/), kept in the
+`prior_aware` line. Same prior-aware design and same single-token-per-signal layout
 as v3nano (current + prior branches sharing the ConvNeXtV2-Nano image router, CXR-BERT
 text encoder, numeric vitals projector, time-delta embedding, and `Linear(26→768)`
 prior-label token) — implemented in
-[`src/model/CaMCheXV4NanoModel.py`](../../src/model/CaMCheXV4NanoModel.py).
+[`src/model/PriorAwareV4NanoModel.py`](../../src/model/PriorAwareV4NanoModel.py).
 
 ## The one change: asymmetric prior cross-attention
 
@@ -55,12 +55,12 @@ only the shared backbone/text/vitals/prior-label tensors by name).
 python src/prepare/04_build_prior_aware_dataset.py
 
 # 1. train
-python training/camchex_v4nano/camchex_v4nano_train.py \
+python training/prior_aware_v4nano/prior_aware_train.py \
   --use-precomputed-text-embeddings --ema --batch-size 4 --num-workers 4
 
 # 2. eval (two passes: full vs. CURRENT clinical-indication dropped; prior text kept)
-python training/camchex_v4nano/camchex_v4nano_eval.py \
-  --checkpoint-path output/camchex_v4nano/runs/<RUN_ID>/checkpoints/<BEST>.pt \
+python training/prior_aware_v4nano/prior_aware_eval.py \
+  --checkpoint-path output/prior_aware_v4nano/runs/<RUN_ID>/checkpoints/<BEST>.pt \
   --use-precomputed-text-embeddings
 ```
 
@@ -74,7 +74,7 @@ apply (`--text-embeddings-gpu-resident`, `--uint8-image-pipeline`, the pyarrow b
 
 ## Grad-CAM / Attribution
 
-`config.yaml` sets `arch: camchex_v4nano`, registered in
+`config.yaml` sets `arch: prior_aware_v4nano`, registered in
 [`src/interpret/run_prior_gradcam.py`](../../src/interpret/run_prior_gradcam.py), so the
 model reuses the prior-aware attribution machinery unchanged (it hooks `image_encoder`,
 the CXR-BERT embeddings, `delta_embedding`, and grad×value on `prior_label`/vitals — all
@@ -83,7 +83,7 @@ that prior-branch attribution now flows through the cross-attention rather than 
 access, so the prior modality contributions reflect the v4 "prior as evidence" design.
 ```bash
 python -m src.interpret.run_prior_gradcam \
-  --config training/camchex_v4nano/config.yaml \
-  --checkpoint-path output/camchex_v4nano/runs/<run>/checkpoints/epoch_000.pt \
+  --config training/prior_aware_v4nano/config.yaml \
+  --checkpoint-path output/prior_aware_v4nano/runs/<run>/checkpoints/epoch_000.pt \
   --split val --scan-limit 800 --device cuda
 ```

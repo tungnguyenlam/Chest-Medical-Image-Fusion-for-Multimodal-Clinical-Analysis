@@ -1,5 +1,5 @@
 model:
-  arch: camchex_v4nano
+  arch: prior_aware_v4nano
   lr: 3.0e-5
   classes: &classes
     - Atelectasis

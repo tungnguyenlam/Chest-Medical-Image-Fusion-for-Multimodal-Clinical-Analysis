@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model.CaMCheXV4NanoModel import CaMCheXV4NanoModel
+from src.model.PriorAwareV4NanoModel import PriorAwareV4NanoModel
 from training.common import (
     add_common_args,
     classes_from_config,
@@ -26,8 +26,8 @@ from training.common import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate CaMCheX v4 Nano (asymmetric prior cross-attention fusion).")
-    add_common_args(parser, model_name="camchex_v4nano")
+    parser = argparse.ArgumentParser(description="Evaluate Prior-Aware v4 Nano (asymmetric prior cross-attention fusion).")
+    add_common_args(parser, model_name="prior_aware_v4nano")
     parser.add_argument("--frontal-pretrained-path")
     parser.add_argument("--lateral-pretrained-path")
     parser.add_argument("--text-model", help="Override model.text_model from config.")
@@ -52,7 +52,7 @@ def main() -> None:
     if args.use_precomputed_text_embeddings or data_cfg.get("use_text_embedding_cache", False):
         model_init_args["use_precomputed_text_embeddings"] = True
         model_init_args["freeze_text_encoder"] = True
-    model = CaMCheXV4NanoModel(
+    model = PriorAwareV4NanoModel(
         timm_init_args=timm_args_from_config(cfg, args),
         frontal_pretrained_path=str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None,
         lateral_pretrained_path=str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None,

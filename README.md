@@ -52,9 +52,9 @@ training/
                      ConvNeXtV2 Nano + CXR-BERT + numeric vitals variant
   prior_aware/       current study + nearest previous study variant
                      (also: prior_aware_v2nano = Nano backbone + numeric vitals;
-                     prior_aware_v3nano = same, single-token fusion)
-  camchex_v4nano/    prior-aware v4: single-token fusion + asymmetric prior
-                     cross-attention (current = queries, prior = memory)
+                     prior_aware_v3nano = same, single-token fusion;
+                     prior_aware_v4nano = v3nano + asymmetric prior cross-attention,
+                     current = queries, prior = memory)
   singleview/        train/eval entrypoints for single-view image models
   common.py          shared CLI flags (add_common_args); re-exports utils/ helpers
   utils/             plain PyTorch train/eval helpers, split by concern

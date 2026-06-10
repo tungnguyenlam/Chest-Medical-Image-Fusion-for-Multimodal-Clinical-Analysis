@@ -1,6 +1,6 @@
-"""CaMCheX v4 Nano: asymmetric prior cross-attention fusion.
+"""Prior-Aware v4 Nano: asymmetric prior cross-attention fusion.
 
-Successor to ``PriorAwareV3NanoModel`` (branded into the flagship ``camchex`` line).
+Successor to ``PriorAwareV3NanoModel`` in the ``prior_aware`` model line.
 Same prior-aware design -- current + prior branches sharing the ConvNeXtV2-Nano image
 router, CXR-BERT text encoder, numeric VitalsTokenProjector, time-delta embedding, and
 ``Linear(26->768)`` prior-label token -- and the same single-token-per-signal layout as
@@ -70,8 +70,8 @@ SEG_PRV_REPORT = 13  # prior study's findings + impression (legitimate prior inf
 N_SEGMENTS = 14
 
 
-class CaMCheXV4NanoModel(nn.Module):
-    """Prior-aware CaMCheX v4: single-token fusion with asymmetric prior cross-attention."""
+class PriorAwareV4NanoModel(nn.Module):
+    """Prior-aware v4: single-token fusion with asymmetric prior cross-attention."""
 
     gradcam_runner_module = "src.interpret.run_prior_gradcam"
 

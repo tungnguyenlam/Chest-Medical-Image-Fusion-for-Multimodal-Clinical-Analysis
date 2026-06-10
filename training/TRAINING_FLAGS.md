@@ -122,19 +122,19 @@ Added by each script's own `parse_args`, not by `add_common_args`.
 | `--freeze-text-encoder` | text-fusion models with a cache² | Freeze the text encoder (only meaningful when token ids are encoded at train time). |
 | `--text-embedding-cache-dir DIR` | text-fusion models with a cache² | Override the shared frozen text-embedding cache root. |
 | `--use-precomputed-text-embeddings` | prior-aware family³ | Use the shared frozen embedding cache instead of loading the text encoder. |
-| `--text-embeddings-gpu-resident` | **`prior_aware_v3nano`, `camchex_v4nano`** | Opt-in. Keep the precomputed embeddings as one frozen table on-device and emit row indices instead of per-sample float vectors; also precomputes indices and drops raw-text columns to keep per-worker RAM flat. Requires `--use-precomputed-text-embeddings`. |
-| `--uint8-image-pipeline` | **`camchex_v2nano_vitals_stable`, `prior_aware_v3nano`, `camchex_v4nano`** | Opt-in. Ship images as uint8 [0,255] and dequantize + normalize on-device in the model instead of CPU float32 — ~4× smaller per-batch host buffer, pinned staging, and H2D copy. Requires a channel mode. Train-time augs then run on uint8, shifting value-scale aug numerics (noise/brightness), so validate with a short ablation before adopting. Eval stays on the (numerically identical) float path. |
+| `--text-embeddings-gpu-resident` | **`prior_aware_v3nano`, `prior_aware_v4nano`** | Opt-in. Keep the precomputed embeddings as one frozen table on-device and emit row indices instead of per-sample float vectors; also precomputes indices and drops raw-text columns to keep per-worker RAM flat. Requires `--use-precomputed-text-embeddings`. |
+| `--uint8-image-pipeline` | **`camchex_v2nano_vitals_stable`, `prior_aware_v3nano`, `prior_aware_v4nano`** | Opt-in. Ship images as uint8 [0,255] and dequantize + normalize on-device in the model instead of CPU float32 — ~4× smaller per-batch host buffer, pinned staging, and H2D copy. Requires a channel mode. Train-time augs then run on uint8, shifting value-scale aug numerics (noise/brightness), so validate with a short ablation before adopting. Eval stays on the (numerically identical) float path. |
 | `--view-position {AP,PA,LATERAL,...}` | **`singleview` only** | Which view the single-view model trains/evals on. |
 | `--predictions-path` / `--metrics-path` | most `*_eval.py`⁴ | Where eval writes predictions / metrics. |
 | `--output-csv PATH` | prior-aware family `*_eval.py` | Eval predictions CSV path. |
 
 ¹ `camchex`, `camchex_cxrbert`, `camchex_v2nano_vitals`, `camchex_v2nano_vitals_stable`,
-  `camchex_v3nano`, `camchex_v4nano`, `prior_aware`, `prior_aware_cxrbert`,
+  `camchex_v3nano`, `prior_aware_v4nano`, `prior_aware`, `prior_aware_cxrbert`,
   `prior_aware_v2nano`, `prior_aware_v3nano`. (Not `singleview`.)
 ² Above **minus** base `camchex` / `camchex_cxrbert` (whose train scripts only take
   `--frontal/--lateral-pretrained-path` and `--text-model`).
 ³ `prior_aware`, `prior_aware_cxrbert`, `prior_aware_v2nano`, `prior_aware_v3nano`,
-  `camchex_v4nano`.
+  `prior_aware_v4nano`.
 ⁴ `camchex*`, `camchex_v3nano`, vitals variants, `singleview` eval scripts.
 
 ---
