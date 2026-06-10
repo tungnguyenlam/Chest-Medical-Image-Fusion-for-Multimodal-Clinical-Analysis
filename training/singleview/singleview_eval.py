@@ -27,7 +27,7 @@ from training.common import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate or predict with a single-view model checkpoint.")
-    add_common_args(parser, model_name="singleview")
+    add_common_args(parser, model_name="singleview", mode="eval")
     parser.add_argument("--view-position", choices=("all", "frontal", "lateral"), default="all")
     parser.add_argument("--predictions-path", default="output/singleview/predictions.csv")
     parser.add_argument("--metrics-path", default="output/singleview/metrics.json")

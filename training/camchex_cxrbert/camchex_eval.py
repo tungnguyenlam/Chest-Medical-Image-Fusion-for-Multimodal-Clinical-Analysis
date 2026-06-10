@@ -29,7 +29,7 @@ from training.common import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate CaMCheX (ConvNeXt-Tiny + CXR-BERT-specialized).")
-    add_common_args(parser, model_name="camchex_cxrbert")
+    add_common_args(parser, model_name="camchex_cxrbert", mode="eval")
     parser.add_argument("--frontal-pretrained-path", help="Optional raw frontal timm backbone state_dict.")
     parser.add_argument("--lateral-pretrained-path", help="Optional raw lateral timm backbone state_dict.")
     parser.add_argument("--text-model", help="Override model.text_model from config.")

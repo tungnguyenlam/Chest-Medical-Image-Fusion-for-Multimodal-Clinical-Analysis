@@ -102,8 +102,10 @@ data:
     # path+mode+cfg). Reused across models/runs and prebuilt before training when
     # channel_mode is set. null -> rebuild on the fly every epoch (no cache).
     image_channel_cache_dir: ../cache/channels
-    # 3-channel CXR representation: raw + CLAHE + a third channel. null -> legacy
-    # ImageNet RGB. Override per-run with --channel-mode (e.g. none to ablate).
+    # Full channel_mode name: ch0=raw, ch1=mild CLAHE (both pinned), ch2 here=histeq.
+    # Override ONLY ch2 per-run with --third-channel-mode (clahe|histeq|lbp) -- it maps
+    # the short name to the full mode (histeq -> raw_clahe_histeq). --third-channel-mode
+    # none reverts to legacy ImageNet RGB (channel_mode: null).
     channel_mode: raw_clahe_histeq
     size: 512
     classes: *classes

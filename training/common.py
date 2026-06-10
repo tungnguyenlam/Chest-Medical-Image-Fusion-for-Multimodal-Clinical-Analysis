@@ -37,12 +37,21 @@ from training.utils.constants import CPU_FRACTION, ENABLED_THIRD_CHANNELS
 from src.loss import LOSS_REGISTRY
 
 
-def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None) -> None:
-    """Flags shared by every training/eval entry point, grouped by concern so the set
-    is easy to scan here and in ``--help``. Model-specific flags (image pretrained
-    paths, text-model / embedding-cache options, single-view position, eval output
-    paths) are added by each script's own ``parse_args``. See
-    ``training/TRAINING_FLAGS.md`` for the full map of which flag applies where."""
+def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None, mode: str = "train") -> None:
+    """Flags shared by training/eval entry points, grouped by concern so the set is easy
+    to scan here and in ``--help``. Model-specific flags (image pretrained paths,
+    text-model / embedding-cache options, single-view position, eval output paths) are
+    added by each script's own ``parse_args``. See ``training/TRAINING_FLAGS.md`` for the
+    full map of which flag applies where.
+
+    ``mode`` selects which flags are registered. ``mode="eval"`` (passed by the
+    ``*_eval.py`` scripts) drops the train-only groups the eval path never reads --
+    optimization, EMA, validation/early-stop, ``--compile-model`` / ``--channels-last``,
+    Grad-CAM, ``--resume-from`` / ``--quick-continue``, ``--fast-dev-run`` -- so
+    ``eval --help`` shows only what actually does something, and adds the eval-only
+    ``--skip-report-ablation``. The full flag set is still defined here in one place;
+    the gating only controls visibility per entry point."""
+    train_only = mode != "eval"
 
     # --- Run identity & I/O -------------------------------------------------
     g = parser.add_argument_group("run identity & I/O")
@@ -58,20 +67,21 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     g = parser.add_argument_group("checkpointing & resume")
     g.add_argument(
         "--checkpoint-path",
-        help="Checkpoint path. In eval: weights to load. In train: weights-only init (fresh optimizer/scheduler/epoch).",
+        help="Checkpoint path. In eval: weights to load (and, unless --config is passed, the config is auto-resolved from this checkpoint's run dir). In train: weights-only init (fresh optimizer/scheduler/epoch).",
     )
-    g.add_argument(
-        "--resume-from",
-        help="Train only: full resume from checkpoint (model + optimizer + scheduler + epoch + global_step + early-stop state). Run dir is inferred from the checkpoint path.",
-    )
-    g.add_argument(
-        "--quick-continue",
-        action="store_true",
-        help=(
-            "Train only: resume the most recently created run under --output-dir (its latest checkpoint). "
-            "Use --run-id to force a specific run instead."
-        ),
-    )
+    if train_only:
+        g.add_argument(
+            "--resume-from",
+            help="Train only: full resume from checkpoint (model + optimizer + scheduler + epoch + global_step + early-stop state). Run dir is inferred from the checkpoint path.",
+        )
+        g.add_argument(
+            "--quick-continue",
+            action="store_true",
+            help=(
+                "Train only: resume the most recently created run under --output-dir (its latest checkpoint). "
+                "Use --run-id to force a specific run instead."
+            ),
+        )
     g.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")
 
     # --- Data & batching ----------------------------------------------------
@@ -136,139 +146,142 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         ),
     )
 
-    # --- Optimization -------------------------------------------------------
-    g = parser.add_argument_group("optimization")
-    g.add_argument(
-        "--loss",
-        nargs="+",
-        metavar="NAME",
-        help="Loss function(s), overriding model.loss / the default ASL. One name -> that loss "
-        f"(available: {', '.join(sorted(LOSS_REGISTRY))}); several -> their weighted sum, e.g. "
-        "'--loss FC ASL'. Per-loss kwargs come from model.loss_kwargs.<NAME>; ASL also inherits "
-        "model.loss_init_args. Weights: --loss-weights or model.loss_weights (default 1.0 each).",
-    )
-    g.add_argument(
-        "--loss-weights",
-        nargs="+",
-        type=float,
-        metavar="W",
-        help="Weights for a multi-loss --loss, positionally matched (e.g. '--loss FC ASL "
-        "--loss-weights 1.0 0.5'). Must match the number of losses.",
-    )
-    g.add_argument("--lr", type=float)
-    g.add_argument("--weight-decay", type=float)
-    g.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
-    g.add_argument("--max-epochs", type=int)
-    g.add_argument("--accumulate-grad-batches", type=int)
-    g.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
+    if train_only:
+        # --- Optimization ---------------------------------------------------
+        g = parser.add_argument_group("optimization")
+        g.add_argument(
+            "--loss",
+            nargs="+",
+            metavar="NAME",
+            help="Loss function(s), overriding model.loss / the default ASL. One name -> that loss "
+            f"(available: {', '.join(sorted(LOSS_REGISTRY))}); several -> their weighted sum, e.g. "
+            "'--loss FC ASL'. Per-loss kwargs come from model.loss_kwargs.<NAME>; ASL also inherits "
+            "model.loss_init_args. Weights: --loss-weights or model.loss_weights (default 1.0 each).",
+        )
+        g.add_argument(
+            "--loss-weights",
+            nargs="+",
+            type=float,
+            metavar="W",
+            help="Weights for a multi-loss --loss, positionally matched (e.g. '--loss FC ASL "
+            "--loss-weights 1.0 0.5'). Must match the number of losses.",
+        )
+        g.add_argument("--lr", type=float)
+        g.add_argument("--weight-decay", type=float)
+        g.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
+        g.add_argument("--max-epochs", type=int)
+        g.add_argument("--accumulate-grad-batches", type=int)
+        g.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
 
-    # --- EMA (weight averaging) --------------------------------------------
-    g = parser.add_argument_group("EMA (weight averaging)")
-    g.add_argument(
-        "--ema",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Maintain an exponential moving average of the weights and use it as the evaluated/saved "
-        "model. Off by default (config trainer.ema overrides). Best paired with schedule=single_cosine; "
-        "do NOT --resume-from an EMA checkpoint (saved weights are the EMA snapshot, not the raw state).",
-    )
-    g.add_argument(
-        "--ema-decay",
-        type=float,
-        help="EMA decay factor (default 0.999, or trainer.ema_decay). Higher = smoother/slower.",
-    )
+        # --- EMA (weight averaging) ----------------------------------------
+        g = parser.add_argument_group("EMA (weight averaging)")
+        g.add_argument(
+            "--ema",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Maintain an exponential moving average of the weights and use it as the evaluated/saved "
+            "model. Off by default (config trainer.ema overrides). Best paired with schedule=single_cosine; "
+            "do NOT --resume-from an EMA checkpoint (saved weights are the EMA snapshot, not the raw state).",
+        )
+        g.add_argument(
+            "--ema-decay",
+            type=float,
+            help="EMA decay factor (default 0.999, or trainer.ema_decay). Higher = smoother/slower.",
+        )
 
-    # --- Validation, early stopping & logging ------------------------------
-    g = parser.add_argument_group("validation, early stopping & logging")
-    g.add_argument("--val-check-interval", type=float)
-    g.add_argument("--log-every-n-steps", type=int, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
-    g.add_argument("--early-stop-monitor", help="Epoch validation metric to monitor for early stopping. Default val_ap.")
-    g.add_argument("--early-stop-mode", choices=["min", "max"], help="Whether early-stop monitor should decrease or increase. Default max.")
-    g.add_argument("--early-stop-patience", type=int, help="Stop after this many non-improving epochs. Default 3; set 0 to disable.")
-    g.add_argument("--early-stop-min-delta", type=float, help="Minimum metric change required to count as an improvement. Default 0.0.")
-    g.add_argument(
-        "--quick-val-every-steps",
-        type=int,
-        help="If set, run a partial validation every N optimizer steps (= N effective batches, where effective = batch_size * accumulate_grad_batches). Logged to val_quick.csv. Does not affect best-checkpoint tracking.",
-    )
-    g.add_argument(
-        "--quick-val-frac",
-        type=float,
-        help="Fraction of val loader batches to use for quick validation (default 0.1).",
-    )
-    g.add_argument(
-        "--full-val-fracs",
-        type=float,
-        nargs="*",
-        help="Epoch fractions (each in (0,1)) at which to run a full mid-epoch validation. "
-        "Independent of batch size. End-of-epoch full validation always runs. Default: none "
-        "(no mid-epoch full validation). Pass fractions to enable.",
-    )
-    g.add_argument(
-        "--quick-val-fracs",
-        type=float,
-        nargs="*",
-        help="Epoch fractions (each in (0,1)) at which to run a partial quick validation "
-        "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
-        "batch size. Default 0.25 0.5 0.75. Pass with no values to disable.",
-    )
+        # --- Validation, early stopping & logging --------------------------
+        g = parser.add_argument_group("validation, early stopping & logging")
+        g.add_argument("--val-check-interval", type=float)
+        g.add_argument("--log-every-n-steps", type=int, help="How often to write a row to train_steps.csv. 1 = every optimizer step.")
+        g.add_argument("--early-stop-monitor", help="Epoch validation metric to monitor for early stopping. Default val_ap.")
+        g.add_argument("--early-stop-mode", choices=["min", "max"], help="Whether early-stop monitor should decrease or increase. Default max.")
+        g.add_argument("--early-stop-patience", type=int, help="Stop after this many non-improving epochs. Default 3; set 0 to disable.")
+        g.add_argument("--early-stop-min-delta", type=float, help="Minimum metric change required to count as an improvement. Default 0.0.")
+        g.add_argument(
+            "--quick-val-every-steps",
+            type=int,
+            help="If set, run a partial validation every N optimizer steps (= N effective batches, where effective = batch_size * accumulate_grad_batches). Logged to val_quick.csv. Does not affect best-checkpoint tracking.",
+        )
+        g.add_argument(
+            "--quick-val-frac",
+            type=float,
+            help="Fraction of val loader batches to use for quick validation (default 0.1).",
+        )
+        g.add_argument(
+            "--full-val-fracs",
+            type=float,
+            nargs="*",
+            help="Epoch fractions (each in (0,1)) at which to run a full mid-epoch validation. "
+            "Independent of batch size. End-of-epoch full validation always runs. Default: none "
+            "(no mid-epoch full validation). Pass fractions to enable.",
+        )
+        g.add_argument(
+            "--quick-val-fracs",
+            type=float,
+            nargs="*",
+            help="Epoch fractions (each in (0,1)) at which to run a partial quick validation "
+            "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
+            "batch size. Default 0.25 0.5 0.75. Pass with no values to disable.",
+        )
 
     # --- Hardware, precision & compile -------------------------------------
     g = parser.add_argument_group("hardware, precision & compile")
     g.add_argument("--accelerator", default=None)
     g.add_argument("--devices", default=None)
     g.add_argument("--precision", default=None)
-    g.add_argument(
-        "--compile-model",
-        action="store_true",
-        default=None,
-        help="Opt in to torch.compile (automatic dynamic) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Compile failures fall back to eager. Default comes from trainer.compile_model, or false if unset.",
-    )
-    g.add_argument(
-        "--channels-last",
-        action="store_true",
-        default=None,
-        help="(opt-in) Run the conv image backbone(s) in torch.channels_last (NHWC) memory format. "
-        "Layout-only (numerics identical), but it lets cuDNN use the native NHWC fp16/bf16 "
-        "Tensor-Core conv kernels and skip the per-layer NCHW<->NHWC transposes, typically a "
-        "10-30%% throughput win on conv-heavy nets (ConvNeXtV2). Converts the model's 4D conv "
-        "weights and feeds conv inputs as channels_last. Default comes from trainer.channels_last, "
-        "or false if unset.",
-    )
+    if train_only:
+        g.add_argument(
+            "--compile-model",
+            action="store_true",
+            default=None,
+            help="Opt in to torch.compile (automatic dynamic) on the compile-safe submodules (image backbones, text encoder, transformer encoder, head) before training; the data-dependent fusion stays eager. Compiled in place so checkpoint keys are unchanged. Compile failures fall back to eager. Default comes from trainer.compile_model, or false if unset.",
+        )
+        g.add_argument(
+            "--channels-last",
+            action="store_true",
+            default=None,
+            help="(opt-in) Run the conv image backbone(s) in torch.channels_last (NHWC) memory format. "
+            "Layout-only (numerics identical), but it lets cuDNN use the native NHWC fp16/bf16 "
+            "Tensor-Core conv kernels and skip the per-layer NCHW<->NHWC transposes, typically a "
+            "10-30%% throughput win on conv-heavy nets (ConvNeXtV2). Converts the model's 4D conv "
+            "weights and feeds conv inputs as channels_last. Default comes from trainer.channels_last, "
+            "or false if unset.",
+        )
 
     # --- Backbone -----------------------------------------------------------
     g = parser.add_argument_group("backbone")
     g.add_argument("--backbone-name")
     g.add_argument("--no-pretrained", action="store_true")
 
-    # --- Debug --------------------------------------------------------------
-    g = parser.add_argument_group("debug")
-    g.add_argument("--fast-dev-run", action="store_true")
+    if train_only:
+        # --- Debug ----------------------------------------------------------
+        g = parser.add_argument_group("debug")
+        g.add_argument("--fast-dev-run", action="store_true")
 
-    # --- Grad-CAM panels ----------------------------------------------------
-    g = parser.add_argument_group("Grad-CAM panels")
-    g.add_argument(
-        "--gradcam-epochs",
-        help="When to dump per-class Grad-CAM panels: 'all' (default, every epoch — it's cheap), "
-             "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). "
-             "Only models that define gradcam_runner_module emit panels.",
-    )
-    g.add_argument(
-        "--gradcam-device",
-        help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: the training device.",
-    )
-
-    # --- Eval-only ----------------------------------------------------------
-    g = parser.add_argument_group("eval-only")
-    g.add_argument(
-        "--skip-report-ablation",
-        action="store_true",
-        help=(
-            "Eval only: by default every text model is evaluated twice -- once with the full "
-            "inputs (image + clinical indication [+ vitals]) and once with the CURRENT study's "
-            "clinical indication blanked to the in-distribution 'No clinical history available.' "
-            "placeholder, written to *.no_report.{csv,json}, to measure how much the report text "
-            "is carrying (a leakage probe). The prior study's report/text is kept either way. "
-            "Pass this flag to run only the full pass."
-        ),
-    )
+        # --- Grad-CAM panels ------------------------------------------------
+        g = parser.add_argument_group("Grad-CAM panels")
+        g.add_argument(
+            "--gradcam-epochs",
+            help="When to dump per-class Grad-CAM panels: 'all' (default, every epoch — it's cheap), "
+                 "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). "
+                 "Only models that define gradcam_runner_module emit panels.",
+        )
+        g.add_argument(
+            "--gradcam-device",
+            help="Device for the Grad-CAM subprocess (cpu/cuda/mps). Default: the training device.",
+        )
+    else:
+        # --- Eval-only ------------------------------------------------------
+        g = parser.add_argument_group("eval-only")
+        g.add_argument(
+            "--skip-report-ablation",
+            action="store_true",
+            help=(
+                "Eval only: by default every text model is evaluated twice -- once with the full "
+                "inputs (image + clinical indication [+ vitals]) and once with the CURRENT study's "
+                "clinical indication blanked to the in-distribution 'No clinical history available.' "
+                "placeholder, written to *.no_report.{csv,json}, to measure how much the report text "
+                "is carrying (a leakage probe). The prior study's report/text is kept either way. "
+                "Pass this flag to run only the full pass."
+            ),
+        )

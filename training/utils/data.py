@@ -525,6 +525,15 @@ def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, 
     )
     if drop_report:
         _blank_prior_aware_current_indication(ds)
+    # Warm the channel cache for the eval (test) split up front. Training only warms
+    # train+val, so without this every test image is a cache miss built lazily mid-loop:
+    # the first few batches are fast (the prefetch buffer, filled during model load,
+    # drains) and then throughput collapses to the per-image CLAHE/histeq build rate.
+    # Run before the text-embedding cache exists so the fork pool doesn't COW that dict.
+    precompute_channels_for_paths(
+        data_cfg, _prior_aware_image_paths([ds.df]), desc="prior_aware eval channels",
+        cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False),
+    )
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [ds.df], args=args)
     ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     ds.drop_unused_text_columns()
@@ -537,6 +546,9 @@ def make_single_view_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, 
     data_cfg = data_cfg_from_config(cfg, args)
     _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     df = filter_single_view(read_dataframe(data_cfg["pred_df_path"]), view_position)
+    # Warm the channel cache for the eval split up front (see make_prior_aware_eval_loader).
+    precompute_channel_cache(data_cfg, [df], desc="singleview eval channels",
+                             cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False))
     ds = SingleViewDataset(data_cfg, df, transforms_val)
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     ids = df["path"].tolist() if "path" in df.columns else list(range(len(df)))
@@ -556,6 +568,9 @@ def make_camchex_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, drop
     df = read_dataframe(data_cfg["pred_df_path"])
     if drop_report:
         df = _blank_current_indication(df)
+    # Warm the channel cache for the eval split up front (see make_prior_aware_eval_loader).
+    precompute_channel_cache(data_cfg, [df], desc="camchex eval channels",
+                             cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False))
     ds = CaMCheXDataset(data_cfg, df, transforms_val, tokenizer)
     loader = DataLoader(ds, **dataloader_args_from_config(cfg, args, shuffle=False, for_eval=True))
     labels_available = all(c in df.columns for c in data_cfg["classes"])
@@ -570,6 +585,10 @@ def make_camchex_vitals_eval_loader(cfg: dict[str, Any], args: argparse.Namespac
     df = read_dataframe(data_cfg["pred_df_path"])
     if drop_report:
         df = _blank_current_indication(df)
+    # Warm the channel cache for the eval split up front (see make_prior_aware_eval_loader);
+    # before the text-embedding cache so the fork pool doesn't COW that dict.
+    precompute_channel_cache(data_cfg, [df], desc="camchex_vitals eval channels",
+                             cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False))
     data_cfg = maybe_add_camchex_vitals_text_embeddings(cfg, data_cfg, [df], args=args)
     tokenizer = None
     if "clinical_embedding_cache" not in data_cfg and "clinical_embeddings" not in data_cfg:

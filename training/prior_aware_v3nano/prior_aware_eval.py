@@ -27,7 +27,7 @@ from training.common import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate prior-aware CaMCheX v3 Nano (single-token clinical/report/vitals fusion).")
-    add_common_args(parser, model_name="prior_aware_v3nano")
+    add_common_args(parser, model_name="prior_aware_v3nano", mode="eval")
     parser.add_argument("--frontal-pretrained-path")
     parser.add_argument("--lateral-pretrained-path")
     parser.add_argument("--text-model", help="Override model.text_model from config.")

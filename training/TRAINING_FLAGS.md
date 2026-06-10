@@ -15,7 +15,13 @@ Run `python training/<model>/<model>_train.py --help` to see the live, grouped l
 
 ## General flags (all scripts)
 
-Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_eval.py`.
+Grouped exactly as in `add_common_args`. Flags marked **train-only** below are not
+registered on `*_eval.py` at all — `add_common_args(..., mode="eval")` drops them, so
+they don't appear in `eval --help` (previously they were shown but silently ignored).
+The eval parser also adds the eval-only `--skip-report-ablation`. Eval loaders pre-warm
+the image channel cache for the test split up front (the same prebuild training runs for
+train+val), so the first eval over a fresh split pays the channel-build cost upfront
+instead of stalling mid-loop; `--skip-precompute` bypasses it.
 
 ### run identity & I/O
 | Flag | Use |

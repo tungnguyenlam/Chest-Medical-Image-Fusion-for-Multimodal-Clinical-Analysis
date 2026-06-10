@@ -98,9 +98,11 @@ data:
     # Shared on-disk cache for built 3-channel images (uint8, keyed by
     # path+mode+cfg). Reused across models/runs and prebuilt before training.
     image_channel_cache_dir: ../cache/channels
-    # 3-channel CXR representation: raw + CLAHE + a third channel. Set null (or
-    # pass --channel-mode none) to go back to the plain direct JPEG decode, i.e.
-    # the normal grayscale-duplicated-to-3-channels image.
+    # Full channel_mode name: ch0=raw, ch1=mild CLAHE (both pinned), ch2 here=histeq.
+    # Override ONLY ch2 per-run with --third-channel-mode (clahe|histeq|lbp) -- it maps
+    # the short name to the full mode (histeq -> raw_clahe_histeq). --third-channel-mode
+    # none (or channel_mode: null) reverts to the plain direct JPEG decode (grayscale
+    # duplicated to 3 channels).
     channel_mode: raw_clahe_histeq
     size: 512
     classes: *classes
