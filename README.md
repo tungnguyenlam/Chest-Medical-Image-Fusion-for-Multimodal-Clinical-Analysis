@@ -56,7 +56,10 @@ training/
   camchex_v4nano/    prior-aware v4: single-token fusion + asymmetric prior
                      cross-attention (current = queries, prior = memory)
   singleview/        train/eval entrypoints for single-view image models
-  common.py          plain PyTorch train/eval helpers
+  common.py          shared CLI flags (add_common_args); re-exports utils/ helpers
+  utils/             plain PyTorch train/eval helpers, split by concern
+                     (constants, system, config, model, data, metrics,
+                      train, evaluation)
 scripts/
   build_mimic_subset.py        Patient-level subset bundler (+ optional HF upload)
   prepare_subset_labels.py     Subset-aware label CSV prep
@@ -213,8 +216,9 @@ Add a new loss by registering it in `LOSS_REGISTRY` with the `forward(logits, fl
 
 ## Image preprocessing, caching, and flash attention
 
-These behaviors are shared across every training/eval script (wired in
-`training/common.py`) and default-on; no model-specific code is involved.
+These behaviors are shared across every training/eval script (wired in the
+`training/utils/` helpers, re-exported via `training/common.py`) and default-on; no
+model-specific code is involved.
 
 **3-channel CXR build (`--third-channel-mode`).** Each CXR is turned into a deterministic
 3-channel image. **ch0 = raw** and **ch1 = mild CLAHE** (clip 2.0 / 8×8) are always
@@ -239,8 +243,9 @@ those stats. `clahe`'s ch2 stats are currently **provisional** (estimated, not y
 on the training split — see `compute_channel_statistics.ipynb`).
 
 Prior-aware models support this too; `--third-channel-mode none` reverts them to the plain
-decode. The CLI options are gated by `ENABLED_THIRD_CHANNELS` in `training/common.py` —
-append a short name there (a key of `THIRD_CHANNEL_TO_MODE`) to expose it.
+decode. The CLI options are gated by `ENABLED_THIRD_CHANNELS` in
+`training/utils/constants.py` — append a short name there (a key of
+`THIRD_CHANNEL_TO_MODE`) to expose it.
 
 **Shared channel cache + automatic prebuild.** Built channels are cached as uint8 `.npy`
 under `image_channel_cache_dir` (default `../cache/channels`), keyed by
