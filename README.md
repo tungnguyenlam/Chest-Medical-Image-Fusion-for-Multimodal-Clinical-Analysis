@@ -63,6 +63,8 @@ training/
 scripts/
   build_mimic_subset.py        Patient-level subset bundler (+ optional HF upload)
   prepare_subset_labels.py     Subset-aware label CSV prep
+  plot_run.py                  Training/validation curves from a run's logs/
+  plot_eval.py                 Eval diagnostics (ROC/PR/calibration/...) from predictions.csv
 camchex/             Legacy paper code (kept for reference/comparison)
 data/                Datasets — mostly gitignored, lives at data/<subset_name>/
 output/              Run outputs: output/<model_name>/runs/<run_id>-<run_name>/
@@ -124,6 +126,28 @@ to label sweeps.
 
 Eval scripts write predictions and metrics to `--predictions-path` and
 `--metrics-path`.
+
+### Eval diagnostic plots
+
+`scripts/plot_eval.py` turns an eval dump into a battery of classification
+figures, written to `<predictions_dir>/eval_plots/`:
+
+```bash
+python scripts/plot_eval.py output/<model>/predictions.csv
+# --metrics path/to/metrics.json  (default: sibling metrics.json — used for the
+#                                  authoritative AP/AUROC bars)
+# --threshold 0.5                 (operating point for the confusion-style heatmap)
+# --uncertain {neg,pos,ignore}    (how to treat the 0.5 label; default neg, matching eval)
+```
+
+It produces per-class and head/medium/tail-grouped **ROC** and **PR** curves
+(with micro/macro averages), per-class AP/AUROC bars, a long-tail diagnostic
+(metric vs. class prevalence), **AP-vs-AUROC** scatter, F1-optimal thresholds,
+a per-class operating-point heatmap, positive/negative score distributions,
+**reliability/calibration** curves, and class support. ROC/PR are computed with
+numpy (no sklearn dependency); the AP/AUROC bars reuse `metrics.json` so they
+match what eval reported. If the `*.no_report.{csv,json}` ablation dump sits
+next to the predictions, a per-class leakage-delta plot is added automatically.
 
 ### Report-ablation eval (leakage probe)
 
