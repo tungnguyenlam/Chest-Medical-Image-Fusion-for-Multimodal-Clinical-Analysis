@@ -1870,3 +1870,19 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 - Motivation: user saw ~8.5/15 GB host RAM at `--num-workers 0` and thought it had regressed. Non-obvious finding: **none of the existing host-RAM optimizations (pyarrow backend, text-index precompute, `gc.freeze()`, `MALLOC_ARENA_MAX`) help at `num_workers 0`** — they all target per-worker copy-on-write under fork. At 0 workers the footprint is CUDA context + cuDNN/cuBLAS + the `torch.compile`/Inductor spike + two parquet DataFrames + the transient `np.stack` in `build_index_table` (doubles the 748 MB table until `model.to(device)`). Lowering `--num-workers` is not a host-RAM lever.
 - VmHWM (peak) is the key signal — it's monotonic, so it surfaces the transient compile/stack spikes that have already been freed by the time you look at steady-state RSS.
 - Docs: documented the milestones + the `num_workers 0` caveat in [training/prior_aware_v3nano/README.md](training/prior_aware_v3nano/README.md) Low host-RAM section.
+
+## 2026-06-10 — Implement CaMCheX v4 Nano and optimize startup RAM
+
+**Goal.** Implement the asymmetric prior cross-attention fusion model (v4 Nano) and optimize host-RAM usage during the prior-aware startup phase.
+
+**Changes.**
+- src/model/CaMCheXV4NanoModel.py - New flagship prior-aware model. Uses asymmetric cross-attention (current=queries, prior=memory) in a TransformerDecoder layout. ~2x cheaper attention cost than v3nano while keeping full 8x8 prior resolution.
+- training/camchex_v4nano/ - Added camchex_v4nano_train.py, camchex_v4nano_eval.py, and config.yaml.
+- training/common.py:59,1227 - Enabled raw_clahe_lbp channel mode and reordered loader startup to build image cache before loading text embeddings.
+- README.md, training/TRAINING_FLAGS.md, scripts/model_summary.py, src/interpret/run_prior_gradcam.py - Integrated v4 nano support.
+
+**Reasoning.** The v4 model addresses the copy shortcut risk in prior-aware models by making the prior modality an indirect evidence source (memory) rather than a direct head input. The startup reordering ensures the multiprocessing pool forks before the large text-embedding dictionary is allocated, preventing copy-on-write duplication that was previously spiking host RAM near the limit.
+
+**Gotchas.** v4 is not checkpoint-compatible with v3nano due to the decoder-based fusion and new per-modality LayerNorms. raw_clahe_lbp requires scikit-image for the uniform LBP variant; otherwise, it falls back to a non-uniform version that won't match precomputed stats.
+
+**Verification.** py_compile passes for all new files. Startup RAM optimization verified via host-RSS milestone tracing.
