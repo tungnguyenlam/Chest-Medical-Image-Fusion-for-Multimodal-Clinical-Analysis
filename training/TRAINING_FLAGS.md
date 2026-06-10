@@ -20,7 +20,7 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 ### run identity & I/O
 | Flag | Use |
 |------|-----|
-| `--config PATH` | Config YAML. Default `training/<model>/config.yaml`. |
+| `--config PATH` | Config YAML. **Eval:** if omitted and `--checkpoint-path` is given, the config is auto-resolved from the checkpoint's run (`<run_dir>/config.resolved.json`) — the exact config it was trained with — so you usually just pass the checkpoint. An explicit `--config` always wins; other flags still override individual keys. **Train / no checkpoint:** defaults to `training/<model>/config.yaml`. |
 | `--train-df-path` / `--val-df-path` / `--test-df-path` | Override the dataframe paths from config. |
 | `--output-dir DIR` | Run root. Default `output/<model>/runs`. |
 | `--run-name NAME` | Run folder suffix. Default `baseline`. |
@@ -29,7 +29,7 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 ### checkpointing & resume
 | Flag | Use |
 |------|-----|
-| `--checkpoint-path PATH` | Eval: weights to load. Train: **weights-only** warm-start (fresh optimizer/scheduler/epoch). |
+| `--checkpoint-path PATH` | Eval: weights to load (and, unless `--config` is passed, the config is auto-resolved from this checkpoint's run dir). Train: **weights-only** warm-start (fresh optimizer/scheduler/epoch). |
 | `--resume-from PATH` | *Train only.* Full resume (model + optimizer + scheduler + epoch + step + early-stop state); run dir inferred from the path. |
 | `--quick-continue` | *Train only.* Resume the **most recently created** run under `--output-dir` (its latest checkpoint). Pass `--run-id` to target a specific run instead. |
 | `--seed INT` | Seed python/numpy/torch RNGs. |

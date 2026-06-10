@@ -15,6 +15,7 @@ from training.common import (
     classes_from_config,
     compute_metrics,
     load_config,
+    resolve_eval_config,
     load_weights,
     make_single_view_eval_loader,
     predict_dataframe,
@@ -38,7 +39,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = resolve_eval_config(args)
     classes = classes_from_config(cfg)
     loader, ids, labels_available = make_single_view_eval_loader(cfg, args, args.view_position)
 

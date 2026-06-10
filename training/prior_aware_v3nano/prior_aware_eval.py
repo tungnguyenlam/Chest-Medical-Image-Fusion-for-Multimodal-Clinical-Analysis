@@ -13,6 +13,7 @@ from training.common import (
     add_common_args,
     classes_from_config,
     load_config,
+    resolve_eval_config,
     evaluate_report_ablation,
     load_weights,
     make_prior_aware_eval_loader,
@@ -39,7 +40,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = resolve_eval_config(args)
     run_dir = prepare_run_dir(args)
     write_resolved_config(run_dir, args, cfg)
 

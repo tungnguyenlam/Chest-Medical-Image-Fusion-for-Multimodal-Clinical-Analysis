@@ -136,6 +136,63 @@ def _explicit_cli_dests(argv: list[str] | None = None) -> set[str]:
     return dests
 
 
+def _config_from_run_dir(checkpoint_path: str | Path) -> dict[str, Any] | None:
+    """Return the config saved alongside a checkpoint's run, or None if not found.
+
+    Runs write ``config.resolved.json`` (or ``config.resume.json``) into the run dir,
+    capturing the exact ``{"args", "config"}`` they were launched with. The on-disk
+    layout is ``<run_dir>/checkpoints/<file>.pt``, so the run dir is the checkpoint's
+    grandparent; we also look in the checkpoint's own directory as a fallback for
+    flatter layouts. Returns the ``config`` block so eval can rebuild the matching
+    architecture/data pipeline from the checkpoint alone."""
+    resolved = resolve_path(checkpoint_path)
+    if resolved is None or not resolved.exists():
+        return None
+    resolved = resolved.resolve()
+    parents = resolved.parents
+    candidates = [resolved.parent]
+    if len(parents) >= 2:
+        candidates.append(parents[1])
+    for run_dir in candidates:
+        for name in ("config.resolved.json", "config.resume.json"):
+            path = run_dir / name
+            if not path.exists():
+                continue
+            try:
+                with open(path, "r") as f:
+                    payload = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"[eval] found {path} but could not read it ({exc}); falling back to --config", flush=True)
+                continue
+            cfg = payload.get("config") if isinstance(payload, dict) else None
+            if isinstance(cfg, dict):
+                print(f"[eval] config resolved from checkpoint's run: {path} (pass --config to override)", flush=True)
+                return cfg
+    return None
+
+
+def resolve_eval_config(args: argparse.Namespace) -> dict[str, Any]:
+    """Pick the eval config the sane way: hand over a checkpoint and the matching
+    config is found automatically, while flags still override.
+
+    Resolution order:
+
+    1. An explicit ``--config`` on the CLI always wins.
+    2. Otherwise, if ``--checkpoint-path`` is given, use the config saved next to that
+       checkpoint's run (``config.resolved.json``) — the exact config it was trained with.
+    3. Otherwise, fall back to ``--config``'s default (the model dir's live ``config.yaml``).
+
+    Either way, individual CLI flags continue to override single config values downstream
+    (this only chooses which config dict those overrides apply to)."""
+    if "config" not in _explicit_cli_dests():
+        ckpt = getattr(args, "checkpoint_path", None)
+        if ckpt:
+            cfg = _config_from_run_dir(ckpt)
+            if cfg is not None:
+                return cfg
+    return load_config(args.config)
+
+
 def _restore_quick_continue_args(args: argparse.Namespace, run_dir: Path) -> None:
     config_path = run_dir / "config.resolved.json"
     if not config_path.exists():

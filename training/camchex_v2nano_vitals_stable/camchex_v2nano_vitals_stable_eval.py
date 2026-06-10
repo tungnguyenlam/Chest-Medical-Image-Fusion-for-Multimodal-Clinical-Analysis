@@ -15,6 +15,7 @@ from training.common import (
     classes_from_config,
     compute_metrics,
     load_config,
+    resolve_eval_config,
     load_weights,
     evaluate_report_ablation,
     make_camchex_vitals_eval_loader,
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = load_config(args.config)
+    cfg = resolve_eval_config(args)
     classes = classes_from_config(cfg)
     frontal_pretrained_path = str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None
     lateral_pretrained_path = str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None
