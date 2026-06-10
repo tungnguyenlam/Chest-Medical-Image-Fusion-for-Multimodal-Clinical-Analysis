@@ -14,7 +14,7 @@ The implementation now lives in the ``training.utils`` package, split by concern
 Everything is re-exported here, so ``from training.common import X`` keeps working
 unchanged for every training/eval script. ``add_common_args`` (the shared CLI flag
 definitions) is kept *in this file* on purpose, so the full flag set is in one place
-to look up — see ``training/TRAINING_FLAGS.md`` for which flag applies to which script.
+to look up — see ``training/FLAGS.md`` for which flag applies to which script.
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     """Flags shared by training/eval entry points, grouped by concern so the set is easy
     to scan here and in ``--help``. Model-specific flags (image pretrained paths,
     text-model / embedding-cache options, single-view position, eval output paths) are
-    added by each script's own ``parse_args``. See ``training/TRAINING_FLAGS.md`` for the
+    added by each script's own ``parse_args``. See ``training/FLAGS.md`` for the
     full map of which flag applies where.
 
     ``mode`` selects which flags are registered. ``mode="eval"`` (passed by the

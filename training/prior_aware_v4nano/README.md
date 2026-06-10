@@ -69,7 +69,7 @@ run isolates the fusion change. `model.timm_init_args.drop_path_rate` is left at
 that reason; bump it to `0.1–0.15` once the cross-attention effect is measured (it's a
 cheap additional regularizer for the shared backbone). The same host-RAM flags as v3nano
 apply (`--text-embeddings-gpu-resident`, `--uint8-image-pipeline`, the pyarrow backend,
-`gc.freeze()`, arena capping); see [`TRAINING_FLAGS.md`](../TRAINING_FLAGS.md) and the
+`gc.freeze()`, arena capping); see [`FLAGS.md`](../FLAGS.md) and the
 [`prior_aware_v3nano` README](../prior_aware_v3nano/README.md) for details.
 
 ## Grad-CAM / Attribution

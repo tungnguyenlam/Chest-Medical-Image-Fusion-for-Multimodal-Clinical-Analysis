@@ -63,7 +63,7 @@ Related RAM measures apply to every v3nano run, not just this flag:
   normalizes on-device, cutting the per-batch host buffer, pinned staging, and H2D copy ~4×.
   Requires a channel mode; train-time augs then run on uint8 (a numerics change worth an
   ablation). Eval stays on the numerically identical float path. See
-  [`TRAINING_FLAGS.md`](../TRAINING_FLAGS.md#model-specific-flags).
+  [`FLAGS.md`](../FLAGS.md#model-specific-flags).
 
 > **Most of the list above only helps when `--num-workers > 0`.** The pyarrow backend,
 > text-index precompute, `gc.freeze()`, and arena capping all exist to stop *per-worker* RSS
