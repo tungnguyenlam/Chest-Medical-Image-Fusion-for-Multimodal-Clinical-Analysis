@@ -368,8 +368,8 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         type=float,
         nargs="*",
         help="Epoch fractions (each in (0,1)) at which to run a full mid-epoch validation. "
-        "Independent of batch size. End-of-epoch full validation always runs. Default 0.5. "
-        "Pass with no values to disable mid-epoch full validation.",
+        "Independent of batch size. End-of-epoch full validation always runs. Default: none "
+        "(no mid-epoch full validation). Pass fractions to enable.",
     )
     g.add_argument(
         "--quick-val-fracs",
@@ -377,7 +377,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         nargs="*",
         help="Epoch fractions (each in (0,1)) at which to run a partial quick validation "
         "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
-        "batch size. Default 0.25 0.75. Pass with no values to disable.",
+        "batch size. Default 0.25 0.5 0.75. Pass with no values to disable.",
     )
 
     # --- Hardware, precision & compile -------------------------------------
@@ -1889,8 +1889,8 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             targets.add(max(1, min(n_train_batches - 1, round(f * n_train_batches))))
         return targets
 
-    full_val_fracs = resolve_trainer_arg(args, cfg, "full_val_fracs", [0.5]) or []
-    quick_val_fracs = resolve_trainer_arg(args, cfg, "quick_val_fracs", [0.25, 0.75]) or []
+    full_val_fracs = resolve_trainer_arg(args, cfg, "full_val_fracs", []) or []
+    quick_val_fracs = resolve_trainer_arg(args, cfg, "quick_val_fracs", [0.25, 0.5, 0.75]) or []
     full_val_batches = _epoch_fracs_to_batches(full_val_fracs, "full_val_fracs")
     # Honor the legacy fixed-interval knob too (null by default): treat its mid-epoch points
     # as additional full-validation batches, excluding the final batch (covered by epoch val).

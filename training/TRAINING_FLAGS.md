@@ -77,8 +77,8 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 | `--early-stop-min-delta FLOAT` | Min change counting as improvement. |
 | `--quick-val-every-steps INT` | Partial val every N optimizer steps → `val_quick.csv` (doesn't affect best-checkpoint tracking). |
 | `--quick-val-frac FLOAT` | Fraction of val batches for quick val (default 0.1). |
-| `--full-val-fracs [F ...]` | Epoch fractions for mid-epoch full val (default 0.5; pass empty to disable). |
-| `--quick-val-fracs [F ...]` | Epoch fractions for quick val (default 0.25 0.75; pass empty to disable). |
+| `--full-val-fracs [F ...]` | Epoch fractions for mid-epoch full val (default: none — full val runs only at epoch end; pass fractions to enable). |
+| `--quick-val-fracs [F ...]` | Epoch fractions for quick val (default 0.25 0.5 0.75; pass empty to disable). |
 
 ### hardware, precision & compile
 | Flag | Use |

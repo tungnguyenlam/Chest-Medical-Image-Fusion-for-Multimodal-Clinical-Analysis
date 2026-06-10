@@ -116,9 +116,9 @@ trainer:
   log_every_n_steps: 1
   val_check_interval: null
   quick_val_every_steps: null
-  # Fraction-of-epoch validation schedule (batch-size independent); end-of-epoch full val always runs.
-  full_val_fracs: [0.5]
-  quick_val_fracs: [0.25, 0.75]
+  # Fraction-of-epoch validation schedule (batch-size independent): quick val mid-epoch, full val only at epoch end.
+  full_val_fracs: []  # no mid-epoch full validation (end-of-epoch full val always runs)
+  quick_val_fracs: [0.25, 0.5, 0.75]
   quick_val_frac: 0.1
   val_num_workers: 0  # 0 = run val in-process (no 2nd worker pool); raise to use val workers
   seed: null
