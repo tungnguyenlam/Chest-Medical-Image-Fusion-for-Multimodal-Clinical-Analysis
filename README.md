@@ -216,23 +216,31 @@ Add a new loss by registering it in `LOSS_REGISTRY` with the `forward(logits, fl
 These behaviors are shared across every training/eval script (wired in
 `training/common.py`) and default-on; no model-specific code is involved.
 
-**3-channel CXR build (`--channel-mode`).** Each CXR is turned into a deterministic
-3-channel image — raw + CLAHE + histogram-equalization (`raw_clahe_histeq`, the
-default) — and normalized with precomputed per-channel stats. Override per run:
+**3-channel CXR build (`--third-channel-mode`).** Each CXR is turned into a deterministic
+3-channel image. **ch0 = raw** and **ch1 = mild CLAHE** (clip 2.0 / 8×8) are always
+pinned; only the **third channel** is a degree of freedom, so the flag names just that
+channel. Channels are normalized with precomputed per-channel stats. Override per run:
 
 ```bash
---channel-mode raw_clahe_histeq   # default (config: data.datamodule_cfg.channel_mode)
---channel-mode raw_clahe_lbp      # raw + CLAHE + uniform Local Binary Pattern (local micro-texture)
---channel-mode none               # legacy ImageNet RGB (plain grayscale-duplicated decode)
+--third-channel-mode histeq   # default: ch2 = global histogram equalization (raw_clahe_histeq)
+--third-channel-mode clahe    # ch2 = strong CLAHE (clip 4.0 / 16x16) — same signal, higher contrast
+--third-channel-mode lbp      # ch2 = uniform Local Binary Pattern (local micro-texture)
+--third-channel-mode none     # legacy ImageNet RGB (plain grayscale-duplicated decode)
 ```
 
-`raw_clahe_lbp`'s precomputed stats assume scikit-image's *uniform* LBP (in
-`requirements.txt`); without it the build falls back to a plain 8-neighbour LBP whose
-distribution won't match those stats.
+The internal/config name is still the full mode (`data.datamodule_cfg.channel_mode:
+raw_clahe_histeq`); the short flag maps to it. At every train start the resolved channel
+composition (per-channel filter, params, and normalization stats) is printed under
+`[channels]` so a wrong mode is caught before the first epoch.
 
-Prior-aware models support this too; `--channel-mode none` reverts them to the plain
-decode. New modes are gated by `ENABLED_CHANNEL_MODES` in `training/common.py` — append
-a name there (e.g. `raw_clahe_sobel`) to expose it on the CLI.
+`lbp`'s precomputed stats assume scikit-image's *uniform* LBP (in `requirements.txt`);
+without it the build falls back to a plain 8-neighbour LBP whose distribution won't match
+those stats. `clahe`'s ch2 stats are currently **provisional** (estimated, not yet measured
+on the training split — see `compute_channel_statistics.ipynb`).
+
+Prior-aware models support this too; `--third-channel-mode none` reverts them to the plain
+decode. The CLI options are gated by `ENABLED_THIRD_CHANNELS` in `training/common.py` —
+append a short name there (a key of `THIRD_CHANNEL_TO_MODE`) to expose it.
 
 **Shared channel cache + automatic prebuild.** Built channels are cached as uint8 `.npy`
 under `image_channel_cache_dir` (default `../cache/channels`), keyed by

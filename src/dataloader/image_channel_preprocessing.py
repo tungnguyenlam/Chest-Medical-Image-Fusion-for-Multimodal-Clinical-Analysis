@@ -34,10 +34,17 @@ except ImportError:  # pragma: no cover - exercised only when skimage absent.
     _HAS_SKIMAGE = False
 
 
-# Single-channel transforms supported by the modes below.
-SINGLE_CHANNEL_TRANSFORMS = ("raw", "clahe", "hist_eq", "laplacian", "log", "sobel", "lbp")
+# Single-channel transforms supported by the modes below. ``clahe`` is the mild
+# pinned ch1 (clip 2.0 / 8x8); ``clahe_strong`` is the stronger ch2 preset
+# (clip 4.0 / 16x16) -- both via cv2.createCLAHE, different params.
+SINGLE_CHANNEL_TRANSFORMS = (
+    "raw", "clahe", "clahe_strong", "hist_eq", "laplacian", "log", "sobel", "lbp",
+)
 
-# Each mode is an ordered list of single-channel transform names.
+# Each mode is an ordered list of single-channel transform names. ch0=raw and
+# ch1=clahe (mild) are pinned across every real mode; only ch2 (the third channel)
+# varies -- that is the single degree of freedom exposed on the CLI as
+# ``--third-channel-mode`` (see THIRD_CHANNEL_TO_MODE).
 CHANNEL_MODES: Dict[str, List[str]] = {
     "gray3": ["raw", "raw", "raw"],
     "raw_clahe_laplacian": ["raw", "clahe", "laplacian"],
@@ -48,6 +55,22 @@ CHANNEL_MODES: Dict[str, List[str]] = {
     # contrast-limited) vs global histogram equalization (flattens the whole
     # intensity histogram toward uniform).
     "raw_clahe_histeq": ["raw", "clahe", "hist_eq"],
+    # raw + mild CLAHE + strong CLAHE: the same dense, full-range signal at two
+    # contrast scales (ch1 clip 2.0/8x8, ch2 clip 4.0/16x16). No channel collapses
+    # to a near-degenerate std the way the edge channels do.
+    "raw_clahe_clahe": ["raw", "clahe", "clahe_strong"],
+}
+
+# Short third-channel name (CLI) -> full internal mode. ch0=raw, ch1=mild CLAHE are
+# implied; the key names only the third channel. Single source of truth for the
+# --third-channel-mode flag mapping.
+THIRD_CHANNEL_TO_MODE: Dict[str, str] = {
+    "clahe": "raw_clahe_clahe",       # ch2 = strong CLAHE (clip 4.0 / 16x16)
+    "histeq": "raw_clahe_histeq",     # ch2 = global histogram equalization
+    "lbp": "raw_clahe_lbp",           # ch2 = uniform Local Binary Pattern
+    "sobel": "raw_clahe_sobel",       # ch2 = Sobel gradient magnitude
+    "log": "raw_clahe_log",           # ch2 = Laplacian-of-Gaussian
+    "laplacian": "raw_clahe_laplacian",  # ch2 = Laplacian
 }
 
 
@@ -85,6 +108,14 @@ CHANNEL_STATS: Dict[str, Dict[str, List[float]]] = {
         "mean": [0.472141, 0.482434, 0.470616],
         "std": [0.303715, 0.278741, 0.303455],
     },
+    # PROVISIONAL -- ch2 (strong CLAHE 4.0/16x16) mean/std are estimates, NOT yet
+    # measured on the training split. ch0/ch1 are the measured raw/mild-CLAHE values.
+    # TODO: recompute on 10k train images (add "raw_clahe_clahe" to MODES in
+    # data/00-examine-data/compute_channel_statistics.ipynb) and replace ch2 here.
+    "raw_clahe_clahe": {
+        "mean": [0.472141, 0.482434, 0.487000],
+        "std": [0.303715, 0.278741, 0.300000],
+    },
 }
 
 
@@ -97,9 +128,12 @@ class PreprocessConfig:
     # INTER_AREA is the most faithful choice for large -> small.
     resize_interpolation: int = cv2.INTER_AREA
 
-    # CLAHE
+    # CLAHE -- ch1 is the mild/pinned setting; the *_strong fields drive the
+    # ``clahe_strong`` ch2 transform (the --third-channel-mode clahe preset).
     clahe_clip_limit: float = 2.0
     clahe_tile_grid_size: tuple = (8, 8)
+    clahe_strong_clip_limit: float = 4.0
+    clahe_strong_tile_grid_size: tuple = (16, 16)
 
     # Laplacian of Gaussian (LoG): Gaussian blur first, then Laplacian.
     log_gaussian_ksize: int = 5  # odd kernel size; <=0 derives from sigma
@@ -125,6 +159,8 @@ class PreprocessConfig:
             self.resize_interpolation,
             self.clahe_clip_limit,
             tuple(self.clahe_tile_grid_size),
+            self.clahe_strong_clip_limit,
+            tuple(self.clahe_strong_tile_grid_size),
             self.log_gaussian_ksize,
             self.log_gaussian_sigma,
             self.laplacian_ksize,
@@ -158,6 +194,20 @@ def _ch_clahe(gray: np.ndarray, cfg: PreprocessConfig) -> np.ndarray:
     clahe = cv2.createCLAHE(
         clipLimit=cfg.clahe_clip_limit,
         tileGridSize=tuple(cfg.clahe_tile_grid_size),
+    )
+    return clahe.apply(gray).astype(np.float32) / 255.0
+
+
+def _ch_clahe_strong(gray: np.ndarray, cfg: PreprocessConfig) -> np.ndarray:
+    """Stronger CLAHE preset for the third channel (clip 4.0 / 16x16 by default).
+
+    Same operator as :func:`_ch_clahe` but with the ``*_strong`` params, so ch2 is
+    the same dense intensity signal as ch1 at a higher local-contrast scale rather
+    than a sparse edge map.
+    """
+    clahe = cv2.createCLAHE(
+        clipLimit=cfg.clahe_strong_clip_limit,
+        tileGridSize=tuple(cfg.clahe_strong_tile_grid_size),
     )
     return clahe.apply(gray).astype(np.float32) / 255.0
 
@@ -232,6 +282,7 @@ def _ch_lbp(gray: np.ndarray, cfg: PreprocessConfig) -> np.ndarray:
 _TRANSFORM_FUNCS = {
     "raw": _ch_raw,
     "clahe": _ch_clahe,
+    "clahe_strong": _ch_clahe_strong,
     "hist_eq": _ch_histeq,
     "laplacian": _ch_laplacian,
     "log": _ch_log,
@@ -321,3 +372,49 @@ def _validate_output(out: np.ndarray, cfg: PreprocessConfig) -> None:
     lo, hi = float(out.min()), float(out.max())
     if lo < -1e-6 or hi > 1.0 + 1e-6:
         raise ValueError(f"Output values out of [0, 1] range: min={lo}, max={hi}")
+
+
+def _transform_desc(name: str, cfg: PreprocessConfig) -> str:
+    """One-line human description of a single-channel transform, with its params."""
+    if name == "raw":
+        return "raw grayscale (/255)"
+    if name == "clahe":
+        return f"CLAHE mild (clip={cfg.clahe_clip_limit}, tile={tuple(cfg.clahe_tile_grid_size)})"
+    if name == "clahe_strong":
+        return (f"CLAHE strong (clip={cfg.clahe_strong_clip_limit}, "
+                f"tile={tuple(cfg.clahe_strong_tile_grid_size)})")
+    if name == "hist_eq":
+        return "global histogram equalization"
+    if name == "laplacian":
+        return f"Laplacian magnitude (ksize={cfg.laplacian_ksize}, min-max norm)"
+    if name == "log":
+        return (f"Laplacian-of-Gaussian (gauss ksize={cfg.log_gaussian_ksize} "
+                f"sigma={cfg.log_gaussian_sigma}, lap ksize={cfg.laplacian_ksize}, min-max norm)")
+    if name == "sobel":
+        return f"Sobel gradient magnitude (ksize={cfg.sobel_ksize}, min-max norm)"
+    if name == "lbp":
+        return f"LBP (P={cfg.lbp_points}, R={cfg.lbp_radius}, method={cfg.lbp_method!r})"
+    return name
+
+
+def describe_mode(mode: str, cfg: PreprocessConfig = None) -> str:
+    """Multi-line, human-readable description of a 3-channel mode for startup logs.
+
+    Lists each channel's transform, its actual filter params, and the normalization
+    mean/std that will be applied -- so a wrong --third-channel-mode (or stale stats)
+    is obvious before the first training batch.
+    """
+    if cfg is None:
+        cfg = PreprocessConfig()
+    if mode not in CHANNEL_MODES:
+        return f"channel mode {mode!r}: UNKNOWN (expected one of {sorted(CHANNEL_MODES)})"
+    names = CHANNEL_MODES[mode]
+    stats = CHANNEL_STATS.get(mode)
+    lines = [f"channel mode {mode!r} ({len(names)} channels):"]
+    for i, name in enumerate(names):
+        if stats is not None:
+            norm = f"  | norm mean={stats['mean'][i]:.4f} std={stats['std'][i]:.4f}"
+        else:
+            norm = "  | norm stats: MISSING"
+        lines.append(f"  ch{i}: {name:<13s} -> {_transform_desc(name, cfg)}{norm}")
+    return "\n".join(lines)

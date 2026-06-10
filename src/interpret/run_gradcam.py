@@ -196,7 +196,7 @@ def main() -> None:
     model = build_model(cfg, args, device)
 
     vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("data", {}).get("datamodule_cfg", {}).get("vital_stats", {}) or {})}
-    # Honor --channel-mode so the attributor's preprocessing matches the dataset
+    # Honor --third-channel-mode so the attributor's preprocessing matches the dataset
     # (and the trained checkpoint), not just the raw config value.
     channel_mode = data_cfg_from_config(cfg, args).get("channel_mode")
     with CaMCheXAttributor(model, tokenizer, classes, device, VITAL_FIELDS, vital_stats, channel_mode) as attributor:

@@ -36,7 +36,11 @@ from src.dataloader.CaMCheXDataset import CaMCheXDataset
 from src.dataloader.CaMCheXVitalsDataset import CaMCheXVitalsDataset
 from src.dataloader.PriorAwareDataset import PriorAwareDataset
 from src.dataloader.SingleViewDataset import SingleViewDataset
-from src.dataloader.image_channel_preprocessing import CHANNEL_MODES
+from src.dataloader.image_channel_preprocessing import (
+    CHANNEL_MODES,
+    THIRD_CHANNEL_TO_MODE,
+    describe_mode,
+)
 from src.dataloader.utils import (
     channel_cache_path,
     get_transforms,
@@ -54,17 +58,24 @@ VIEW_ALIASES = {
     "lateral": {"LATERAL", "LL"},
 }
 
-# 3-channel CXR modes exposed on the CLI. Every mode in CHANNEL_MODES is
-# raw + CLAHE + a third channel -- only the third varies (hist_eq / sobel /
-# laplacian / log / lbp). To allow another, append its mode name here (e.g.
-# "raw_clahe_sobel") -- no other change needed (CHANNEL_STATS must have it).
-# raw_clahe_histeq = raw + CLAHE + global histogram equalization (dense, balanced
-# std); raw_clahe_lbp = raw + CLAHE + uniform Local Binary Pattern (a dense local
-# micro-texture channel, std ~0.11 -- denser than the edge channels).
-ENABLED_CHANNEL_MODES = ["raw_clahe_histeq", "raw_clahe_lbp"]
-assert all(m in CHANNEL_MODES for m in ENABLED_CHANNEL_MODES), (
-    "ENABLED_CHANNEL_MODES has names not in CHANNEL_MODES: "
-    f"{[m for m in ENABLED_CHANNEL_MODES if m not in CHANNEL_MODES]}"
+# Third channel exposed on the CLI as --third-channel-mode. ch0=raw and ch1=mild
+# CLAHE are pinned for every mode; only the third channel is a degree of freedom,
+# so the flag names just that channel (e.g. "histeq", not "raw_clahe_histeq").
+# Restricted to the *dense* channels that survive normalization well: the edge
+# channels (sobel/log/laplacian) collapse to std ~0.02 and are intentionally not
+# offered here (they still exist in CHANNEL_MODES for the stats notebook).
+#   clahe  = ch2 strong CLAHE (clip 4.0 / 16x16) -- same signal, higher contrast
+#   histeq = ch2 global histogram equalization (dense, balanced std)
+#   lbp    = ch2 uniform Local Binary Pattern (dense local micro-texture, std ~0.11)
+# To offer another, add its short name here (must be a key of THIRD_CHANNEL_TO_MODE,
+# and its full mode must have CHANNEL_STATS) -- no other change needed.
+ENABLED_THIRD_CHANNELS = ["clahe", "histeq", "lbp"]
+assert all(t in THIRD_CHANNEL_TO_MODE for t in ENABLED_THIRD_CHANNELS), (
+    "ENABLED_THIRD_CHANNELS has names not in THIRD_CHANNEL_TO_MODE: "
+    f"{[t for t in ENABLED_THIRD_CHANNELS if t not in THIRD_CHANNEL_TO_MODE]}"
+)
+assert all(THIRD_CHANNEL_TO_MODE[t] in CHANNEL_MODES for t in ENABLED_THIRD_CHANNELS), (
+    "ENABLED_THIRD_CHANNELS maps to modes missing from CHANNEL_MODES"
 )
 
 # Default fraction of CPU cores used to precompute the 3-channel image cache
@@ -112,6 +123,16 @@ def precompute_channels_for_paths(
     access during training (and cached as usual). Use it to shave startup latency
     when the cache is already warm.
     """
+    # Log the resolved channel composition up front (every train start, regardless of
+    # --skip-precompute) so a wrong --third-channel-mode or stale stats is caught here
+    # rather than after the first epoch.
+    _mode = data_cfg.get("channel_mode")
+    if _mode:
+        composition = describe_mode(_mode, make_preprocess_config(data_cfg))
+        print(f"[channels] {desc}:\n  " + composition.replace("\n", "\n  "), flush=True)
+    else:
+        print(f"[channels] {desc}: legacy ImageNet RGB (channel_mode unset)", flush=True)
+
     if skip:
         print(f"[precompute] {desc}: skipped -- --skip-precompute set (channels build lazily on first access)", flush=True)
         return
@@ -272,13 +293,14 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     )
     g.add_argument("--image-size", type=int)
     g.add_argument(
-        "--channel-mode",
-        choices=ENABLED_CHANNEL_MODES + ["none"],
+        "--third-channel-mode",
+        choices=ENABLED_THIRD_CHANNELS + ["none"],
         help=(
-            "3-channel CXR representation. Each mode is raw + CLAHE + a third "
-            "channel; only the third varies. Enabled: "
-            f"{ENABLED_CHANNEL_MODES} (raw_clahe_histeq = raw + CLAHE + "
-            "histogram equalization). 'none' = legacy ImageNet RGB. Overrides "
+            "Third channel of the 3-channel CXR build. ch0=raw and ch1=mild CLAHE "
+            "(clip 2.0 / 8x8) are always pinned; this flag picks only ch2. Enabled: "
+            f"{ENABLED_THIRD_CHANNELS} (clahe = strong CLAHE clip 4.0/16x16; histeq = "
+            "global histogram equalization; lbp = uniform Local Binary Pattern). "
+            "'none' = legacy ImageNet RGB (no channel build). Overrides "
             "data.datamodule_cfg.channel_mode; the on-disk cache "
             "(image_channel_cache_dir) stays shared across models via config."
         ),
@@ -735,8 +757,14 @@ def data_cfg_from_config(cfg: dict[str, Any], args: argparse.Namespace) -> dict[
     data_cfg["classes"] = classes_from_config(cfg)
     if args.image_size is not None:
         data_cfg["size"] = args.image_size
-    if getattr(args, "channel_mode", None) is not None:
-        data_cfg["channel_mode"] = None if args.channel_mode == "none" else args.channel_mode
+    # --third-channel-mode names only ch2 (short name); map it to the full internal
+    # mode ("histeq" -> "raw_clahe_histeq"). data_cfg["channel_mode"] stays the full
+    # name everywhere downstream (cache keys, stats, datasets, attribution).
+    if getattr(args, "third_channel_mode", None) is not None:
+        if args.third_channel_mode == "none":
+            data_cfg["channel_mode"] = None
+        else:
+            data_cfg["channel_mode"] = THIRD_CHANNEL_TO_MODE[args.third_channel_mode]
     if args.train_df_path:
         data_cfg["train_df_path"] = args.train_df_path
     if args.val_df_path:
@@ -883,7 +911,7 @@ def resolve_uint8_image_pipeline(args: argparse.Namespace, data_cfg: dict[str, A
     enabled = bool(getattr(args, "uint8_image_pipeline", False))
     if enabled and not data_cfg.get("channel_mode"):
         raise SystemExit(
-            "--uint8-image-pipeline requires a channel mode (e.g. --channel-mode raw_clahe_histeq); "
+            "--uint8-image-pipeline requires a channel mode (e.g. --third-channel-mode histeq); "
             "without one the legacy decode path is not guaranteed to be uint8."
         )
     return enabled

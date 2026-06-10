@@ -44,7 +44,7 @@ Grouped exactly as in `add_common_args`. "train-only" flags are ignored by `*_ev
 | `--prefetch-factor INT` | DataLoader prefetch (needs `num_workers > 0`). |
 | `--malloc-arena-max INT` | Cap glibc malloc arenas (host-RAM/RSS control under `num_workers > 0`; each fork worker otherwise grows its own arena set up to ~8×ncpu, fragmenting RSS). **Default 2**; `0` leaves the glibc default. Applied via `mallopt` + `MALLOC_ARENA_MAX` before workers fork; no effect off glibc. |
 | `--image-size INT` | Square resize fed to the backbone. |
-| `--channel-mode MODE` | 3-channel CXR build (raw + CLAHE + third channel), or `none` for legacy ImageNet RGB. |
+| `--third-channel-mode {clahe,histeq,lbp,none}` | Third channel of the CXR build (ch0=raw, ch1=mild CLAHE are pinned). `clahe`=strong CLAHE 4.0/16x16, `histeq`=global hist-eq, `lbp`=uniform LBP, `none`=legacy ImageNet RGB. Resolved composition printed at init under `[channels]`. |
 | `--cpu-fraction FLOAT` | Fraction of cores for the channel-cache precompute. |
 | `--skip-precompute` | Skip the upfront channel-cache scan/build (channels build lazily on first access). |
 

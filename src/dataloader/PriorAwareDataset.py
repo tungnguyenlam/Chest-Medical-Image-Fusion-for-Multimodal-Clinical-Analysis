@@ -100,7 +100,7 @@ class PriorAwareDataset(Dataset):
             label_dropout_p: training-only probability to drop the entire prior block.
             cfg: datamodule cfg. ``channel_mode`` selects the 3-channel CXR build
                 (raw+CLAHE+third channel) shared with the other datasets; left
-                unset (or ``--channel-mode none``) it keeps the legacy direct JPEG
+                unset (or ``--third-channel-mode none``) it keeps the legacy direct JPEG
                 decode -- i.e. the plain grayscale-duplicated-to-3-channels image.
             tokenizer: HF tokenizer used to encode the raw text columns at load time.
                 The parquet stores only raw text (no baked token ids), so one parquet
