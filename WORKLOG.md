@@ -1938,3 +1938,14 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Gotchas.** `--stage-mode symlink` is intentionally scoped to full mode. It does not restore the old subset per-file symlink staging path, because that path was previously reverted after server-side `Path.symlink_to(...)` failures.
 
 **Follow-ups.** Before uploading the real full archive, run with `--skip-upload` first and confirm the archive summary is hundreds of GB, then use `--upload-existing --preserve-hf-history` if upload retry is needed.
+
+## 2026-06-15 - Update report title page format
+
+**Goal.** Reformat the report's main/title page to match the provided USTH Bachelor Thesis template while keeping this repository's current report identity.
+
+**Changes.**
+- `report/main.tex:58` - replaced the previous centered title-page content with a TikZ page-border layout, larger USTH logo, Bachelor Thesis heading, student/program block, report title, and internal supervisor line.
+
+**Reasoning.** Used the user's provided layout structure directly, but kept the existing report title, student name, student ID, supervisor, and available logo path (`img/usth.jpg`) so the document remains consistent with this project and compiles without requiring a new `figures/usth_logo.jpg` asset.
+
+**Gotchas.** The LaTeX build still reports unrelated warnings about duplicate page anchors and an empty bibliography; these were present in the broader document flow and were not caused by the title-page format change.

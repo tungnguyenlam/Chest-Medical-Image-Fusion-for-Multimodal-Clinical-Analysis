@@ -33,6 +33,7 @@
 \usepackage{setspace}
 % \usepackage{bbm}
 \usepackage{adjustbox}
+\usepackage[most]{tcolorbox}
 
 \setstretch{1.15}
 \usetikzlibrary{positioning, arrows.meta, calc, fit}
@@ -49,38 +50,48 @@
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 \begin{document}
 \begin{CJK*}{UTF8}{gbsn}
 \pagenumbering{arabic}
 
 \begin{titlepage}
     \thispagestyle{empty}
-    \centering
-    \vspace{2cm}
-    {\large \textbf{UNIVERSITY OF SCIENCE AND TECHNOLOGY OF HANOI}}\\[0.5cm]
-    {DEPARTMENT OF INFORMATION AND COMMUNICATION TECHNOLOGY}\\[2cm]
+    \begin{center}
+        \begin{tikzpicture}[remember picture, overlay]
+            \draw[line width=1pt]
+                ($(current page.north west) + (2cm,-2cm)$)
+                rectangle
+                ($(current page.south east) + (-2cm,2cm)$);
+        \end{tikzpicture}
 
-    \includegraphics[width=0.3\linewidth]{img/usth.jpg}
-    \\[2cm]
+        {\large \textbf{UNIVERSITY OF SCIENCE AND TECHNOLOGY OF HANOI}} \\
+        \vspace{0.3cm}
+        {\large DEPARTMENT OF INFORMATION AND COMMUNICATION TECHNOLOGY} \\
+        \vfill
+        \includegraphics[width=0.5\textwidth]{img/usth.jpg}
+        \vspace{1cm}
 
-    {\Huge \textbf{Internship Project Report}}\\[1cm]
-    {\Huge \textbf{Chest Medical Image Fusion for Multimodal Clinical Analysis}}\\[2cm]
+        {\LARGE Research and Development} \\
+        \vspace{0.3cm}
+        {\fontsize{30}{36}\selectfont \textbf{BACHELOR THESIS}}
 
-    {\fontsize{16pt}{22pt}\selectfont
-    \raggedright
-    \begin{tabular}{@{} l l l @{}}
-        \textbf{Supervisor} & Assoc. Prof. Tran Giang Son & \\[0.3cm]
-        % \textbf{Group}      & 49 & \\[0.3cm]
-        \textbf{Student}  & Nguyen Lam Tung       & 23BI14446\\
+        \vspace{1cm}
+        {\Large By\\}
+        \vspace{0.2cm}
+        {\Large \textbf{Nguyen Lam Tung - 23BI14446\\}}
+        \vspace{0.15cm}
+        {\Large \textbf{Data Science\\}}
 
-    \end{tabular}
-    }
+        \vspace{1cm}
+        {\Large Title: \\}
+        \vspace{0.5cm}
+        {\fontsize{15}{25}\selectfont \textbf{``Chest Medical Image Fusion for Multimodal Clinical Analysis''}\\}
 
+        \vspace{4cm}
+        {\Large Internal Supervisor: Assoc. Prof. Tran Giang Son\\}
+    \end{center}
+    \vspace*{\fill}
 \end{titlepage}
 
 \addtocontents{toc}{\protect\setcounter{tocdepth}{-1}}
