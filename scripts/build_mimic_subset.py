@@ -13,6 +13,7 @@ Run from the project root:
     python scripts/build_mimic_subset.py --skip-copy --volume-size 10g
     python scripts/build_mimic_subset.py --upload-existing
     python scripts/build_mimic_subset.py --bundle-mode full --archive-name full-bundle.7z
+    python scripts/build_mimic_subset.py --bundle-mode full --stage-mode symlink
 
 Reads HF_TOKEN, HF_USERNAME, and DATA_PASSWORD from .env (see .env.example).
 """
@@ -74,6 +75,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bundle-mode", choices=["subset", "full"], default="subset",
                    help="Bundle a sampled subset, or archive the full dataset roots directly without staging "
                         "(default: subset)")
+    p.add_argument("--stage-mode", choices=["direct", "symlink"], default="direct",
+                   help="Full-bundle staging strategy. 'direct' archives data roots as-is. "
+                        "'symlink' builds a lightweight top-level symlink stage first, then archives through it "
+                        "so symlinked dataset roots are stored as regular files without copying bytes "
+                        "(default: direct)")
     p.add_argument("--archive-name", default="bundle-a3f9.7z",
                    help="Output archive filename (default: bundle-a3f9.7z)")
     p.add_argument("--archive-dir", default="data/_bundles",
@@ -117,6 +123,8 @@ def parse_args() -> argparse.Namespace:
         p.error("--fraction must be > 0 and <= 1")
     if not 0 < args.tail_threshold <= 1:
         p.error("--tail-threshold must be > 0 and <= 1")
+    if args.bundle_mode != "full" and args.stage_mode != "direct":
+        p.error("--stage-mode is only supported with --bundle-mode full")
     default_workers = _workers_from_cpu_fraction(args.cpu_fraction)
     if args.workers is None:
         args.workers = default_workers
@@ -326,6 +334,30 @@ def companion_sources(data_dir: Path) -> list[Path]:
     return sources
 
 
+def reset_full_symlink_stage(stage_root: Path) -> None:
+    stage_parent = stage_root.parent.resolve()
+    if stage_parent.name != "_bundle_stage":
+        sys.exit(f"Refusing to reset unexpected stage directory: {stage_root}")
+    if stage_root.is_symlink() or stage_root.is_file():
+        stage_root.unlink()
+    elif stage_root.exists():
+        shutil.rmtree(stage_root)
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+
+def full_symlink_stage_sources(sources: list[Path], stage_root: Path) -> list[Path]:
+    reset_full_symlink_stage(stage_root)
+    staged_sources = []
+    print(f"Full symlink stage -> {stage_root}")
+    for source in sources:
+        link = stage_root / source.name
+        target = source.resolve()
+        link.symlink_to(target, target_is_directory=target.is_dir())
+        staged_sources.append(link)
+        print(f"  {link.name} -> {target}")
+    return staged_sources
+
+
 def archive_sources(
     sources: list[Path],
     *,
@@ -333,6 +365,7 @@ def archive_sources(
     data_dir: Path,
     args: argparse.Namespace,
     volume_size: str | None,
+    workdir: Path | None = None,
 ) -> list[Path]:
     if args.archive_threads < 1:
         sys.exit("--archive-threads must be >= 1")
@@ -346,7 +379,7 @@ def archive_sources(
         archive,
         sources,
         password,
-        data_dir.resolve(),
+        workdir or data_dir.resolve(),
         args.compression_level,
         args.archive_threads,
         volume_size,
@@ -450,12 +483,23 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
         if missing:
             sys.exit("Missing full dataset source(s): " + ", ".join(str(path) for path in missing))
 
-        print("Bundle mode: full -> archiving full dataset roots directly (no subset staging)")
+        print(f"Bundle mode: full -> stage_mode={args.stage_mode}")
         sources = [*required_sources, *companion_sources(data_dir)]
         for source in sources:
             print(f"  source: {source}")
         if args.dry_run or args.skip_archive:
             return []
+        if args.stage_mode == "symlink":
+            stage_root = data_dir / "_bundle_stage" / archive.stem
+            staged_sources = full_symlink_stage_sources(sources, stage_root)
+            return archive_sources(
+                staged_sources,
+                archive=archive,
+                data_dir=data_dir,
+                args=args,
+                volume_size=volume_size,
+                workdir=stage_root.resolve(),
+            )
         return archive_sources(sources, archive=archive, data_dir=data_dir, args=args, volume_size=volume_size)
 
     split_csv = jpg_root / "mimic-cxr-2.0.0-split.csv"

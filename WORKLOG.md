@@ -1917,3 +1917,24 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 - [training/utils/train.py](training/utils/train.py) `train_model` now calls `print_model_summary(model, depth=2)` after `model.to(device)`/channels-last and *before* `torch.compile` (so module names stay readable). This covers ALL pipelines automatically — every `*_train.py` routes through `train_model`, no per-pipeline edits needed.
 - `scripts/model_summary.py` re-uses the shared renderer (removed its duplicated functions); standalone CLI behavior unchanged. Param counting is architecture-agnostic, so it already supports every src/ model.
 - Verified: py_compile; standalone tool on prior_aware_v5nano (64.43M params, Identity bottlenecks correctly 0); full `training.common` import chain loads and renders a generic nn.Module.
+
+## 2026-06-14 - Full bundle symlink staging
+
+**Goal.** Let `--bundle-mode full` use the old no-extra-copy symlink idea so a full MIMIC bundle can archive through lightweight links instead of materializing another copy of the 500+ GB image tree.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:78` - added `--stage-mode {direct,symlink}` for full bundles, defaulting to the existing direct behavior.
+- `scripts/build_mimic_subset.py:126` - rejects `--stage-mode symlink` outside `--bundle-mode full` so the reverted subset symlink-staging behavior is not silently reintroduced.
+- `scripts/build_mimic_subset.py:337` - added a guarded reset for `data/_bundle_stage/<archive_stem>` and top-level symlink staging helpers.
+- `scripts/build_mimic_subset.py:361` - let `archive_sources()` run 7z from an alternate workdir, preserving archive-relative paths when using the staging directory.
+- `scripts/build_mimic_subset.py:480` - routes full bundle builds through the symlink stage when requested, while keeping direct full-mode archiving unchanged by default.
+
+**Reasoning.** The previous `--stage-mode symlink` experiment staged every sampled file and was reverted because relative per-file symlinks were brittle on shared-mounted paths. For full mode, a simpler top-level staging directory is enough: create symlinks named `MIMIC-CXR-JPG`, `MIMIC-CXR`, `CXR-LT`, and `MIMIC-IV-ED-2-2`, then run 7z with that staging directory as cwd. This preserves the extracted layout and avoids copying dataset bytes.
+
+**Assumptions.**
+- The installed 7z follows directory symlinks by default; this was verified with a tiny fake archive on this machine.
+- The stage directory under `data/_bundle_stage/` is disposable and contains only generated symlinks/directories for archive construction.
+
+**Gotchas.** `--stage-mode symlink` is intentionally scoped to full mode. It does not restore the old subset per-file symlink staging path, because that path was previously reverted after server-side `Path.symlink_to(...)` failures.
+
+**Follow-ups.** Before uploading the real full archive, run with `--skip-upload` first and confirm the archive summary is hundreds of GB, then use `--upload-existing --preserve-hf-history` if upload retry is needed.
