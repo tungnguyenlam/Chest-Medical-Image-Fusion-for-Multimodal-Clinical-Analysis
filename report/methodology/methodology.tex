@@ -1,7 +1,7 @@
 \section{Methodology}
 \label{sec:methodology}
 
-In this section, we present the methodology for the clinically-aligned multi-modal chest X-ray classification framework, which we refer to as \textbf{CaMCheX}. We detail the formal problem definition, describe the individual modal encoders (image, text, and vitals), outline the token fusion strategies (comparing the spatially expanded V2 and the collapsed single-token V3 architectures), describe the prior-aware temporal modeling extension, and discuss the training objective.
+In this section, we present the methodology for the clinically-aligned multi-modal chest X-ray classification framework, which we refer to as \textbf{CaMCheX}. We detail the formal problem definition, describe the individual modal encoders (image, text, and vitals), outline the token fusion strategies (comparing the spatially expanded V2 and the collapsed single-token V3 architectures), describe the prior-aware temporal modeling extensions (comparing the concatenated self-attention V3 configuration and the asymmetric cross-attention V4 architecture), and discuss the training objective.
 
 An overview of the system architecture for both the current study and the temporal prior-aware extension is illustrated in Figure~\ref{fig:architecture}.
 
@@ -206,6 +206,41 @@ A learned time-delta embedding vector $\mathbf{E}_{\Delta} \in \mathbb{R}^{d_{mo
 
 \subsubsection{Stochastic Prior Dropout}
 To ensure that the prior-aware model remains robust when patients have no prior clinical history, we apply stochastic prior dropout during training. With a probability $p_{dropout} = 0.2$, the entire prior block is masked out by setting the corresponding key padding mask values to True, forcing the model to rely solely on the current study features.
+
+\subsubsection{Asymmetric Prior Cross-Attention (CaMCheX V4)}
+While the CaMCheX V3 prior-aware model performs full self-attention over the concatenated current and prior sequence $\mathbf{E} \in \mathbb{R}^{518 \times d_{model}}$, this incurs a quadratic computational cost of $\mathcal{O}(518^2)$ attention operations per layer. Furthermore, direct self-attention allows the classification head to easily exploit the prior labels $\mathbf{y}_{prv}$ as a shortcut feature, which poses an overfitting risk (the prior-label copy shortcut).
+
+To alleviate these limitations, we introduce the \textbf{CaMCheX V4} architecture. Instead of concatenating the sequences, V4 treats the current and prior modalities asymmetrically, framing the fusion as a cross-attention decoding task:
+\begin{itemize}
+    \item \textbf{Target Stream (Queries)}: The current study tokens act as the target sequence $\mathbf{E}_{cur}$ that forms the residual stream:
+    \begin{equation}
+        \mathbf{E}_{cur} = [\mathbf{E}_{cur\_img}, \mathbf{e}_{cur\_clin}, \mathbf{e}_{cur\_vit}] \in \mathbb{R}^{258 \times d_{model}}
+    \end{equation}
+    \item \textbf{Memory Stream (Keys/Values)}: The prior study tokens act as the memory sequence $\mathbf{E}_{prv}$, which is never updated during attention layers:
+    \begin{equation}
+        \mathbf{E}_{prv} = [\mathbf{e}_{sentinel}, \mathbf{E}_{prv\_img}, \mathbf{e}_{prv\_clin}, \mathbf{e}_{prv\_report}, \mathbf{e}_{prv\_vit}, \mathbf{e}_{prv\_label}] \in \mathbb{R}^{261 \times d_{model}}
+    \end{equation}
+    where $\mathbf{e}_{sentinel} \in \mathbb{R}^{1 \times d_{model}}$ is a learned \texttt{no\_prior\_token} sentinel. This sentinel guarantees at least one valid key/value token when a patient has no prior history (or when prior dropout is active), preventing NaN values in cross-attention, while serving as a learned representation for the absence of prior clinical data.
+\end{itemize}
+
+By partitioning the sequence, each fusion layer is structured as a Transformer Decoder layer performing self-attention on the target stream, followed by cross-attention from the target to the prior memory stream:
+\begin{align}
+    \mathbf{H}_{cur}^{(l, \text{self})} &= \text{SelfAttention}(\text{LN}(\mathbf{H}_{cur}^{(l-1)})) + \mathbf{H}_{cur}^{(l-1)} \\
+    \mathbf{H}_{cur}^{(l, \text{cross})} &= \text{CrossAttention}(\text{LN}(\mathbf{H}_{cur}^{(l, \text{self})}), \text{LN}(\mathbf{E}_{prv})) + \mathbf{H}_{cur}^{(l, \text{self})} \\
+    \mathbf{H}_{cur}^{(l)} &= \text{FFN}(\text{LN}(\mathbf{H}_{cur}^{(l, \text{cross})})) + \mathbf{H}_{cur}^{(l, \text{cross})}
+\end{align}
+where $l \in \{1, \dots, L\}$ denotes the layer index and $\text{LN}$ represents LayerNorm (with pre-LN configuration). To prevent the pre-LN outputs from bypassing normalization at the final layer, an explicit final LayerNorm is applied to the output of the decoder stack:
+\begin{equation}
+    \mathbf{H} = \text{LayerNorm}(\mathbf{H}_{cur}^{(L)}) \in \mathbb{R}^{258 \times d_{model}}
+\end{equation}
+This asymmetric layout reduces the attention cost from $518^2$ ($\sim$268k operations) to $258^2 + 258 \times 261$ ($\sim$134k operations) per layer—a reduction of approximately 50\%—while preserving every prior spatial patch at its full $8 \times 8$ resolution.
+
+\paragraph{Per-Modality Pre-Fusion Normalization}
+Because the fused token stream mixes features from wildly different sources (ConvNeXt-V2 visual features, CXR-BERT text embeddings, numeric vitals, linear label projections, and segment/time-delta embeddings), their numerical scales differ significantly. In a pre-LN Transformer Decoder, the cross-attention keys and values ($\mathbf{E}_{prv}$) do not pass through the main target residual stream's LayerNorm. To resolve this, V4 applies an independent LayerNorm to each modality block to map them to a harmonized unit scale before entering the fusion decoder:
+\begin{equation}
+    \mathbf{E}'_{type} = \text{LayerNorm}_{type}(\mathbf{E}_{type})
+\end{equation}
+where $type \in \{\text{img}, \text{clin}, \text{vitals}, \text{report}, \text{label}, \text{sentinel}\}$.
 
 \subsection{Classification Head \& Loss Functions}
 

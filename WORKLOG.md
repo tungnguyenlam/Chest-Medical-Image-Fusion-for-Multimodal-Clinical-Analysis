@@ -1886,3 +1886,34 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Gotchas.** v4 is not checkpoint-compatible with v3nano due to the decoder-based fusion and new per-modality LayerNorms. raw_clahe_lbp requires scikit-image for the uniform LBP variant; otherwise, it falls back to a non-uniform version that won't match precomputed stats.
 
 **Verification.** py_compile passes for all new files. Startup RAM optimization verified via host-RSS milestone tracing.
+
+## 2026-06-10 - Document CaMCheX V4 in LaTeX Report Methodology
+
+**Goal.** Update the report's methodology section to formally document the asymmetric prior cross-attention (CaMCheX V4) architecture.
+
+**Changes.**
+- `report/methodology/methodology.tex` - Updated the section introduction to include the V4 architecture, and added a detailed subsubsection describing V4's asymmetric token split (target vs. memory), sentinel token, per-modality LayerNorm, and Pre-LN Transformer Decoder equations.
+
+**Reasoning.** Documenting the newly developed CaMCheX V4 model alongside V2/V3 ensures that the LaTeX report reflects the latest state of the codebase and its flagship fusion design.
+
+**Verification.** Built the report using `make clean-all && make` followed by `pdflatex main.tex` to resolve references, verifying that compilation is successful without errors.
+
+## 2026-06-12 — Add prior_aware_v5nano: bottlenecked prior memory + detail-preserving current branch
+
+- New model [src/model/PriorAwareV5NanoModel.py](src/model/PriorAwareV5NanoModel.py), successor to v4nano. Keeps v4's asymmetric fusion (current=tgt queries, prior=read-only memory) and adds an information bottleneck on the *prior* context while protecting small-finding current-image detail. Five config knobs in `model.model_init_args`:
+  - `n_prior_latents` (16): learned **selective** pooling — K query tokens run one Perceiver block (self-attn + cross-attn → 261 prior tokens + FFN) → K prior latents. `0` falls back to v4-style full 261-token memory (the "baseline" ablation cell lives in this class). Cuts fusion cross-attn from 258·261 to 258·K.
+  - `current_image_stride` (2): `image_proj` stride; `1` → 16×16=256 tok/view (higher current resolution, small-finding ablation).
+  - `highres_skip` (true): max-pool over un-fused current image tokens appended as one head token (focal evidence survives fusion dilution; max not mean preserves focal lesions).
+  - `context_bottleneck_dim` (null): down-up projection squeezing non-image context tokens (clin/report/vitals/label).
+  - `prior_latent_dropout` (0.1): drop whole prior latents in training (≥1 kept) so no latent becomes "the label channel."
+- Wiring: [training/prior_aware_v5nano/](training/prior_aware_v5nano/) (config + train + eval + README, cloned from v4nano via sed); registered in [scripts/model_summary.py](scripts/model_summary.py) and [src/interpret/run_prior_gradcam.py](src/interpret/run_prior_gradcam.py).
+- Ablation grid is config-only: {n_prior_latents ∈ 0,16} × {current_image_stride ∈ 2,1}. README says to track a small-finding subset mAP (nodule/mass/pneumothorax) separately — that's where this design's win/loss shows.
+- Verified: py_compile of all new/edited files + forward&backward smoke test (random data, pretrained off, precomputed-text path) across 4 configs incl. no-prior sample and padded view slots — all logits finite, no all-masked-attention NaN.
+- Not checkpoint-compatible with v4 (new pooler/bottleneck/skip modules, different head token count).
+
+## 2026-06-12 — Print model summary before every training run
+
+- Factored the param-count rendering out of [scripts/model_summary.py](scripts/model_summary.py) into [training/utils/summary.py](training/utils/summary.py) (`print_model_summary`, `count_params`, `child_rows`, plain/markdown renderers). Single source of truth; `cfg_path` now optional so it renders for a bare model instance.
+- [training/utils/train.py](training/utils/train.py) `train_model` now calls `print_model_summary(model, depth=2)` after `model.to(device)`/channels-last and *before* `torch.compile` (so module names stay readable). This covers ALL pipelines automatically — every `*_train.py` routes through `train_model`, no per-pipeline edits needed.
+- `scripts/model_summary.py` re-uses the shared renderer (removed its duplicated functions); standalone CLI behavior unchanged. Param counting is architecture-agnostic, so it already supports every src/ model.
+- Verified: py_compile; standalone tool on prior_aware_v5nano (64.43M params, Identity bottlenecks correctly 0); full `training.common` import chain loads and renders a generic nn.Module.

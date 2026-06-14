@@ -30,6 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from training.utils.summary import print_model_summary
+
 
 DEFAULT_CONFIGS = {
     "camchex": "training/camchex/config.yaml",
@@ -41,6 +43,7 @@ DEFAULT_CONFIGS = {
     "prior_aware_v2nano": "training/prior_aware_v2nano/config.yaml",
     "prior_aware_v3nano": "training/prior_aware_v3nano/config.yaml",
     "prior_aware_v4nano": "training/prior_aware_v4nano/config.yaml",
+    "prior_aware_v5nano": "training/prior_aware_v5nano/config.yaml",
 }
 
 
@@ -188,6 +191,15 @@ def build_model(args: argparse.Namespace, cfg: dict[str, Any]) -> torch.nn.Modul
             **init_args,
         )
 
+    if model_key == "prior_aware_v5nano":
+        from src.model.PriorAwareV5NanoModel import PriorAwareV5NanoModel
+
+        return PriorAwareV5NanoModel(
+            timm_init_args=timm_args,
+            text_model=text_model,
+            **init_args,
+        )
+
     if model_key.startswith("prior_aware"):
         from src.model.PriorAwareCaMCheXModel import PriorAwareCaMCheXModel
 
@@ -202,96 +214,19 @@ def build_model(args: argparse.Namespace, cfg: dict[str, Any]) -> torch.nn.Modul
     return CaMCheXModel(timm_init_args=timm_args, text_model=text_model)
 
 
-def count_params(module: torch.nn.Module, recurse: bool = True) -> tuple[int, int]:
-    total = 0
-    trainable = 0
-    for param in module.parameters(recurse=recurse):
-        n = param.numel()
-        total += n
-        if param.requires_grad:
-            trainable += n
-    return total, trainable
-
-
-def fmt_count(n: int) -> str:
-    return f"{n:,}"
-
-
-def fmt_million(n: int) -> str:
-    return f"{n / 1_000_000:.2f}M"
-
-
-def child_rows(model: torch.nn.Module, max_depth: int) -> list[tuple[str, str, int, int]]:
-    rows: list[tuple[str, str, int, int]] = []
-
-    def visit(prefix: str, module: torch.nn.Module, depth: int) -> None:
-        if depth > max_depth:
-            return
-        for name, child in module.named_children():
-            full_name = f"{prefix}.{name}" if prefix else name
-            total, trainable = count_params(child)
-            rows.append((full_name, child.__class__.__name__, total, trainable))
-            visit(full_name, child, depth + 1)
-
-    visit("", model, 1)
-    return rows
-
-
-def print_plain(model: torch.nn.Module, rows: list[tuple[str, str, int, int]], cfg_path: Path) -> None:
-    total, trainable = count_params(model)
-    frozen = total - trainable
-    print(f"Config: {cfg_path}")
-    print(f"Model:  {model.__class__.__name__}")
-    print(f"Total parameters:     {fmt_count(total)} ({fmt_million(total)})")
-    print(f"Trainable parameters: {fmt_count(trainable)} ({fmt_million(trainable)})")
-    print(f"Frozen parameters:    {fmt_count(frozen)} ({fmt_million(frozen)})")
-    print()
-
-    header = ("module", "type", "params", "trainable", "share")
-    widths = [48, 30, 16, 16, 10]
-    print("".join(text.ljust(width) for text, width in zip(header, widths)))
-    print("".join("-" * width for width in widths))
-    for name, module_type, params, trainable_params in rows:
-        share = f"{(params / total * 100) if total else 0:.1f}%"
-        values = (name, module_type, fmt_count(params), fmt_count(trainable_params), share)
-        print("".join(text.ljust(width) for text, width in zip(values, widths)))
-
-
-def print_markdown(model: torch.nn.Module, rows: list[tuple[str, str, int, int]], cfg_path: Path) -> None:
-    total, trainable = count_params(model)
-    frozen = total - trainable
-    print(f"**Config:** `{cfg_path}`")
-    print(f"**Model:** `{model.__class__.__name__}`")
-    print()
-    print("| scope | parameters |")
-    print("|---|---:|")
-    print(f"| total | {fmt_count(total)} ({fmt_million(total)}) |")
-    print(f"| trainable | {fmt_count(trainable)} ({fmt_million(trainable)}) |")
-    print(f"| frozen | {fmt_count(frozen)} ({fmt_million(frozen)}) |")
-    print()
-    print("| module | type | params | trainable | share |")
-    print("|---|---|---:|---:|---:|")
-    for name, module_type, params, trainable_params in rows:
-        share = f"{(params / total * 100) if total else 0:.1f}%"
-        print(f"| `{name}` | `{module_type}` | {fmt_count(params)} | {fmt_count(trainable_params)} | {share} |")
-
-
 def main() -> int:
     args = parse_args()
     default_model = args.model or "camchex"
     cfg_path = Path(args.config or DEFAULT_CONFIGS[default_model])
     cfg = load_config(cfg_path)
     model = build_model(args, cfg)
-    rows = child_rows(model, max_depth=args.depth)
-
-    if args.format == "markdown":
-        print_markdown(model, rows, cfg_path)
-    else:
-        print_plain(model, rows, cfg_path)
-
-    if args.print_repr:
-        print()
-        print(model)
+    print_model_summary(
+        model,
+        cfg_path=cfg_path,
+        fmt=args.format,
+        depth=args.depth,
+        print_repr=args.print_repr,
+    )
     return 0
 
 

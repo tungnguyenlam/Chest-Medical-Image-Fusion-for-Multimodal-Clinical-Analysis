@@ -29,6 +29,7 @@ from .config import (
     set_seed,
 )
 from .metrics import compute_metrics, print_validation_summary
+from .summary import print_model_summary
 from .model import (
     ModelEMA,
     gradcam_runner_module,
@@ -254,6 +255,10 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     model.to(device)
     log_rss("model -> device (GPU-resident embedding table host copy released)")
     model = maybe_channels_last(model, args, cfg)
+    # Parameter-count summary before the loop starts (printed once; counted before
+    # torch.compile wraps the module so names stay readable). Same renderer as
+    # scripts/model_summary.py, so it works for every model.
+    print_model_summary(model, fmt="plain", depth=2)
     criterion = build_criterion(args, cfg, loss_init_args).to(device)
     optimizer = build_adamw_optimizer(model, lr=lr, **optimizer_args_from_config(cfg, args))
     max_epochs = resolve_trainer_arg(args, cfg, "max_epochs", 1000)
