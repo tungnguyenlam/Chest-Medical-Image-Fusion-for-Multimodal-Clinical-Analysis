@@ -1917,3 +1917,14 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 - [training/utils/train.py](training/utils/train.py) `train_model` now calls `print_model_summary(model, depth=2)` after `model.to(device)`/channels-last and *before* `torch.compile` (so module names stay readable). This covers ALL pipelines automatically — every `*_train.py` routes through `train_model`, no per-pipeline edits needed.
 - `scripts/model_summary.py` re-uses the shared renderer (removed its duplicated functions); standalone CLI behavior unchanged. Param counting is architecture-agnostic, so it already supports every src/ model.
 - Verified: py_compile; standalone tool on prior_aware_v5nano (64.43M params, Identity bottlenecks correctly 0); full `training.common` import chain loads and renders a generic nn.Module.
+
+## 2026-06-15 - Update report title page format
+
+**Goal.** Reformat the report's main/title page to match the provided USTH Bachelor Thesis template while keeping this repository's current report identity.
+
+**Changes.**
+- `report/main.tex:58` - replaced the previous centered title-page content with a TikZ page-border layout, larger USTH logo, Bachelor Thesis heading, student/program block, report title, and internal supervisor line.
+
+**Reasoning.** Used the user's provided layout structure directly, but kept the existing report title, student name, student ID, supervisor, and available logo path (`img/usth.jpg`) so the document remains consistent with this project and compiles without requiring a new `figures/usth_logo.jpg` asset.
+
+**Gotchas.** The LaTeX build still reports unrelated warnings about duplicate page anchors and an empty bibliography; these were present in the broader document flow and were not caused by the title-page format change.

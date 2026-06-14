@@ -19,5 +19,6 @@ __pycache__/
 *.log
 *.out
 *.pdf
+*.bbl
 
 output/
