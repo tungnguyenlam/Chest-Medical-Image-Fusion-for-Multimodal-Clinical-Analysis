@@ -1,4 +1,77 @@
 \section{Exploratory Data Analysis}
 \label{sec:eda}
 
-This is the exploratory data analysis.
+This section details the properties of the datasets utilized in this study, the cohort selection criteria, and statistical analyses of the image, text, vital signs, and temporal features.
+
+\subsection{Dataset Cohort and Subsets}
+\label{subsec:eda_cohort}
+
+Describe the source datasets: MIMIC-CXR-JPG (radiographs and reports) and MIMIC-IV / MIMIC-IV ED (demographics, vital signs, and clinical indications). Explain the cohort selection criteria: matching patient admissions that contain concurrent CXR studies, ED admission vitals, and clinical history text.
+\begin{itemize}
+    \item Detail the subset extraction process (fraction, sampling strategy, and size of train/val/test splits).
+    \item Include a summary table showing cohort counts, total studies, and missingness rates of different modalities.
+\end{itemize}
+
+% [TABLE PLACEHOLDER]
+% Table name: tab:cohort_summary
+% Description: Overall cohort statistics (number of patients, studies, views, and text/vitals availability).
+
+\subsection{Label Distribution and Co-occurrence}
+\label{subsec:eda_labels}
+
+Analyze the 26 target pathology findings derived from the CXR-LT (Chest X-ray Long-Tail) annotations:
+\begin{itemize}
+    \item Describe the distribution of positive labels across the cohort, highlighting the long-tailed nature of the pathologies (e.g., Cardiomegaly, Pleural Effusion vs. rare findings).
+    \item Explain the co-occurrence patterns between different findings.
+\end{itemize}
+
+% [FIGURE PLACEHOLDER]
+% Figure name: fig:label_distribution
+% Description: Bar plot showing the frequency (prevalence) of the 26 target pathology labels.
+
+% [FIGURE PLACEHOLDER]
+% Figure name: fig:label_correlation
+% Description: Heatmap showing the correlation/co-occurrence matrix of the 26 pathology classes.
+
+\subsection{Clinical Indication Text Analysis}
+\label{subsec:eda_text}
+
+Analyze the emergency department clinical indication notes:
+\begin{itemize}
+    \item Discuss text properties: character/word counts, sentence counts, and sequence lengths.
+    \item Identify common vocabulary, key clinical terms (e.g., "shortness of breath", "cough", "fever", "chest pain"), and typical syntax/structure.
+\end{itemize}
+
+% [FIGURE PLACEHOLDER]
+% Figure name: fig:text_length_distribution
+% Description: Histogram of word/token count distributions for the clinical indication text.
+
+\subsection{Vital Signs and Missingness Analysis}
+\label{subsec:eda_vitals}
+
+Analyze the distributions of the 7 vital signs (temperature, heart rate, O2 saturation, respiratory rate, systolic blood pressure, diastolic blood pressure, and gender):
+\begin{itemize}
+    \item Present statistics (mean, standard deviation, min, max, median) for each vital sign.
+    \item Detail the missingness patterns: which vitals are most frequently missing (e.g., O2 saturation or respiratory rate) and the overall percentage of missing values.
+\end{itemize}
+
+% [TABLE PLACEHOLDER]
+% Table name: tab:vitals_statistics
+% Description: Summary statistics and missingness percentages for each of the 7 vital signs.
+
+% [FIGURE PLACEHOLDER]
+% Figure name: fig:vitals_distribution
+% Description: Box plots or density plots for each numeric vital sign.
+
+\subsection{Temporal Prior Gaps}
+\label{subsec:eda_temporal}
+
+Analyze the temporal dynamics of the dataset for patients with prior studies:
+\begin{itemize}
+    \item Describe the frequency of prior studies per patient (how many patients have at least one prior study).
+    \item Analyze the distribution of the time gap ($\Delta t$ in days) between the current study and the most recent prior study. Explain why discretization/bucketing is appropriate given the skewed distribution of temporal intervals.
+\end{itemize}
+
+% [FIGURE PLACEHOLDER]
+% Figure name: fig:time_delta_distribution
+% Description: Histogram showing the distribution of time gaps (in days) between current and prior studies.

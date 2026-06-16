@@ -1,4 +1,37 @@
 \section{Related Work}
 \label{sec:related_work}
 
-This is the related work.
+This section reviews the existing literature and baseline approaches relevant to multimodal medical image classification, clinical text modeling, vital signs processing, and temporal patient history modeling.
+
+\subsection{Single-Modal Chest X-Ray Classification}
+\label{subsec:related_single_modal}
+
+Review key architectures and benchmarks in automated chest radiograph analysis. Mention landmark datasets like ChestX-ray14, CheXpert, and MIMIC-CXR. Discuss standard CNN backbones (e.g., DenseNet, ResNet) and modern transformer-based/convolutional backbones (e.g., ViT, ConvNeXt-V2) used to classify pathologies from single or multiple image views (frontal and lateral).
+
+\subsection{Multimodal Clinical Fusion}
+\label{subsec:related_multimodal}
+
+Discuss existing architectures that fuse chest X-rays with non-image clinical data:
+\begin{itemize}
+    \item \textbf{Early vs. Late Fusion}: Compare architectures that concatenate features at early stages versus late classifier stages.
+    \item \textbf{Text and Image Alignment}: Review models (e.g., ConVIRT, BioViL) that use contrastive learning to align radiographs with radiology reports.
+    \item \textbf{EHR and Vitals Integration}: Discuss how structured data (demographics, vital signs, lab values) are typically fused. Critique the practice of translating numeric variables into text prompts for pre-trained language models.
+\end{itemize}
+
+\subsection{Temporal and Prior-Aware Medical Modeling}
+\label{subsec:related_temporal}
+
+Review studies that incorporate historical patient records (longitudinal studies) to improve current diagnostic accuracy:
+\begin{itemize}
+    \item Discuss models that compare a current image with a prior image using Siamese networks, image difference maps, or cross-attention.
+    \item Highlight the challenges of prior-aware modeling, such as variable time gaps, missing historical records, and the risk of "shortcut learning" where the model over-relies on prior labels or reports.
+\end{itemize}
+
+\subsection{Mitigating Class Imbalance in Medical Datasets}
+\label{subsec:related_imbalance}
+
+Review loss functions and techniques designed to handle the highly skewed class distributions common in clinical datasets:
+\begin{itemize}
+    \item Compare standard Binary Cross-Entropy (BCE) with Focal Loss.
+    \item Discuss the formulation and benefits of Asymmetric Loss (ASL), which targets negative and positive samples with different focusing parameters to prevent easy negatives from overwhelming the gradient.
+\end{itemize}

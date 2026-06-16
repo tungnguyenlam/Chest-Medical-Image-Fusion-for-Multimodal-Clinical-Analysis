@@ -1,4 +1,49 @@
 \section{Introduction}
 \label{sec:introduction}
 
-Chest radiograph are one of the most commonly acquired diagnostic imaging studies in hospitals and emergency departments. They play a central role in screening, diagnosing and monitoring a 
+This section introduces the research context, outlines the core problems in multimodal chest X-ray classification, and presents our proposed framework.
+
+\subsection{Background and Motivation}
+\label{subsec:intro_background}
+
+Provide a general introduction to the clinical setting, specifically focusing on the Emergency Department (ED). Discuss the central role of chest radiographs (CXRs) in screening, diagnosing, and monitoring critical thoracic conditions. Explain the clinical motivation for multimodal analysis: clinicians do not interpret X-rays in a vacuum; they integrate them with clinical indications, prior history, and current vital signs. Highlight the potential of deep learning to assist clinicians by performing multimodal clinical fusion.
+
+\subsection{Research Challenges}
+\label{subsec:intro_challenges}
+
+Describe the key challenges that current systems face and that this thesis aims to address:
+\begin{itemize}
+    \item \textbf{Single-Modality Limitations}: Standard classification models only look at CXRs, missing vital clinical context.
+    \item \textbf{Noisy Text Translation}: Existing fusion models translate numeric vitals into natural language, introducing translation noise and relying on imperfect text encoders.
+    \item \textbf{Temporal Prior Ignorance}: Diagnostic workflows depend heavily on comparison with previous (prior) exams, yet most models analyze current studies in isolation.
+    \item \textbf{Computational Bottlenecks}: Multi-modal token fusion (e.g., in dense self-attention) scales quadratically, making it expensive for real-time clinical deployment.
+    \item \textbf{Severe Class Imbalance}: Medical findings exhibit highly skewed distributions, where a few pathologies dominate and many critical conditions are rare.
+\end{itemize}
+
+\subsection{Proposed Solution: CaMCheX}
+\label{subsec:intro_proposed}
+
+Introduce the Clinically-aligned Multi-modal Chest X-ray Classification framework (\textbf{CaMCheX}). Briefly explain its evolution:
+\begin{itemize}
+    \item \textbf{CaMCheX V2}: Spatially expanded fusion that aligns text and vitals features across the spatial grid of the X-ray images.
+    \item \textbf{CaMCheX V3}: Slimmed single-token fusion which collapses non-image modalities to single tokens to improve computational efficiency.
+    \item \textbf{CaMCheX V4}: Asymmetric prior cross-attention that structures temporal modeling as a query-decoder task, preventing prior-label copying and halving attention complexity.
+\end{itemize}
+Explain how the model integrates current inputs with historical records (vitals, prior labels, prior reports) while preventing label leakage.
+
+\subsection{Thesis Contributions}
+\label{subsec:intro_contributions}
+
+Summarize the main contributions of this work:
+\begin{enumerate}
+    \item Development of a unified multimodal architecture combining CXRs, clinical text, and numeric vitals.
+    \item Design of an asymmetric cross-attention mechanism (V4) to perform compute-efficient and leakage-safe temporal comparison with prior studies.
+    \item Systematic analysis of token layouts (V2 vs. V3) evaluating the trade-offs of spatial expansion in multi-modal fusion.
+    \item Integration of Asymmetric Loss (ASL) with frequency-based weighting to counter extreme label imbalance.
+    \item Comprehensive evaluation on a subset of the MIMIC-CXR and MIMIC-IV datasets.
+\end{enumerate}
+
+\subsection{Report Structure}
+\label{subsec:intro_structure}
+
+Briefly outline the contents of the remaining sections of the report: Related Work (Section \ref{sec:related_work}), Exploratory Data Analysis (Section \ref{sec:eda}), Methodology (Section \ref{sec:methodology}), Results (Section \ref{sec:results}), Discussion (Section \ref{sec:discussion}), and Conclusion (Section \ref{sec:conclusion}).
