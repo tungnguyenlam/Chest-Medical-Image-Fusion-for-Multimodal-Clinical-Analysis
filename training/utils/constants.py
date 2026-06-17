@@ -9,10 +9,24 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# CXR-LT long-tail split indices (head/medium/tail) used for the grouped metrics.
+# CXR-LT 2023 long-tail groups used for grouped metrics. Keep the legacy index
+# aliases for old callers, but resolve by class name in metrics so 2024 class
+# lists do not silently inherit the wrong positional groups.
 HEAD_IDX = [0, 2, 4, 12, 14, 16, 20, 24]
 MEDIUM_IDX = [1, 3, 5, 6, 8, 9, 10, 13, 15, 22]
 TAIL_IDX = [7, 11, 17, 18, 19, 21, 23, 25]
+
+_CXRLT_2023_CLASSES = [
+    "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation",
+    "Edema", "Emphysema", "Enlarged Cardiomediastinum", "Fibrosis", "Fracture",
+    "Hernia", "Infiltration", "Lung Lesion", "Lung Opacity", "Mass", "No Finding",
+    "Nodule", "Pleural Effusion", "Pleural Other", "Pleural Thickening",
+    "Pneumomediastinum", "Pneumonia", "Pneumoperitoneum", "Pneumothorax",
+    "Subcutaneous Emphysema", "Support Devices", "Tortuous Aorta",
+]
+HEAD_CLASSES = [_CXRLT_2023_CLASSES[i] for i in HEAD_IDX]
+MEDIUM_CLASSES = [_CXRLT_2023_CLASSES[i] for i in MEDIUM_IDX]
+TAIL_CLASSES = [_CXRLT_2023_CLASSES[i] for i in TAIL_IDX]
 
 # Repo root (training/utils/constants.py -> parents[2]). Inserted on sys.path so the
 # `from src...` imports in this package resolve regardless of how a script is launched.

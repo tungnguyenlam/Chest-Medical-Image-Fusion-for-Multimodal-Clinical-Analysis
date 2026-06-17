@@ -514,6 +514,10 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
 
 def make_prior_aware_eval_loader(cfg: dict[str, Any], args: argparse.Namespace, drop_report: bool = False):
     data_cfg = data_cfg_from_config(cfg, args)
+    # The background-attention penalty is a training-only regularizer; never spend
+    # CPU computing masks for inference (and keep the model's forward returning bare
+    # logits, which predict_dataframe expects).
+    data_cfg["compute_bg_mask"] = False
     _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     ds = PriorAwareDataset(
         parquet_path=str(resolve_path(data_cfg["pred_df_path"])),

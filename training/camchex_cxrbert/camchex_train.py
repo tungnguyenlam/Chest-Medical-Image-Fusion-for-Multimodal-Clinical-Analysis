@@ -16,6 +16,7 @@ from training.common import (
     loss_args_from_config,
     lr_from_config,
     make_camchex_loaders,
+    model_init_args_from_config,
     prepare_run_dir,
     resolve_path,
     timm_args_from_config,
@@ -48,6 +49,7 @@ def main() -> None:
         frontal_pretrained_path=frontal_pretrained_path,
         lateral_pretrained_path=lateral_pretrained_path,
         text_model=text_model,
+        **model_init_args_from_config(cfg),
     )
     train_model(
         model=model,

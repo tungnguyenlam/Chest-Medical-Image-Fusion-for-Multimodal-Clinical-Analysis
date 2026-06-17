@@ -75,6 +75,9 @@ _MODEL_CLASSES = {
     "prior_aware_v3nano": PriorAwareV3NanoModel,
     "prior_aware_v4nano": PriorAwareV4NanoModel,
     "prior_aware_v5nano": PriorAwareV5NanoModel,
+    # Same model class as v5; only the background-penalty knob differs (and that is
+    # stripped for attribution in build_model, so the forward stays logits-only).
+    "prior_aware_v5nano_bgpenalty": PriorAwareV5NanoModel,
 }
 _DEFAULT_TEXT_MODEL = {
     "prior_aware": "dmis-lab/biobert-v1.1",
@@ -82,6 +85,7 @@ _DEFAULT_TEXT_MODEL = {
     "prior_aware_v3nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
     "prior_aware_v4nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
     "prior_aware_v5nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
+    "prior_aware_v5nano_bgpenalty": "microsoft/BiomedVLP-CXR-BERT-specialized",
 }
 
 
@@ -115,6 +119,7 @@ def build_dataset(cfg, args) -> PriorAwareDataset:
     for key in ("text_embedding_cache", "use_text_embedding_cache"):
         data_cfg.pop(key, None)
     data_cfg["text_embedding_streams"] = []
+    data_cfg["compute_bg_mask"] = False  # attribution doesn't need the bg mask
     _, transforms_val = get_transforms(data_cfg["size"], data_cfg.get("channel_mode"))
     text_model = cfg["model"].get("text_model") or data_cfg.get("tokenizer") or _DEFAULT_TEXT_MODEL[arch]
     tokenizer = AutoTokenizer.from_pretrained(text_model, trust_remote_code=True)
@@ -137,6 +142,7 @@ def build_model(cfg, args, device):
     init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
     init_args["use_precomputed_text_embeddings"] = False  # force live BERT
     init_args["freeze_text_encoder"] = False              # let gradients flow into embeddings
+    init_args.pop("background_penalty_lambda", None)       # logits-only forward for attribution
     model = _MODEL_CLASSES[arch](
         timm_init_args=timm_args,
         text_model=cfg["model"].get("text_model", _DEFAULT_TEXT_MODEL[arch]),

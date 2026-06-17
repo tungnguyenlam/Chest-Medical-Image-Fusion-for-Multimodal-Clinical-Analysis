@@ -15,7 +15,10 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+import cv2
+
 from src.dataloader.CaMCheXVitalsDataset import DEFAULT_VITAL_STATS, VITAL_FIELDS
+from src.dataloader.body_mask import BodyMaskConfig, confident_background
 from src.dataloader.utils import (
     _safe_decode_jpeg,
     load_or_build_channels,
@@ -24,6 +27,10 @@ from src.dataloader.utils import (
 
 MAX_VIEWS = 4
 N_CLASSES = 26
+# Resolution at which the per-view background mask is stored in the batch. The
+# model average-pools this down to its encoder grid (8x8 / 16x16), so anything
+# >= the grid works; 32 is tiny (4 KB/view) yet finer than the grid.
+BG_MASK_GRID = 32
 CLIN_MAX_LEN = 384
 OBS_MAX_LEN = 128
 REPORT_MAX_LEN = 384  # prior study's findings + impression (legitimate prior info, not leakage)
@@ -54,6 +61,18 @@ def _to_array(x, dtype):
     if _is_missing(x):
         return np.zeros(0, dtype=dtype)
     return np.asarray(list(x), dtype=dtype)
+
+
+def _to_fixed_array(x, dtype, size: int, name: str) -> np.ndarray:
+    arr = _to_array(x, dtype)
+    if arr.size == size:
+        return arr
+    if arr.size == 0:
+        return np.zeros(size, dtype=dtype)
+    raise ValueError(
+        f"{name} has length {arr.size}, but this config expects {size} classes; "
+        "rebuild the prior-aware parquet with the same class list."
+    )
 
 
 def _has_value(row, key: str) -> bool:
@@ -122,6 +141,7 @@ class PriorAwareDataset(Dataset):
         self.label_dropout_p = float(label_dropout_p)
         self.tokenizer = tokenizer
         cfg = cfg or {}
+        self.n_classes = len(cfg.get("classes") or []) or N_CLASSES
         self.channel_mode = cfg.get("channel_mode")
         self.channel_cache_dir = cfg.get("image_channel_cache_dir")
         self.channel_cfg = make_preprocess_config(cfg) if self.channel_mode else None
@@ -129,6 +149,12 @@ class PriorAwareDataset(Dataset):
         # normalize on-device (4x smaller batch/pinned/H2D). Off -> float32 as before.
         self.normalize_on_gpu = bool(cfg.get("uint8_image_pipeline", False))
         self._img_dtype = np.uint8 if self.normalize_on_gpu else np.float32
+        # Background-attention penalty: emit a per-current-view confident-background
+        # mask (1 = outside-patient frame/corners) so the model can penalize image
+        # features there. Computed from the raw channel and passed THROUGH the same
+        # transform as the image, so it stays geometrically aligned under augmentation.
+        self.compute_bg_mask = bool(cfg.get("compute_bg_mask", False))
+        self.bg_mask_cfg = BodyMaskConfig(**(cfg.get("bg_mask_cfg") or {}))
         self.text_embedding_cache = cfg.get("text_embedding_cache")
         self.text_embedding_streams = set(
             cfg.get("text_embedding_streams")
@@ -211,23 +237,51 @@ class PriorAwareDataset(Dataset):
         return len(self.df)
 
     # ---- image loading ----------------------------------------------------
-    def _load_image_block(self, paths: list[str], views: list[int]) -> tuple[np.ndarray, np.ndarray]:
-        """Load up to MAX_VIEWS images, pad to fixed shape. Returns (img, view_codes)."""
+    def _raw_gray_u8(self, img: np.ndarray) -> np.ndarray:
+        """First channel of a decoded image as uint8 grayscale (for the bg mask).
+        Channel 0 is the raw image in every channel mode (and the legacy decode is a
+        grayscale-duplicated RGB), so index 0 is the raw signal either way."""
+        gray = img[..., 0]
+        if gray.dtype != np.uint8:  # float32 [0,1] -> [0,255]
+            gray = np.clip(gray * 255.0, 0, 255).astype(np.uint8)
+        return gray
+
+    def _load_image_block(
+        self, paths: list[str], views: list[int], with_mask: bool = False
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+        """Load up to MAX_VIEWS images, pad to fixed shape.
+
+        Returns ``(img, view_codes, masks)``. ``masks`` is a ``(MAX_VIEWS, G, G)``
+        float32 confident-background block when ``with_mask`` (else ``None``). Each
+        mask is computed from the raw channel and pushed through the SAME transform
+        as its image (``mask=`` argument), so augmentation keeps them aligned.
+        """
         imgs = []
         view_codes = []
+        masks = [] if with_mask else None
         for path, vp in zip(paths, views):
             img = self._decode(path)
             if img is None:
                 warnings.warn(f"Skipping unreadable image {path}")
                 continue
-            if self.transform is not None:
+            if with_mask:
+                bg = confident_background(self._raw_gray_u8(img), self.bg_mask_cfg)
+                if self.transform is not None:
+                    out = self.transform(image=img, mask=bg)
+                    img, bg = out["image"], out["mask"]
+                # Downsample to the stored grid (area-avg = fraction of cell that is bg).
+                bg = cv2.resize(bg.astype(np.float32), (BG_MASK_GRID, BG_MASK_GRID), interpolation=cv2.INTER_AREA)
+                masks.append(np.clip(bg, 0.0, 1.0))
+            elif self.transform is not None:
                 img = self.transform(image=img)["image"]
+            if self.transform is not None:
                 img = np.moveaxis(img, -1, 0)
             imgs.append(img)
             view_codes.append(int(vp))
 
         if len(imgs) == 0:
-            return _zero_image_block(self.size, self._img_dtype), np.zeros(MAX_VIEWS, dtype=np.int64)
+            empty_masks = np.zeros((MAX_VIEWS, BG_MASK_GRID, BG_MASK_GRID), dtype=np.float32) if with_mask else None
+            return _zero_image_block(self.size, self._img_dtype), np.zeros(MAX_VIEWS, dtype=np.int64), empty_masks
 
         n = len(imgs)
         stacked = np.stack(imgs, axis=0).astype(self._img_dtype)
@@ -235,7 +289,12 @@ class PriorAwareDataset(Dataset):
             pad = np.zeros((MAX_VIEWS - n, 3, self.size, self.size), dtype=self._img_dtype)
             stacked = np.concatenate([stacked, pad], axis=0)
         vc = np.array(view_codes + [0] * (MAX_VIEWS - n), dtype=np.int64)
-        return stacked, vc
+
+        mask_block = None
+        if with_mask:
+            mask_block = np.zeros((MAX_VIEWS, BG_MASK_GRID, BG_MASK_GRID), dtype=np.float32)
+            mask_block[:n] = np.stack(masks, axis=0)
+        return stacked, vc, mask_block
 
     @property
     def _emit_streams(self) -> set[str]:
@@ -306,7 +365,9 @@ class PriorAwareDataset(Dataset):
     def __getitem__(self, index: int) -> tuple[dict[str, Any], np.ndarray]:
         row = self.df.iloc[index]
 
-        cur_img, cur_views = self._load_image_block(list(row["img_paths"]), list(row["view_positions"]))
+        cur_img, cur_views, cur_bg_mask = self._load_image_block(
+            list(row["img_paths"]), list(row["view_positions"]), with_mask=self.compute_bg_mask
+        )
         if cur_img.sum() == 0:
             # Defensive: every current image unreadable. Fall through to neighbor like the legacy
             # dataset did, so we never return an all-zero current block to the model.
@@ -319,7 +380,7 @@ class PriorAwareDataset(Dataset):
             has_prior = False
 
         if has_prior and bool(row.get("prior_has_image", True)):
-            prv_img, prv_views = self._load_image_block(
+            prv_img, prv_views, _ = self._load_image_block(
                 list(row["prior_img_paths"]), list(row["prior_view_positions"])
             )
         else:
@@ -333,9 +394,15 @@ class PriorAwareDataset(Dataset):
             "has_prior": bool(has_prior),
             "prior_img": prv_img,
             "prior_view_positions": prv_views,
-            "prior_label": _to_array(row["prior_label"], np.float32) if has_prior else np.zeros(N_CLASSES, dtype=np.float32),
+            "prior_label": (
+                _to_fixed_array(row["prior_label"], np.float32, self.n_classes, "prior_label")
+                if has_prior
+                else np.zeros(self.n_classes, dtype=np.float32)
+            ),
             "days_since_prior": float(row["days_since_prior"]) if has_prior and not pd.isna(row["days_since_prior"]) else 0.0,
         }
+        if cur_bg_mask is not None:
+            data["bg_mask"] = cur_bg_mask  # (MAX_VIEWS, G, G) confident-background weight
         # Emit only the text streams the model consumes (see _emit_streams). The
         # dict key prefix is the column name without the trailing "_text".
         emit = self._emit_streams
@@ -354,7 +421,7 @@ class PriorAwareDataset(Dataset):
         data["vital_missing_mask"] = vital_missing
         data["prior_vital_values"] = prior_vital_values if has_prior else np.zeros(len(VITAL_FIELDS), dtype=np.float32)
         data["prior_vital_missing_mask"] = prior_vital_missing if has_prior else np.ones(len(VITAL_FIELDS), dtype=np.bool_)
-        label = _to_array(row["label"], np.float32)
+        label = _to_fixed_array(row["label"], np.float32, self.n_classes, "label")
         return data, label
 
 

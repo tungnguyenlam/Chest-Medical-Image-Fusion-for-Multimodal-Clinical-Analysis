@@ -18,6 +18,7 @@ from training.common import (
     resolve_eval_config,
     load_weights,
     make_single_view_eval_loader,
+    model_init_args_from_config,
     predict_dataframe,
     print_validation_summary,
     select_device,
@@ -43,7 +44,7 @@ def main() -> None:
     classes = classes_from_config(cfg)
     loader, ids, labels_available = make_single_view_eval_loader(cfg, args, args.view_position)
 
-    model = SingleViewModel(timm_args_from_config(cfg, args))
+    model = SingleViewModel(timm_args_from_config(cfg, args), **model_init_args_from_config(cfg))
     load_weights(model, args.checkpoint_path)
     out_df, preds, labels = predict_dataframe(model, loader, classes, select_device(args.accelerator), ids=ids)
 

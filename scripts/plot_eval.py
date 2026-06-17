@@ -41,12 +41,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# CXR-LT long-tail split (head/medium/tail), mirrored from training/utils/constants.py.
+from training.utils.constants import HEAD_CLASSES, MEDIUM_CLASSES, TAIL_CLASSES
+
+# CXR-LT 2023 long-tail split (head/medium/tail), resolved by class name after
+# predictions are loaded so 2024 label orders do not inherit 2023 positions.
 CLASS_GROUPS = {
-    "head": [0, 2, 4, 12, 14, 16, 20, 24],
-    "medium": [1, 3, 5, 6, 8, 9, 10, 13, 15, 22],
-    "tail": [7, 11, 17, 18, 19, 21, 23, 25],
+    "head": set(HEAD_CLASSES),
+    "medium": set(MEDIUM_CLASSES),
+    "tail": set(TAIL_CLASSES),
 }
+CLASS_GROUP_IDXS = {name: [] for name in CLASS_GROUPS}
 GROUP_COLORS = {"head": "tab:green", "medium": "tab:orange", "tail": "tab:red"}
 
 
@@ -98,8 +102,20 @@ def _load_predictions(path: Path, uncertain: str) -> tuple[list[str], np.ndarray
     return classes, preds, labels
 
 
+def _canonical_group_name(name: str) -> str:
+    return "No Finding" if name == "Normal" else name
+
+
+def _set_class_groups(classes: list[str]) -> None:
+    global CLASS_GROUP_IDXS
+    CLASS_GROUP_IDXS = {
+        group: [idx for idx, name in enumerate(classes) if _canonical_group_name(name) in names]
+        for group, names in CLASS_GROUPS.items()
+    }
+
+
 def _group_of(idx: int) -> str:
-    for g, idxs in CLASS_GROUPS.items():
+    for g, idxs in CLASS_GROUP_IDXS.items():
         if idx in idxs:
             return g
     return "medium"
@@ -306,8 +322,8 @@ def plot_metric_bars(classes, vals, metric_name: str, out: Path, dpi: int) -> No
 
 def plot_group_summary(metrics, ap_vals, auroc_vals, out: Path, dpi: int) -> None:
     groups = ["head", "medium", "tail"]
-    ap = [np.nanmean([ap_vals[i] for i in CLASS_GROUPS[g]]) for g in groups]
-    au = [np.nanmean([auroc_vals[i] for i in CLASS_GROUPS[g]]) for g in groups]
+    ap = [np.nanmean([ap_vals[i] for i in CLASS_GROUP_IDXS[g]]) for g in groups]
+    au = [np.nanmean([auroc_vals[i] for i in CLASS_GROUP_IDXS[g]]) for g in groups]
     if metrics is not None:
         ap = [metrics.get(f"val/ap_{g}", ap[k]) for k, g in enumerate(groups)]
         au = [metrics.get(f"val/auroc_{g}", au[k]) for k, g in enumerate(groups)]
@@ -320,7 +336,7 @@ def plot_group_summary(metrics, ap_vals, auroc_vals, out: Path, dpi: int) -> Non
         for b in bars:
             ax.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.01, f"{b.get_height():.3f}", ha="center", fontsize=8)
     ax.set_xticks(x)
-    ax.set_xticklabels([f"{g}\n({len(CLASS_GROUPS[g])} classes)" for g in groups])
+    ax.set_xticklabels([f"{g}\n({len(CLASS_GROUP_IDXS[g])} classes)" for g in groups])
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("score")
     ax.set_title("Head / medium / tail summary (long-tail breakdown)")
@@ -496,7 +512,7 @@ def plot_calibration(classes, preds, labels, out: Path, dpi: int) -> None:
     ax.plot([0, 1], [0, 1], "k--", linewidth=1, label="perfectly calibrated")
     conf, frac = reliability(list(range(len(classes))))
     ax.plot(conf, frac, "o-", color="black", linewidth=2, label="all classes (pooled)")
-    for g, idxs in CLASS_GROUPS.items():
+    for g, idxs in CLASS_GROUP_IDXS.items():
         c, f = reliability(idxs)
         ax.plot(c, f, "s--", color=GROUP_COLORS[g], alpha=0.8, label=g)
     ax.set_xlabel("mean predicted probability")
@@ -576,6 +592,7 @@ def main() -> None:
     print(f"[plot-eval] {pred_path} -> {out}")
 
     classes, preds, labels = _load_predictions(pred_path, args.uncertain)
+    _set_class_groups(classes)
     metrics_path = args.metrics if args.metrics is not None else pred_path.with_name("metrics.json")
     metrics = _maybe_load_json(metrics_path)
     print(f"  {preds.shape[0]} samples x {len(classes)} classes; metrics.json: {'yes' if metrics else 'no'}")

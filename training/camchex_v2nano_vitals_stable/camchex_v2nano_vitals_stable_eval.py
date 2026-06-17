@@ -19,6 +19,7 @@ from training.common import (
     load_weights,
     evaluate_report_ablation,
     make_camchex_vitals_eval_loader,
+    model_init_args_from_config,
     predict_dataframe,
     print_validation_summary,
     resolve_path,
@@ -56,7 +57,7 @@ def main() -> None:
     lateral_pretrained_path = str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None
 
     text_model = args.text_model or cfg.get("model", {}).get("text_model") or "microsoft/BiomedVLP-CXR-BERT-specialized"
-    model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
+    model_init_args = model_init_args_from_config(cfg)
     data_cfg = cfg.get("data", {}).get("datamodule_cfg", {}) or {}
     if args.freeze_text_encoder:
         model_init_args["freeze_text_encoder"] = True

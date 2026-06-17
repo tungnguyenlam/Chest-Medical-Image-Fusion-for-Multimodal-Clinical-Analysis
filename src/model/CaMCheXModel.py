@@ -8,7 +8,14 @@ from src.encoder import CaMCheXImageEncoder, CaMCheXTextEncoder
 
 
 class CaMCheXModel(nn.Module):
-    def __init__(self, timm_init_args, frontal_pretrained_path=None, lateral_pretrained_path=None, text_model="dmis-lab/biobert-v1.1"):
+    def __init__(
+        self,
+        timm_init_args,
+        frontal_pretrained_path=None,
+        lateral_pretrained_path=None,
+        text_model="dmis-lab/biobert-v1.1",
+        n_classes: int = 26,
+    ):
         super().__init__()
 
         self.image_encoder = CaMCheXImageEncoder(
@@ -27,7 +34,7 @@ class CaMCheXModel(nn.Module):
         with torch.no_grad():
             self.segment_embedding.data = self.segment_embedding.data.clamp(-1.0, 1.0)
 
-        self.head = MLDecoder(num_classes=26, initial_num_features=768)
+        self.head = MLDecoder(num_classes=n_classes, initial_num_features=768)
         self.transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=768, nhead=8, dropout=0.1, batch_first=True),
             num_layers=2

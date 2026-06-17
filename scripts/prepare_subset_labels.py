@@ -11,7 +11,7 @@ directory (default: data/subset/), producing:
 Each CSV has one row per (study_id, dicom_id), columns:
   study_id, subject_id, dicom_id, ViewPosition, path,
   clinical_indication, temperature, heartrate, resprate,
-  o2sat, sbp, dbp, gender, + 26 CXR-LT class columns.
+  o2sat, sbp, dbp, gender, + CXR-LT class columns.
 
 ``path`` is stored relative to data/<subset>/MIMIC-CXR-JPG/files/ so the
 training-time MimicMultiViewDataModule can prepend that directory as image_root.
@@ -23,6 +23,7 @@ Run from project root:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -30,19 +31,17 @@ from multiprocessing import cpu_count, get_context
 from pathlib import Path
 from typing import Optional
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from src.dataloader.cxr_lt import CXRLT_2023_LABELS, load_cxr_lt_labels
 
-LABEL_COLS = [
-    "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation",
-    "Edema", "Emphysema", "Enlarged Cardiomediastinum", "Fibrosis", "Fracture",
-    "Hernia", "Infiltration", "Lung Lesion", "Lung Opacity", "Mass", "No Finding",
-    "Nodule", "Pleural Effusion", "Pleural Other", "Pleural Thickening",
-    "Pneumomediastinum", "Pneumonia", "Pneumoperitoneum", "Pneumothorax",
-    "Subcutaneous Emphysema", "Support Devices", "Tortuous Aorta",
-]
+LABEL_COLS = CXRLT_2023_LABELS
 VITAL_SIGNS = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp"]
 
 
@@ -52,6 +51,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--subset-name", default="subset")
     p.add_argument("--cxr-lt-version", default="cxr-lt-2023",
                    help="Subdirectory under CXR-LT/.../2.0.0/ to read split labels from")
+    p.add_argument("--cxr-lt-label-set", default="auto",
+                   choices=["auto", "all", "task1", "task2", "task3"],
+                   help="CXR-LT label set. auto keeps 2023 standard labels and uses 2024 task1.")
     p.add_argument("--cpu-fraction", type=float, default=0.5)
     p.add_argument("--workers", type=int, default=None)
     p.add_argument("--out-dirname", default="labels",
@@ -233,17 +235,21 @@ def parse_all_reports(mimic_df: pd.DataFrame, reports_base: Path, workers: int) 
     return mimic_df
 
 
-def attach_labels(mimic_df: pd.DataFrame, data_root: Path, cxr_lt_version: str, metadata_df: pd.DataFrame) -> pd.DataFrame:
-    cxr_lt_root = data_root / "CXR-LT" / "cxr-lt-multi-label-long-tailed-classification-on-chest-x-rays-2.0.0" / cxr_lt_version
-    train_df = pd.read_csv(cxr_lt_root / "train.csv")
-    val_df = pd.read_csv(cxr_lt_root / "development.csv")
-    test_df = pd.read_csv(cxr_lt_root / "test.csv")
-    train_df["split"] = "train"
-    val_df["split"] = "validate"
-    test_df["split"] = "test"
-    labels_dicom = pd.concat([train_df, val_df, test_df], ignore_index=True)
+def attach_labels(
+    mimic_df: pd.DataFrame,
+    data_root: Path,
+    cxr_lt_version: str,
+    cxr_lt_label_set: str,
+    metadata_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[str], str]:
+    labels_dicom, label_cols, resolved_label_set = load_cxr_lt_labels(
+        data_root,
+        version=cxr_lt_version,
+        label_set=cxr_lt_label_set,
+    )
+    print(f"  CXR-LT labels: {cxr_lt_version}/{resolved_label_set} ({len(label_cols)} classes)")
     labels_dicom = labels_dicom.drop(
-        columns=["subject_id", "study_id", "ViewPosition", "ViewCodeSequence_CodeMeaning", "path"],
+        columns=["subject_id", "study_id", "ViewPosition", "ViewCodeSequence_CodeMeaning", "path", "fpath"],
         errors="ignore",
     )
 
@@ -256,7 +262,7 @@ def attach_labels(mimic_df: pd.DataFrame, data_root: Path, cxr_lt_version: str, 
     merged = mimic_df.merge(meta_slim, on="study_id", how="left")
     merged = merged.merge(labels_dicom, on="dicom_id", how="left")
     merged = merged.dropna(subset=["clinical_indication", "split"])
-    return merged
+    return merged, label_cols, resolved_label_set
 
 
 def build_paths_and_filter(merged: pd.DataFrame, image_root: Path) -> pd.DataFrame:
@@ -303,7 +309,13 @@ def main() -> int:
     mimic_df = parse_all_reports(mimic_df, reports_base, args.workers)
 
     print("[4/4] Attaching CXR-LT labels and filtering to existing images")
-    merged = attach_labels(mimic_df, data_root, args.cxr_lt_version, metadata_df)
+    merged, label_cols, resolved_label_set = attach_labels(
+        mimic_df,
+        data_root,
+        args.cxr_lt_version,
+        args.cxr_lt_label_set,
+        metadata_df,
+    )
     merged = build_paths_and_filter(merged, image_root)
 
     if args.keep_checkpoint:
@@ -313,7 +325,7 @@ def main() -> int:
 
     keep_cols = [
         "study_id", "subject_id", "dicom_id", "ViewPosition", "path",
-        "clinical_indication", *VITAL_SIGNS, "gender", *LABEL_COLS, "split",
+        "clinical_indication", *VITAL_SIGNS, "gender", *label_cols, "split",
     ]
     keep_cols = [c for c in keep_cols if c in merged.columns]
     merged = merged[keep_cols]
@@ -327,6 +339,21 @@ def main() -> int:
         out_path = out_dir / f"{name}.csv"
         df.to_csv(out_path, index=False)
         print(f"  {name}: {len(df):>6} rows -> {out_path}")
+
+    meta_path = out_dir / "label_metadata.json"
+    with open(meta_path, "w") as f:
+        json.dump(
+            {
+                "cxr_lt_version": args.cxr_lt_version,
+                "cxr_lt_label_set": resolved_label_set,
+                "num_classes": len(label_cols),
+                "classes": label_cols,
+                "splits": {name: int(len(df)) for name, df in splits.items()},
+            },
+            f,
+            indent=2,
+        )
+    print(f"  label metadata -> {meta_path}")
 
     return 0
 

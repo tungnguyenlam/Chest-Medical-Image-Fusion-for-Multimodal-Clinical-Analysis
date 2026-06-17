@@ -30,6 +30,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from multiprocessing import cpu_count
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 def _workers_from_cpu_fraction(fraction: float) -> int:
     """Visible CPU cores multiplied by fraction, floored at 1."""
@@ -40,15 +44,9 @@ import pandas as pd
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+from src.dataloader.cxr_lt import CXRLT_2023_LABELS, load_cxr_lt_labels
 
-LABEL_COLS = [
-    "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation",
-    "Edema", "Emphysema", "Enlarged Cardiomediastinum", "Fibrosis", "Fracture",
-    "Hernia", "Infiltration", "Lung Lesion", "Lung Opacity", "Mass", "No Finding",
-    "Nodule", "Pleural Effusion", "Pleural Other", "Pleural Thickening",
-    "Pneumomediastinum", "Pneumonia", "Pneumoperitoneum", "Pneumothorax",
-    "Subcutaneous Emphysema", "Support Devices", "Tortuous Aorta",
-]
+LABEL_COLS = CXRLT_2023_LABELS
 
 
 def require_env(name: str) -> str:
@@ -69,6 +67,9 @@ def parse_args() -> argparse.Namespace:
                         "included before sampling the remaining patients (default: 0.01)")
     p.add_argument("--cxr-lt-version", default="cxr-lt-2023",
                    help="Subdirectory under CXR-LT/.../2.0.0/ to read class labels from (default: cxr-lt-2023)")
+    p.add_argument("--cxr-lt-label-set", default="auto",
+                   choices=["auto", "all", "task1", "task2", "task3"],
+                   help="CXR-LT label set for long-tail-aware sampling. auto keeps 2023 standard labels and uses 2024 task1.")
     p.add_argument("--subset-name", default=None,
                    help="Subset folder name under data/ (default: derived as 'subset' for the canonical 10%% bundle, "
                         "otherwise 'subset_seed{seed}_{pct}pct')")
@@ -145,23 +146,8 @@ def resolve_subset_name(args: argparse.Namespace) -> str:
     return f"subset_seed{args.seed}_{int(round(args.fraction * 100))}pct"
 
 
-def load_cxr_lt_labels(data_dir: Path, cxr_lt_version: str) -> pd.DataFrame:
-    cxr_lt_root = (
-        data_dir / "CXR-LT"
-        / "cxr-lt-multi-label-long-tailed-classification-on-chest-x-rays-2.0.0"
-        / cxr_lt_version
-    )
-    frames = []
-    for fname in ["train.csv", "development.csv", "test.csv"]:
-        path = cxr_lt_root / fname
-        if not path.exists():
-            sys.exit(f"Missing {path}; CXR-LT labels are required for long-tail-aware subset sampling")
-        frames.append(pd.read_csv(path, usecols=["subject_id", "dicom_id", *LABEL_COLS]))
-    return pd.concat(frames, ignore_index=True)
-
-
-def long_tail_patients(labels_df: pd.DataFrame, threshold: float) -> tuple[set[int], list[str], pd.Series]:
-    label_values = labels_df[LABEL_COLS].apply(pd.to_numeric, errors="coerce").fillna(0)
+def long_tail_patients(labels_df: pd.DataFrame, label_cols: list[str], threshold: float) -> tuple[set[int], list[str], pd.Series]:
+    label_values = labels_df[label_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
     prevalence = (label_values == 1).mean().sort_values()
     tail_classes = prevalence[(prevalence > 0) & (prevalence < threshold)].index.tolist()
     if not tail_classes:
@@ -178,11 +164,15 @@ def sample_patients(
     fraction: float,
     tail_threshold: float,
     cxr_lt_version: str,
+    cxr_lt_label_set: str,
 ) -> tuple[set[int], pd.DataFrame, dict]:
     df = pd.read_csv(split_csv)
     patients = np.sort(df["subject_id"].unique())
-    labels_df = load_cxr_lt_labels(data_dir, cxr_lt_version)
-    tail_patients, tail_classes, prevalence = long_tail_patients(labels_df, tail_threshold)
+    try:
+        labels_df, label_cols, resolved_label_set = load_cxr_lt_labels(data_dir, cxr_lt_version, cxr_lt_label_set)
+    except (FileNotFoundError, ValueError) as exc:
+        sys.exit(f"{exc}; CXR-LT labels are required for long-tail-aware subset sampling")
+    tail_patients, tail_classes, prevalence = long_tail_patients(labels_df, label_cols, tail_threshold)
     tail_patients = tail_patients.intersection(set(patients.tolist()))
 
     rng = np.random.default_rng(seed)
@@ -198,6 +188,9 @@ def sample_patients(
         "n_tail_patients": len(tail_patients),
         "n_sampled_non_tail_patients": len(sampled_patients),
         "n_available_non_tail_patients": int(len(non_tail_patients)),
+        "cxr_lt_version": cxr_lt_version,
+        "cxr_lt_label_set": resolved_label_set,
+        "n_label_classes": len(label_cols),
     }
     return chosen, sub_df, stats
 
@@ -522,6 +515,7 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
         args.fraction,
         args.tail_threshold,
         args.cxr_lt_version,
+        args.cxr_lt_label_set,
     )
     if sample_stats["tail_classes"]:
         print(

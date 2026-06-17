@@ -17,6 +17,7 @@ from training.common import (
     evaluate_report_ablation,
     load_weights,
     make_prior_aware_eval_loader,
+    model_init_args_from_config,
     prepare_run_dir,
     resolve_path,
     select_device,
@@ -45,7 +46,7 @@ def main() -> None:
     write_resolved_config(run_dir, args, cfg)
 
     text_model = args.text_model or cfg.get("model", {}).get("text_model") or "microsoft/BiomedVLP-CXR-BERT-specialized"
-    model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
+    model_init_args = model_init_args_from_config(cfg)
     if args.freeze_text_encoder:
         model_init_args["freeze_text_encoder"] = True
     data_cfg = cfg.get("data", {}).get("datamodule_cfg", {}) or {}

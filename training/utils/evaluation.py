@@ -92,7 +92,10 @@ def predict_dataframe(model, loader, classes: list[str], device: torch.device, i
             elif isinstance(data, (tuple, list)) and data and not torch.is_tensor(data[0]):
                 batch_ids.extend(list(data[0]))
             data = move_to_device(data, device)
-            pred = torch.sigmoid(model(data).float()).cpu()
+            out = model(data)
+            if isinstance(out, tuple):  # (logits, aux_loss) -- keep only logits for inference
+                out = out[0]
+            pred = torch.sigmoid(out.float()).cpu()
             preds.append(pred)
             labels.append(label.cpu().float())
 

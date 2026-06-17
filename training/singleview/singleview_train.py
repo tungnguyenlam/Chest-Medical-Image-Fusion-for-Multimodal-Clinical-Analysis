@@ -16,6 +16,7 @@ from training.common import (
     loss_args_from_config,
     lr_from_config,
     make_single_view_loaders,
+    model_init_args_from_config,
     prepare_run_dir,
     save_single_view_encoder,
     timm_args_from_config,
@@ -47,7 +48,7 @@ def main() -> None:
     write_resolved_config(run_dir, args, cfg)
 
     train_loader, val_loader = make_single_view_loaders(cfg, args, args.view_position)
-    model = SingleViewModel(timm_args_from_config(cfg, args))
+    model = SingleViewModel(timm_args_from_config(cfg, args), **model_init_args_from_config(cfg))
     train_model(
         model=model,
         train_loader=train_loader,

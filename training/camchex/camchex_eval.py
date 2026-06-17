@@ -19,6 +19,7 @@ from training.common import (
     load_weights,
     evaluate_report_ablation,
     make_camchex_eval_loader,
+    model_init_args_from_config,
     predict_dataframe,
     print_validation_summary,
     resolve_path,
@@ -54,6 +55,7 @@ def main() -> None:
         frontal_pretrained_path=frontal_pretrained_path,
         lateral_pretrained_path=lateral_pretrained_path,
         text_model=text_model,
+        **model_init_args_from_config(cfg),
     )
     load_weights(model, args.checkpoint_path)
     evaluate_report_ablation(

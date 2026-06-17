@@ -1,0 +1,143 @@
+model:
+  lr: 3.0e-5
+  classes: &classes
+    - Adenopathy
+    - Atelectasis
+    - Azygos Lobe
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Clavicle Fracture
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fissure
+    - Fracture
+    - Granuloma
+    - Hernia
+    - Hydropneumothorax
+    - Infarction
+    - Infiltration
+    - Kyphosis
+    - Lobar Atelectasis
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - Nodule
+    - Normal
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Pulmonary Embolism
+    - Pulmonary Hypertension
+    - Rib Fracture
+    - Round(ed) Atelectasis
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+    - Tuberculosis
+  loss_init_args:
+    class_instance_nums:
+      - 3409
+      - 65376
+      - 199
+      - 4239
+      - 74738
+      - 168
+      - 15371
+      - 37256
+      - 3661
+      - 29628
+      - 1169
+      - 2803
+      - 11568
+      - 2965
+      - 3986
+      - 646
+      - 727
+      - 10087
+      - 778
+      - 129
+      - 2338
+      - 77482
+      - 5288
+      - 7531
+      - 34292
+      - 66401
+      - 616
+      - 3272
+      - 704
+      - 46660
+      - 516
+      - 13858
+      - 1631
+      - 903
+      - 8919
+      - 172
+      - 2046
+      - 86079
+      - 3336
+      - 2078
+    total_instance_num: 258871
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 40
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
+    pretrained: true
+    drop_path_rate: 0.0
+  model_init_args:
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
+    n_classes: 40
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/cxrlt2024_task1/train.csv
+    devel_df_path: data/data-camchex/cxrlt2024_task1/val.csv
+    pred_df_path: data/data-camchex/cxrlt2024_task1/test.csv
+    use_text_embedding_cache: false
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
+    image_cache_dir: null
+    image_channel_cache_dir: ../cache/channels
+    channel_mode: raw_clahe_histeq
+    size: 512
+    classes: *classes
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 1
+  grad_clip: 1.0
+  precision: 16-mixed
+  compile_model: false
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  full_val_fracs: []
+  quick_val_fracs: [0.25, 0.5, 0.75]
+  quick_val_frac: 0.1
+  val_num_workers: 0
+  seed: null
+  accelerator: null

@@ -103,6 +103,8 @@ class PriorAttributionResult:
     prior_label_scores: np.ndarray  # (26,) signed grad × value
     prior_label_values: np.ndarray  # (26,) the raw multi-hot prior label
     class_names: list[str]          # the 26 class names (y-axis of the prior-label panel)
+    all_probs: np.ndarray           # (26,) sigmoid(logit) for every class, this study
+    all_logits: np.ndarray          # (26,) raw last-layer logits
 
     # {"cur_image":.., "cur_text":.., .., "prv_label":.., "time_delta":..} sums to 1
     modality_contrib: dict
@@ -226,8 +228,10 @@ class PriorAwareAttributor(CaMCheXAttributor):
         try:
             batch, grad_inputs, _ = self._to_dict_batch(sample, with_grad=True)
             logits = self.model(batch)
-            prob = torch.sigmoid(logits)[0, class_index].item()
-            logit = logits[0, class_index].item()
+            all_logits = logits[0].detach().cpu().numpy()
+            all_probs = torch.sigmoid(logits)[0].detach().cpu().numpy()
+            prob = float(all_probs[class_index])
+            logit = float(all_logits[class_index])
             logits[0, class_index].backward()
 
             has_prior = bool(data["has_prior"])
@@ -304,6 +308,8 @@ class PriorAwareAttributor(CaMCheXAttributor):
                 prior_label_scores=prior_label_scores,
                 prior_label_values=prior_label_values,
                 class_names=list(self.classes),
+                all_probs=all_probs,
+                all_logits=all_logits,
                 modality_contrib=modality_contrib,
             )
         finally:

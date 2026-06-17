@@ -66,6 +66,7 @@ from __future__ import annotations
 import einops
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from positional_encodings.torch_encodings import PositionalEncoding2D, Summer
 
 from src.dataloader.PriorAwareDataset import N_CLASSES, N_DELTA_BUCKETS, bucket_days
@@ -125,6 +126,7 @@ class PriorAwareV5NanoModel(nn.Module):
         prior_latent_dropout: float = 0.1,
         context_bottleneck_dim: int | None = None,
         highres_skip: bool = True,
+        background_penalty_lambda: float = 0.0,
     ):
         super().__init__()
         self.d_model = d_model
@@ -133,6 +135,10 @@ class PriorAwareV5NanoModel(nn.Module):
         self.n_prior_latents = n_prior_latents
         self.prior_latent_dropout = prior_latent_dropout
         self.highres_skip = highres_skip
+        # >0 turns on the confident-background attention penalty: discourage current
+        # image features that land on outside-patient cells (see docs/background_attention_penalty.md).
+        # 0.0 = exactly the base v5 behaviour (forward returns only logits).
+        self.background_penalty_lambda = float(background_penalty_lambda)
         self.register_buffer("text_embedding_table", None, persistent=False)
 
         self.image_encoder = ConvNeXtV2NanoImageEncoder(
@@ -300,14 +306,40 @@ class PriorAwareV5NanoModel(nn.Module):
             return latents, ~keep
         return latents, None
 
+    def _background_penalty(
+        self, cur_block: torch.Tensor, cur_slot_valid: torch.Tensor, bg_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Mean current-image feature energy in confident-background cells.
+
+        ``cur_block`` (B,S,C,H,W) is the PRE-LayerNorm image grid (energy is only
+        meaningful pre-norm; LayerNorm would flatten every token to ~unit norm).
+        ``bg_mask`` (B,S,G,G) is the per-view confident-background weight; we
+        average-pool it to the (H,W) grid so each cell's weight is the fraction of
+        it that is background. Invalid (padded) views are zeroed via ``cur_slot_valid``.
+        See docs/background_attention_penalty.md for the full derivation.
+        """
+        b, s, c, h, w = cur_block.shape
+        energy = cur_block.pow(2).sum(dim=2)                                  # (B,S,H,W)
+        bg = bg_mask.to(cur_block.dtype).reshape(b * s, 1, bg_mask.shape[-2], bg_mask.shape[-1])
+        bg = F.adaptive_avg_pool2d(bg, (h, w)).reshape(b, s, h, w)            # (B,S,H,W) fractional weight
+        weight = bg * cur_slot_valid.to(cur_block.dtype).view(b, s, 1, 1)
+        return (weight * energy).sum() / (weight.sum() + 1e-6)
+
     # ---- forward ----------------------------------------------------------
-    def forward(self, data: dict) -> torch.Tensor:
+    def forward(self, data: dict):
         # ---- current branch (tgt) ----------------------------------------
         cur_block, cur_slot_valid = self._encode_image_block(
             data["img"], data["view_positions"], SEG_CUR_VIEWS
         )
         b, s_img, cdim, h2, w2 = cur_block.shape
         cur_img_tokens = einops.rearrange(cur_block, "b s c h w -> b (s h w) c")
+
+        # Confident-background attention penalty (opt-in; pre-norm energy).
+        bg_penalty = None
+        if self.background_penalty_lambda > 0.0 and "bg_mask" in data:
+            bg_penalty = self.background_penalty_lambda * self._background_penalty(
+                cur_block, cur_slot_valid, data["bg_mask"]
+            )
 
         cur_clin_cls = self._encode_text(data["clin_input_ids"], data["clin_attn_mask"])
         cur_clin_tok = self._text_token(cur_clin_cls, SEG_CUR_CLIN, cdim)                    # (B, 1, C)
@@ -410,4 +442,9 @@ class PriorAwareV5NanoModel(nn.Module):
             x = torch.cat([x, skip_tok], dim=1)
             tgt_pad = torch.cat([tgt_pad, torch.zeros(b, 1, dtype=torch.bool, device=tgt.device)], dim=1)
 
-        return self.head(x, tgt_pad)
+        logits = self.head(x, tgt_pad)
+        # When the background penalty is active, hand it back as an auxiliary loss
+        # (train_step adds it to the criterion). Otherwise behave exactly like base v5.
+        if bg_penalty is not None:
+            return logits, bg_penalty
+        return logits

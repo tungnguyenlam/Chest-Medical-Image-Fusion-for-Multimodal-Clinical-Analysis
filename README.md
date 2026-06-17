@@ -1,7 +1,7 @@
 # Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis
 
 Reproduces and extends CaMCheX — a multimodal chest X-ray classifier that
-fuses up to 4 image views with ED clinical text and vital signs for 26-class
+fuses up to 4 image views with ED clinical text and vital signs for CXR-LT
 multi-label disease classification.
 
 Active reusable components live under the root `src/` package, and active
@@ -50,6 +50,8 @@ training/
   camchex/           train/eval entrypoints for multimodal CaMCheX
   camchex_v2nano_vitals/
                      ConvNeXtV2 Nano + CXR-BERT + numeric vitals variant
+  camchex_v2nano_vitals_cxrlt2024/
+                     40-class CXR-LT 2024 task1 config for the Nano + vitals variant
   prior_aware/       current study + nearest previous study variant
                      (also: prior_aware_v2nano = Nano backbone + numeric vitals;
                      prior_aware_v3nano = same, single-token fusion;
@@ -82,9 +84,26 @@ their shared packages. Training scripts compose those pieces from
 python scripts/build_mimic_subset.py --fraction 0.1 --skip-archive --skip-upload
 
 # 2. produce label CSVs for the subset.
-#    Writes data/<subset>/labels/{train,val,test}.csv with 26 CXR-LT labels,
+#    Default writes data/<subset>/labels/{train,val,test}.csv with 2023's
+#    26 CXR-LT labels,
 #    clinical_indication, and ED vitals.
 python scripts/prepare_subset_labels.py --subset-name subset
+
+# 2b. CXR-LT 2024 task1 path: 40 labels, written beside the 2023 labels so
+#     the reproduction baseline is not overwritten. If data/data-camchex/03_*
+#     already exists, relabel those prepared CSVs without reparsing reports:
+python scripts/relabel_prepared_cxrlt.py \
+    --cxr-lt-version cxr-lt-2024 \
+    --cxr-lt-label-set task1 \
+    --out-dir data/data-camchex/cxrlt2024_task1 \
+    --keep-source-split
+
+#     Or, for a real data/<subset>/ tree with image/report files:
+python scripts/prepare_subset_labels.py \
+    --subset-name subset \
+    --cxr-lt-version cxr-lt-2024 \
+    --cxr-lt-label-set task1 \
+    --out-dirname labels_cxrlt2024_task1
 
 # 3. train.
 python training/camchex/camchex_train.py \
@@ -92,6 +111,10 @@ python training/camchex/camchex_train.py \
     --val-df-path data/subset/labels/val.csv \
     --test-df-path data/subset/labels/test.csv \
     --batch-size 4 --max-epochs 30 --lr 1e-4
+
+# 3b. Train the active Nano + vitals variant on CXR-LT 2024 task1 labels.
+python training/camchex_v2nano_vitals/camchex_v2nano_vitals_train.py \
+    --config training/camchex_v2nano_vitals_cxrlt2024/config.yaml
 ```
 
 Run all commands from the project root.

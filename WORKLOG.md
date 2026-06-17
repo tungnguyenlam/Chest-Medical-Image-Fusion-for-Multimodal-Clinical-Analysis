@@ -1949,3 +1949,91 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Reasoning.** Used the user's provided layout structure directly, but kept the existing report title, student name, student ID, supervisor, and available logo path (`img/usth.jpg`) so the document remains consistent with this project and compiles without requiring a new `figures/usth_logo.jpg` asset.
 
 **Gotchas.** The LaTeX build still reports unrelated warnings about duplicate page anchors and an empty bibliography; these were present in the broader document flow and were not caused by the title-page format change.
+
+## 2026-06-17 - Add CXR-LT 2024 task1 path
+
+**Goal.** Move the project toward CXR-LT 2024 while keeping the 2023 challenge setup as a reproducible baseline. The key requirement was to support the newer 2024 label schema and class counts without making the old 26-class path brittle.
+
+**Changes.**
+- `src/dataloader/cxr_lt.py:1` - added the shared CXR-LT schema loader for 2023 standard labels plus 2024 `all`, `task1`, `task2`, and `task3` label sets, including `fpath`/`path`, `val`/`validate`, and `Normal`/`No Finding` compatibility handling.
+- `scripts/prepare_subset_labels.py:52` - added `--cxr-lt-version`/`--cxr-lt-label-set` support for subset label generation; `scripts/prepare_subset_labels.py:238` now attaches labels through the shared loader, and `scripts/prepare_subset_labels.py:326` writes the dynamic class list plus `label_metadata.json` beside the generated split CSVs.
+- `scripts/build_mimic_subset.py:67` - added `--cxr-lt-label-set` for long-tail-aware patient sampling; `scripts/build_mimic_subset.py:146` now computes tail inclusion from the selected CXR-LT label set instead of the hardcoded 2023 labels.
+- `training/camchex_v2nano_vitals_cxrlt2024/config.yaml:1` - added a 40-class CXR-LT 2024 task1 config for the active Nano + vitals model, with ASL class counts computed from local `cxr-lt-2024/train_labeled.csv` and CSV paths pointing to `data/subset/labels_cxrlt2024_task1/`.
+- `training/utils/config.py:320` - added `model_init_args_from_config()` so train/eval entrypoints default `n_classes` to `len(model.classes)`.
+- `src/model/CaMCheXV2NanoVitalsModel.py:151`, `src/model/CaMCheXV3NanoModel.py:25`, `src/model/CaMCheXModel.py:17`, and `src/model/SingleViewModel.py:8` - made MLDecoder output size configurable instead of fixed at 26.
+- `training/utils/metrics.py:18` and `scripts/plot_eval.py:44` - changed head/medium/tail grouping to resolve by class name, with 2024 `Normal` treated as the `No Finding` alias, so 2024 label order cannot silently corrupt grouped metrics.
+- `src/dataloader/PriorAwareDataset.py:50` - added fixed-length label checks for current/prior labels so prior-aware 2024 experiments fail with a rebuild message instead of a later tensor-shape error.
+- `README.md:84` - documented the 2024 task1 label-prep command and the new 2024 Nano + vitals config.
+
+**Reasoning.** CXR-LT 2024 is better as the main extension target, but the releases have different schema shapes rather than only a different folder name. A small shared loader centralizes those differences and keeps 2023 default behavior intact. The first training config targets 2024 task1 (40 labels) because it is the main multi-class expansion with train/dev/test task files; the loader also supports the 45-label combined file and task2/task3 so robustness/gold-label evaluation can be added without another schema rewrite.
+
+**Assumptions.**
+- `auto` maps `cxr-lt-2024` to `task1`, because this is the practical next training target. Use `--cxr-lt-label-set all` for the 45-label combined file or `task2`/`task3` for those challenge-specific files.
+- The 2024 task1 config expects labels generated with `--out-dirname labels_cxrlt2024_task1`; this avoids overwriting the existing 2023 `data/subset/labels/` baseline.
+- Existing prior-aware parquet files remain 26-class artifacts until rebuilt with a 2024 class list.
+
+**Gotchas.** The old head/medium/tail buckets are still the CXR-LT 2023 definitions, now matched by class name. New 2024-only labels are included in mean AP/AUROC but not in the legacy grouped bucket summaries. `cxr-lt-2024/task2` has a much smaller labeled test file locally, so treat it as a gold-label robustness/evaluation path rather than the default training target.
+
+**Follow-ups.** Generate `data/subset/labels_cxrlt2024_task1/` with `scripts/prepare_subset_labels.py`, then run a short fast-dev/one-epoch Nano + vitals training smoke test before launching the full 2024 experiment. Add a separate task2 gold-label evaluation config once the main task1 run path is verified.
+
+## 2026-06-17 - Relabel prepared data and smoke-test CXR-LT 2024 config
+
+**Goal.** Continue the CXR-LT 2024 migration past code plumbing by producing usable 2024 task1 CSVs from the existing prepared `data/data-camchex/03_mimic_*` artifacts and running a minimal training smoke.
+
+**Changes.**
+- `scripts/relabel_prepared_cxrlt.py:1` - added a relabel utility that combines prepared train/development/test CSVs, drops old CXR-LT labels, attaches labels through `src/dataloader/cxr_lt.py`, and re-splits by the selected CXR-LT release split so 2024 split reassignment is respected.
+- `scripts/relabel_prepared_cxrlt.py:49` - added `--keep-source-split` so the old 2023 split can be retained as `source_split` for leakage/split-transition audits.
+- `training/camchex_v2nano_vitals_cxrlt2024/config.yaml:117` - pointed the 2024 task1 config at `data/data-camchex/cxrlt2024_task1/{train,val,test}.csv`, matching the existing prepared-data workflow used by the other active configs.
+- `README.md:88` - documented the prepared-CSV relabel route before the subset-label route.
+
+**Reasoning.** The initial subset-label path requires `data/subset/MIMIC-CXR/files`, which is not present in this checkout. The already-prepared `data/data-camchex/03_mimic_*` CSVs contain reports, vitals, and image paths, so relabeling them avoids reparsing reports and is the safer path for local continuation. Combining all old splits before attaching 2024 labels is necessary; relabeling each old split independently would preserve the 2023 split and defeat the point of moving to the 2024 challenge split.
+
+**Gotchas.** Direct `Path(path).exists()` on the CSV path strings can look false because paths are stored with the legacy `../data/...` prefix. The training dataloaders call `resolve_preferred_image_path(...)`, and sampled generated paths resolved to real JPGs through that helper. The first fast-dev attempt hit sandbox DNS failures while loading Hugging Face CXR-BERT; the rerun used approved network access and completed.
+
+**Validation.**
+- Generated `data/data-camchex/cxrlt2024_task1/` with 207,060 train rows, 31,567 val rows, and 62,348 test rows; metadata reports 40 classes.
+- `python -m py_compile` passed for the new relabel script and touched CXR-LT/config/metric modules.
+- Fast-dev smoke passed with `training/camchex_v2nano_vitals_cxrlt2024/config.yaml`, `--fast-dev-run`, `--no-pretrained`, `--third-channel-mode none`, batch size 1, and CPU precision 32. It completed one train step, one validation batch, saved `output/camchex_v2nano_vitals_cxrlt2024/runs/smoke-cxrlt2024-fast-dev/checkpoints/epoch_000.pt`, and wrote Grad-CAM panels.
+
+**Follow-ups.** Run a real short 2024 task1 training job with the intended channel mode/precompute settings and GPU acceleration. Add a task2/gold-label eval config after the task1 training path is accepted.
+
+## 2026-06-17 - Add JPEG corruption and label-impact audit
+
+**Goal.** Create a reusable script to find unreadable/corrupt JPEGs and show whether any lost images disproportionately affect minority CXR-LT labels, especially in the already sparse training set.
+
+**Changes.**
+- `scripts/audit_corrupt_jpegs.py:1` - added a CLI audit tool for prepared split CSVs or explicit CSV paths, with output under `output/corrupt_jpeg_audit/`.
+- `scripts/audit_corrupt_jpegs.py:80` - added options for `--label-dir`, explicit `--csv`, `--image-root`, decoder mode, worker count, output directory, and optional full per-image status output.
+- `scripts/audit_corrupt_jpegs.py:343` - added label-impact reporting at image-row and study levels, including lost positive rows and studies where all views are unusable.
+- `scripts/audit_corrupt_jpegs.py:384` - added split-level summaries for ok, missing, unreadable, warning, and lost rows.
+- `scripts/audit_corrupt_jpegs.py:450` - writes `corrupt_or_warning_images.csv`, `split_summary.csv`, `label_impact.csv`, optional `affected_studies.csv`, optional `per_image_status.csv`, and `manifest.json`.
+
+**Reasoning.** The audit has to distinguish noisy JPEG warnings from actual training loss. OpenCV can emit `Premature end of JPEG file` but still return an image, so the default reporting counts a row as lost only when every selected decode attempt fails or the file is missing. The script supports `--decoder active` for the root `src/` dataloaders, `--decoder legacy` for the current `camchex/` fallback path, and `--decoder jpeg4py` for the first imported legacy behavior that would have crashed without fallback.
+
+**Gotchas.** CSV paths in `data/data-camchex/03_mimic_*` use legacy `../data/...` prefixes, so path resolution checks raw paths, cwd-relative paths, repo-relative paths, and `ROOT/camchex/<path>`. The first full audit run completed the decode pass but failed while sorting an empty affected-study table; this was fixed by returning an empty table with columns when no affected studies exist.
+
+**Validation.**
+- `python -m py_compile scripts/audit_corrupt_jpegs.py` passed.
+- A `/tmp` fixture with one valid JPEG, one corrupt file, and one missing file correctly reported two lost rows and distinguished a partially affected study from a fully lost study.
+- Full active-decoder audit on `data/data-camchex/03_mimic_{train,development,test}.csv` completed over 300,975 image rows and wrote `output/corrupt_jpeg_audit/data_camchex_mimic_2023/`. Result: 0 missing rows, 0 unreadable rows, and 0 lost positive image rows/studies for every 2023 label.
+
+**Follow-ups.** Run the same audit against `data/data-camchex/cxrlt2024_task1/{train,val,test}.csv` if the 2024 relabeled split is the next experiment target; it should be similar image files but a different split/label association table.
+
+## 2026-06-17 - Align JPEG audit with training channel preprocessing
+
+**Goal.** Correct the corrupted-JPEG audit so it checks the path that active training and non-prior Grad-CAM actually use, not only raw OpenCV/JPEG decodeability.
+
+**Changes.**
+- `scripts/audit_corrupt_jpegs.py:8` - documented config-driven channel-preprocessing usage for CXR-LT 2024 training configs.
+- `scripts/audit_corrupt_jpegs.py:99` - added `--config`, `--split`, `--pipeline`, channel-mode/cache/size controls, `--disable-channel-cache`, and `--limit`.
+- `scripts/audit_corrupt_jpegs.py:204` - load `data.datamodule_cfg` from training YAML so the audit can inherit split CSVs and channel settings.
+- `scripts/audit_corrupt_jpegs.py:399` - added a channel-preprocessing check that calls the same `load_or_build_channels()` helper used by the active dataloaders and reports exceptions as `pipeline_error` lost rows.
+- `scripts/audit_corrupt_jpegs.py:556` - included `pipeline_error_rows` in split summaries and counted missing, unreadable, and pipeline errors as lost rows for label/study impact.
+
+**Reasoning.** The raw decode audit was useful but not sufficient: `CaMCheXDataset` and `CaMCheXVitalsDataset` skip bad views and recursively return a neighbor study when all views fail, while training configs normally use `channel_mode: raw_clahe_histeq`. Checking only `cv2.imread()` could miss failures from channel construction, cache behavior, or preprocessing exceptions. The updated script keeps the fast decode path but lets a config-driven command exercise the training gate directly.
+
+**Assumptions.** The config-driven path currently supports CSV split files, which covers the non-prior CaMCheX/CaMCheX-vitals CXR-LT 2023/2024 configs and their Grad-CAM runner. Prior-aware parquet files need a separate block-aware extension because current-image failures and prior-image failures have different training semantics.
+
+**Gotchas.** With the channel cache enabled, a warm cache can hide raw JPEG problems because `load_or_build_channels()` may return cached arrays without reading the source file. Use `--disable-channel-cache` to force a worst-case rebuild-from-JPEG audit. OpenCV libjpeg warnings such as `Premature end of JPEG file` can still appear even when the image is accepted by training; those are not counted as lost unless preprocessing returns `None` or raises.
+
+**Follow-ups.** Add parquet/prior-aware support if the next question is about `PriorAwareDataset` Grad-CAM specifically; that report should separate current-block all-fail neighbor substitution from prior-block zeroing.

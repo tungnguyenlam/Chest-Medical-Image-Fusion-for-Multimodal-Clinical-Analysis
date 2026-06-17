@@ -12,7 +12,29 @@ import torch
 from torchmetrics.functional import average_precision, auroc
 from tqdm.auto import tqdm
 
-from .constants import HEAD_IDX, MEDIUM_IDX, TAIL_IDX
+from .constants import HEAD_CLASSES, MEDIUM_CLASSES, TAIL_CLASSES
+
+
+def _canonical_group_name(name: str) -> str:
+    return "No Finding" if name == "Normal" else name
+
+
+def _group_indices(classes: list[str]) -> dict[str, list[int]]:
+    groups = {
+        "head": set(HEAD_CLASSES),
+        "medium": set(MEDIUM_CLASSES),
+        "tail": set(TAIL_CLASSES),
+    }
+    return {
+        group: [idx for idx, name in enumerate(classes) if _canonical_group_name(name) in names]
+        for group, names in groups.items()
+    }
+
+
+def _mean_or_nan(values: list[float], indices: list[int]) -> float:
+    if not indices:
+        return float("nan")
+    return sum(values[i] for i in indices) / len(indices)
 
 
 def compute_metrics(preds: torch.Tensor, labels: torch.Tensor, classes: list[str]) -> dict[str, float]:
@@ -30,25 +52,26 @@ def compute_metrics(preds: torch.Tensor, labels: torch.Tensor, classes: list[str
 
     mean_ap = sum(per_ap) / len(per_ap)
     mean_au = sum(per_auc) / len(per_auc)
+    group_idxs = _group_indices(classes)
     metrics.update(
         {
             "val_ap": mean_ap,
             "val_auroc": mean_au,
             "val/ap": mean_ap,
             "val/auroc": mean_au,
-            "val/ap_head": sum(per_ap[i] for i in HEAD_IDX) / len(HEAD_IDX),
-            "val/ap_medium": sum(per_ap[i] for i in MEDIUM_IDX) / len(MEDIUM_IDX),
-            "val/ap_tail": sum(per_ap[i] for i in TAIL_IDX) / len(TAIL_IDX),
-            "val/auroc_head": sum(per_auc[i] for i in HEAD_IDX) / len(HEAD_IDX),
-            "val/auroc_medium": sum(per_auc[i] for i in MEDIUM_IDX) / len(MEDIUM_IDX),
-            "val/auroc_tail": sum(per_auc[i] for i in TAIL_IDX) / len(TAIL_IDX),
+            "val/ap_head": _mean_or_nan(per_ap, group_idxs["head"]),
+            "val/ap_medium": _mean_or_nan(per_ap, group_idxs["medium"]),
+            "val/ap_tail": _mean_or_nan(per_ap, group_idxs["tail"]),
+            "val/auroc_head": _mean_or_nan(per_auc, group_idxs["head"]),
+            "val/auroc_medium": _mean_or_nan(per_auc, group_idxs["medium"]),
+            "val/auroc_tail": _mean_or_nan(per_auc, group_idxs["tail"]),
         }
     )
     return metrics
 
 
 def _class_group_names(classes: list[str], idxs: list[int]) -> str:
-    return ", ".join(classes[i] if i < len(classes) else f"#{i}" for i in idxs)
+    return ", ".join(classes[i] for i in idxs) if idxs else "(no matching classes)"
 
 
 def print_validation_summary(metrics: dict[str, float], classes: list[str], header: str | None = None) -> None:
@@ -75,9 +98,11 @@ def print_validation_summary(metrics: dict[str, float], classes: list[str], head
         f"{metrics.get('val/auroc_medium', float('nan')):.4f} / "
         f"{metrics.get('val/auroc_tail', float('nan')):.4f}"
     )
-    tqdm.write(f"head classes  : {_class_group_names(classes, HEAD_IDX)}")
-    tqdm.write(f"medium classes: {_class_group_names(classes, MEDIUM_IDX)}")
-    tqdm.write(f"tail classes  : {_class_group_names(classes, TAIL_IDX)}")
+    group_idxs = _group_indices(classes)
+    tqdm.write("groups use the CXR-LT 2023 head/medium/tail definitions, matched by class name")
+    tqdm.write(f"head classes  : {_class_group_names(classes, group_idxs['head'])}")
+    tqdm.write(f"medium classes: {_class_group_names(classes, group_idxs['medium'])}")
+    tqdm.write(f"tail classes  : {_class_group_names(classes, group_idxs['tail'])}")
 
 
 def _no_report_path(path: str | Path) -> Path:

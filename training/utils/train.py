@@ -54,7 +54,15 @@ def train_step(model, criterion, batch, device: torch.device, precision: str | N
     label = label.to(device).float()
     with precision_context(device, precision):
         pred = model(data)
+        # A model may return (logits, aux_loss) -- e.g. the background-attention
+        # penalty on the v5 bgpenalty variant. Add the (already-scaled) aux term to
+        # the criterion. Models that return a bare tensor are unaffected.
+        aux_loss = None
+        if isinstance(pred, tuple):
+            pred, aux_loss = pred
         loss = criterion(pred, label)
+        if aux_loss is not None:
+            loss = loss + aux_loss
     return loss, pred, label
 
 

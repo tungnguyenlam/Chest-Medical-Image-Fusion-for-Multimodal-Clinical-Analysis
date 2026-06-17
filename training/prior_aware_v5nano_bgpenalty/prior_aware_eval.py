@@ -1,3 +1,11 @@
+"""Evaluate Prior-Aware v5 Nano + background-attention penalty.
+
+Same as ``training/prior_aware_v5nano`` evaluation. The background penalty is a
+training-only regularizer (the eval loader forces ``compute_bg_mask`` off and the
+model returns bare logits), so inference and metrics are identical to base v5 --
+only the model_name / run directory differs.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -8,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model.PriorAwareV3NanoModel import PriorAwareV3NanoModel
+from src.model.PriorAwareV5NanoModel import PriorAwareV5NanoModel
 from training.common import (
     add_common_args,
     classes_from_config,
@@ -27,8 +35,8 @@ from training.common import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate prior-aware CaMCheX v3 Nano (single-token clinical/report/vitals fusion).")
-    add_common_args(parser, model_name="prior_aware_v3nano", mode="eval")
+    parser = argparse.ArgumentParser(description="Evaluate Prior-Aware v5 Nano + background-attention penalty.")
+    add_common_args(parser, model_name="prior_aware_v5nano_bgpenalty", mode="eval")
     parser.add_argument("--frontal-pretrained-path")
     parser.add_argument("--lateral-pretrained-path")
     parser.add_argument("--text-model", help="Override model.text_model from config.")
@@ -53,7 +61,7 @@ def main() -> None:
     if args.use_precomputed_text_embeddings or data_cfg.get("use_text_embedding_cache", False):
         model_init_args["use_precomputed_text_embeddings"] = True
         model_init_args["freeze_text_encoder"] = True
-    model = PriorAwareV3NanoModel(
+    model = PriorAwareV5NanoModel(
         timm_init_args=timm_args_from_config(cfg, args),
         frontal_pretrained_path=str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None,
         lateral_pretrained_path=str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None,

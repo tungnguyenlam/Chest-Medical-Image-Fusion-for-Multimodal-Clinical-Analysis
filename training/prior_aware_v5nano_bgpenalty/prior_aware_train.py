@@ -1,3 +1,14 @@
+"""Train Prior-Aware v5 Nano + background-attention penalty.
+
+Identical to ``training/prior_aware_v5nano`` except the config sets
+``model_init_args.background_penalty_lambda > 0`` and
+``data.datamodule_cfg.compute_bg_mask: true``, which together turn on the
+confident-background feature-energy penalty (see
+docs/background_attention_penalty.md). With the lambda at 0 this reduces exactly
+to the base v5 model, so the only real difference is the model_name used for the
+output run directory.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -8,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model.PriorAwareV3NanoModel import PriorAwareV3NanoModel
+from src.model.PriorAwareV5NanoModel import PriorAwareV5NanoModel
 from training.common import (
     add_common_args,
     classes_from_config,
@@ -29,8 +40,8 @@ from training.common import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train prior-aware CaMCheX v3 Nano (single-token clinical/report/vitals fusion).")
-    add_common_args(parser, model_name="prior_aware_v3nano")
+    parser = argparse.ArgumentParser(description="Train Prior-Aware v5 Nano + background-attention penalty.")
+    add_common_args(parser, model_name="prior_aware_v5nano_bgpenalty")
     parser.add_argument("--frontal-pretrained-path", help="Stage-1 frontal timm backbone state_dict.")
     parser.add_argument("--lateral-pretrained-path", help="Stage-1 lateral timm backbone state_dict.")
     parser.add_argument("--text-model", help="Override model.text_model from config.")
@@ -74,7 +85,7 @@ def main() -> None:
     if args.use_precomputed_text_embeddings or data_cfg.get("use_text_embedding_cache", False):
         model_init_args["use_precomputed_text_embeddings"] = True
         model_init_args["freeze_text_encoder"] = True
-    model = PriorAwareV3NanoModel(
+    model = PriorAwareV5NanoModel(
         timm_init_args=timm_args_from_config(cfg, args),
         frontal_pretrained_path=frontal_pretrained_path,
         lateral_pretrained_path=lateral_pretrained_path,
@@ -89,29 +100,21 @@ def main() -> None:
         cache = getattr(train_loader.dataset, "text_embedding_cache", None)
         if cache is None:
             raise SystemExit("--text-embeddings-gpu-resident: no text embedding cache was built.")
-        # Switches the shared cache (train + val datasets) to index mode and frees the RAM dict.
         table = cache.build_index_table()
         model.attach_text_embedding_table(torch.from_numpy(table))
         print(
             f"[train] text embeddings GPU-resident: table {tuple(table.shape)} "
             f"({table.nbytes / 1e6:.0f} MB), dataset emits row indices"
         )
-        # Resolve row->index up front and drop the raw-text columns so dataloader
-        # workers touch only fork-stable numeric data (keeps per-worker RAM flat).
         print("[train] precomputing text-stream row indices and dropping raw-text columns ...", flush=True)
         for loader in (train_loader, val_loader):
             loader.dataset.precompute_text_indices()
-        del table  # GPU copy lives in the model buffer; release the host-side numpy
+        del table
         log_rss("after build_index_table (RAM dict freed; host table awaits model->device)")
     if args.uint8_image_pipeline:
         mean, std = image_norm_stats(data_cfg_from_config(cfg, args))
         model.enable_input_normalization(mean, std)
         print(f"[train] uint8 image pipeline: model normalizes on-device (mean={mean}, std={std})")
-    # Move all currently-live objects (model, parquet-backed datasets, caches) to gc's
-    # permanent generation BEFORE the dataloader workers fork. The cyclic collector
-    # writes to each tracked object's gc header when it scans; under copy-on-write fork
-    # those writes dirty shared pages and inflate per-worker RAM. Freezing the long-lived
-    # heap stops that scan (objects created after fork are still collected normally).
     import gc
 
     gc.freeze()

@@ -25,6 +25,7 @@ class CaMCheXV3NanoModel(nn.Module):
         vitals_dropout: float = 0.1,
         vitals_hidden_dim: int = 256,
         d_model: int = 768,
+        n_classes: int = 26,
     ):
         super().__init__()
         self.freeze_text_encoder = freeze_text_encoder
@@ -62,7 +63,7 @@ class CaMCheXV3NanoModel(nn.Module):
         with torch.no_grad():
             self.segment_embedding.data = self.segment_embedding.data.clamp(-1.0, 1.0)
 
-        self.head = MLDecoder(num_classes=26, initial_num_features=d_model)
+        self.head = MLDecoder(num_classes=n_classes, initial_num_features=d_model)
         self.transformer_encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=d_model, nhead=8, dropout=0.1, batch_first=True),
             num_layers=2,

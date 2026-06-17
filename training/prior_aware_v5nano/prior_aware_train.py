@@ -19,6 +19,7 @@ from training.common import (
     loss_args_from_config,
     lr_from_config,
     make_prior_aware_loaders,
+    model_init_args_from_config,
     prepare_run_dir,
     resolve_path,
     timm_args_from_config,
@@ -66,7 +67,7 @@ def main() -> None:
     frontal_pretrained_path = str(resolve_path(args.frontal_pretrained_path)) if args.frontal_pretrained_path else None
     lateral_pretrained_path = str(resolve_path(args.lateral_pretrained_path)) if args.lateral_pretrained_path else None
     text_model = args.text_model or cfg.get("model", {}).get("text_model") or "microsoft/BiomedVLP-CXR-BERT-specialized"
-    model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
+    model_init_args = model_init_args_from_config(cfg)
     if args.freeze_text_encoder:
         model_init_args["freeze_text_encoder"] = True
     data_cfg = cfg.get("data", {}).get("datamodule_cfg", {}) or {}

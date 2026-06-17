@@ -58,6 +58,10 @@ class AttributionResult:
     label: Optional[float]                  # ground-truth 0/1 for the *targeted* class
     true_labels: list[str]                  # all classes positive for this study (multilabel)
 
+    class_names: list[str]                  # all class names, in model output order
+    all_probs: np.ndarray                   # (n_classes,) sigmoid(logit) for every class
+    all_logits: np.ndarray                  # (n_classes,) raw last-layer logits
+
     views: list[ViewAttribution]
 
     tokens: list[str]                        # decoded subword tokens (pad stripped)
@@ -160,8 +164,10 @@ class CaMCheXAttributor:
 
         try:
             logits = self.model(data_batch)
-            prob = torch.sigmoid(logits)[0, class_index].item()
-            logit = logits[0, class_index].item()
+            all_logits = logits[0].detach().cpu().numpy()
+            all_probs = torch.sigmoid(logits)[0].detach().cpu().numpy()
+            prob = float(all_probs[class_index])
+            logit = float(all_logits[class_index])
             logits[0, class_index].backward()
 
             views = self._image_attribution(img_np, vp_np)
@@ -184,6 +190,9 @@ class CaMCheXAttributor:
                 logit=logit,
                 label=label_val,
                 true_labels=true_labels,
+                class_names=list(self.classes),
+                all_probs=all_probs,
+                all_logits=all_logits,
                 views=views,
                 tokens=tokens,
                 token_scores=token_scores,

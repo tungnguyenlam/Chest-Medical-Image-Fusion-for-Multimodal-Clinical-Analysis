@@ -317,6 +317,12 @@ def classes_from_config(cfg: dict[str, Any]) -> list[str]:
     return list(cfg["model"]["classes"])
 
 
+def model_init_args_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    model_init_args = dict(cfg.get("model", {}).get("model_init_args", {}) or {})
+    model_init_args.setdefault("n_classes", len(classes_from_config(cfg)))
+    return model_init_args
+
+
 def loss_args_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return dict(cfg["model"]["loss_init_args"])
 
