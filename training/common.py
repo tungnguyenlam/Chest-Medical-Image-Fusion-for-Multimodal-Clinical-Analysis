@@ -42,7 +42,18 @@ from src.loss import LOSS_REGISTRY
 
 
 class _DefaultsHelpFormatter(argparse.RawDescriptionHelpFormatter):
-    """Preserve the config-summary epilog layout."""
+    """Preserve layout and append config/runtime defaults beside each flag."""
+
+    def __init__(self, *args, config_defaults: dict[str, Any] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._config_defaults = config_defaults or {}
+
+    def _get_help_string(self, action):
+        help_text = action.help or ""
+        if action.dest in self._config_defaults and "%(default)" not in help_text:
+            default_text = f"(default: {_format_default_value(self._config_defaults[action.dest])})"
+            return f"{help_text} {default_text}" if help_text else default_text
+        return help_text
 
 
 def _load_default_config(config_path: str | Path) -> tuple[Path, dict[str, Any] | None, str | None]:
@@ -54,60 +65,125 @@ def _load_default_config(config_path: str | Path) -> tuple[Path, dict[str, Any] 
         return path, None, str(exc)
 
 
-def _drop_keys(mapping: dict[str, Any], keys: set[str]) -> dict[str, Any]:
-    return {k: v for k, v in mapping.items() if k not in keys}
+def _format_default_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return str(value).lower()
+    if value is None:
+        return "null"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "[]"
+        return "[" + ", ".join(_format_default_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        compact = yaml.safe_dump(value, sort_keys=False, default_flow_style=True, width=120).strip()
+        return compact.removesuffix("\n")
+    return str(value)
 
 
-def _config_defaults_payload(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Compact the YAML to the parts people usually need before launching a run."""
+def _third_channel_default(channel_mode: Any) -> str | None:
+    if channel_mode is None:
+        return "none"
+    for short_name, full_name in THIRD_CHANNEL_TO_MODE.items():
+        if channel_mode == full_name:
+            return short_name
+    return str(channel_mode)
+
+
+def _value_at(root: dict[str, Any], path: tuple[str, ...], fallback: Any = None) -> Any:
+    cur: Any = root
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return fallback
+        cur = cur[key]
+    return cur
+
+
+def _config_default_by_dest(
+    cfg: dict[str, Any],
+    *,
+    config_default: str,
+    model_name: str,
+    train_only: bool,
+) -> dict[str, Any]:
     model = dict(cfg.get("model", {}) or {})
     data = dict(cfg.get("data", {}) or {})
     datamodule = dict(data.get("datamodule_cfg", {}) or {})
-    loss_args = dict(model.get("loss_init_args", {}) or {})
+    dataloader = dict(data.get("dataloader_init_args", {}) or {})
+    model_init = dict(model.get("model_init_args", {}) or {})
+    optimizer = dict(model.get("optimizer_init_args", {}) or {})
+    scheduler = dict(model.get("scheduler_init_args", {}) or {})
+    trainer = dict(cfg.get("trainer", {}) or {})
 
-    payload: dict[str, Any] = {
-        "model": {
-            "arch": model.get("arch"),
-            "lr": model.get("lr"),
-            "loss": model.get("loss", "ASL"),
-            "text_model": model.get("text_model"),
-            "timm_init_args": model.get("timm_init_args"),
-            "model_init_args": model.get("model_init_args"),
-            "optimizer_init_args": model.get("optimizer_init_args"),
-            "scheduler_init_args": model.get("scheduler_init_args"),
-        },
-        "data": {
-            "dataloader_init_args": data.get("dataloader_init_args"),
-            "datamodule_cfg": _drop_keys(datamodule, {"classes", "vital_stats"}),
-        },
-        "trainer": cfg.get("trainer", {}),
+    defaults: dict[str, Any] = {
+        "config": config_default,
+        "print_config_defaults": False,
+        "train_df_path": datamodule.get("train_df_path"),
+        "val_df_path": datamodule.get("devel_df_path"),
+        "test_df_path": datamodule.get("pred_df_path"),
+        "output_dir": f"output/{model_name}/runs",
+        "run_name": "baseline",
+        "batch_size": dataloader.get("batch_size"),
+        "val_batch_size": "2 x train batch_size",
+        "num_workers": dataloader.get("num_workers"),
+        "val_num_workers": trainer.get("val_num_workers", 0),
+        "prefetch_factor": dataloader.get("prefetch_factor"),
+        "malloc_arena_max": 2,
+        "image_size": datamodule.get("size"),
+        "third_channel_mode": _third_channel_default(datamodule.get("channel_mode")),
+        "cpu_fraction": CPU_FRACTION,
+        "skip_precompute": False,
+        "seed": trainer.get("seed"),
+        "accelerator": trainer.get("accelerator"),
+        "precision": trainer.get("precision", "16-mixed"),
+        "backbone_name": _value_at(model, ("timm_init_args", "model_name")),
+        "no_pretrained": not bool(_value_at(model, ("timm_init_args", "pretrained"), True)),
+        "text_model": model.get("text_model") or datamodule.get("tokenizer"),
+        "freeze_text_encoder": model_init.get("freeze_text_encoder"),
+        "use_precomputed_text_embeddings": (
+            datamodule.get("use_text_embedding_cache")
+            or model_init.get("use_precomputed_text_embeddings")
+        ),
+        "text_embedding_cache_dir": datamodule.get("text_embedding_cache_dir"),
+        "text_embeddings_gpu_resident": False,
+        "uint8_image_pipeline": datamodule.get("uint8_image_pipeline", False),
+        "skip_report_ablation": False,
     }
-    if loss_args:
-        payload["model"]["loss_init_args"] = _drop_keys(loss_args, {"class_instance_nums"})
 
-    return {
-        section: {k: v for k, v in values.items() if v is not None}
-        for section, values in payload.items()
-        if isinstance(values, dict) and any(v is not None for v in values.values())
-    }
+    if train_only:
+        defaults.update(
+            {
+                "quick_continue": False,
+                "loss": model.get("loss", "ASL"),
+                "loss_weights": model.get("loss_weights"),
+                "lr": model.get("lr"),
+                "weight_decay": optimizer.get("weight_decay", 0.01),
+                "warmup_ratio": scheduler.get("warmup_ratio", 0.05),
+                "max_epochs": trainer.get("max_epochs", 1000),
+                "accumulate_grad_batches": trainer.get("accumulate_grad_batches", 1),
+                "grad_clip": trainer.get("grad_clip", 1.0),
+                "ema": trainer.get("ema", False),
+                "ema_decay": trainer.get("ema_decay", 0.999),
+                "val_check_interval": trainer.get("val_check_interval"),
+                "log_every_n_steps": trainer.get("log_every_n_steps", 1),
+                "early_stop_monitor": trainer.get("early_stop_monitor", "val_ap"),
+                "early_stop_mode": trainer.get("early_stop_mode", "max"),
+                "early_stop_patience": trainer.get("early_stop_patience", 3),
+                "early_stop_min_delta": trainer.get("early_stop_min_delta", 0.0),
+                "quick_val_every_steps": trainer.get("quick_val_every_steps"),
+                "quick_val_frac": trainer.get("quick_val_frac", 0.1),
+                "full_val_fracs": trainer.get("full_val_fracs", []),
+                "quick_val_fracs": trainer.get("quick_val_fracs", [0.25, 0.5, 0.75]),
+                "compile_model": trainer.get("compile_model", False),
+                "channels_last": trainer.get("channels_last", False),
+                "gradcam_epochs": trainer.get("gradcam_epochs", "all"),
+                "gradcam_device": trainer.get("gradcam_device", "training device"),
+                "fast_dev_run": False,
+            }
+        )
 
-
-def _format_config_defaults(config_path: str | Path) -> str:
-    path, cfg, error = _load_default_config(config_path)
-    if error:
-        return f"Default config params:\n  Could not read {path}: {error}"
-    assert cfg is not None
-    summary = yaml.safe_dump(
-        _config_defaults_payload(cfg),
-        sort_keys=False,
-        default_flow_style=False,
-        width=100,
-    ).rstrip()
-    return (
-        "Default config params "
-        f"(from {path}; CLI flags override these):\n"
-        f"{summary}"
-    )
+    return {key: value for key, value in defaults.items() if value is not None}
 
 
 def _print_full_config_defaults(config_path: str | Path) -> None:
@@ -151,25 +227,41 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     the gating only controls visibility per entry point."""
     train_only = mode != "eval"
     config_default = default_config or f"training/{model_name}/config.yaml"
-    parser.formatter_class = _DefaultsHelpFormatter
-    config_defaults = _format_config_defaults(config_default)
-    parser.epilog = f"{parser.epilog}\n\n{config_defaults}" if parser.epilog else config_defaults
+    config_path, cfg, config_error = _load_default_config(config_default)
+    config_defaults = (
+        _config_default_by_dest(
+            cfg,
+            config_default=str(config_path),
+            model_name=model_name,
+            train_only=train_only,
+        )
+        if cfg is not None
+        else {"config": str(config_path)}
+    )
+    parser.formatter_class = lambda prog: _DefaultsHelpFormatter(prog, config_defaults=config_defaults)
+    defaults_note = (
+        f"Defaults shown above are read from {config_path}; CLI flags override them. "
+        "Use --print-config-defaults for the full YAML."
+    )
+    if config_error:
+        defaults_note = f"Could not read default config {config_path}: {config_error}"
+    parser.epilog = f"{parser.epilog}\n\n{defaults_note}" if parser.epilog else defaults_note
     _install_print_config_defaults(parser)
 
     # --- Run identity & I/O -------------------------------------------------
     g = parser.add_argument_group("run identity & I/O")
-    g.add_argument("--config", default=config_default)
+    g.add_argument("--config", default=config_default, help="YAML config to use.")
     g.add_argument(
         "--print-config-defaults",
         action="store_true",
         help="Print the full YAML defaults for this model (or --config) and exit.",
     )
-    g.add_argument("--train-df-path")
-    g.add_argument("--val-df-path")
-    g.add_argument("--test-df-path")
-    g.add_argument("--output-dir", default=f"output/{model_name}/runs")
-    g.add_argument("--run-name", default="baseline")
-    g.add_argument("--run-id")
+    g.add_argument("--train-df-path", help="Override data.datamodule_cfg.train_df_path.")
+    g.add_argument("--val-df-path", help="Override data.datamodule_cfg.devel_df_path.")
+    g.add_argument("--test-df-path", help="Override data.datamodule_cfg.pred_df_path.")
+    g.add_argument("--output-dir", default=f"output/{model_name}/runs", help="Directory for run outputs.")
+    g.add_argument("--run-name", default="baseline", help="Human-readable suffix for a new run directory.")
+    g.add_argument("--run-id", help="Run id prefix/name to create or select.")
 
     # --- Checkpointing & resume --------------------------------------------
     g = parser.add_argument_group("checkpointing & resume")
@@ -194,7 +286,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
 
     # --- Data & batching ----------------------------------------------------
     g = parser.add_argument_group("data & batching")
-    g.add_argument("--batch-size", type=int)
+    g.add_argument("--batch-size", type=int, help="Training DataLoader batch size.")
     g.add_argument(
         "--val-batch-size",
         type=int,
@@ -202,7 +294,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "batch size). Defaults to 2x the train batch size. A one-time OOM fallback downgrades it "
         "to the train batch size if the larger batch doesn't fit alongside the live training state.",
     )
-    g.add_argument("--num-workers", type=int)
+    g.add_argument("--num-workers", type=int, help="Training DataLoader worker processes.")
     g.add_argument(
         "--val-num-workers",
         type=int,
@@ -220,7 +312,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         "0 leaves the glibc default (no cap). Applied via mallopt + MALLOC_ARENA_MAX before "
         "workers fork. No effect off glibc (musl/non-Linux).",
     )
-    g.add_argument("--image-size", type=int)
+    g.add_argument("--image-size", type=int, help="Input image size.")
     g.add_argument(
         "--third-channel-mode",
         choices=ENABLED_THIRD_CHANNELS + ["none"],
@@ -274,11 +366,11 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             help="Weights for a multi-loss --loss, positionally matched (e.g. '--loss FC ASL "
             "--loss-weights 1.0 0.5'). Must match the number of losses.",
         )
-        g.add_argument("--lr", type=float)
-        g.add_argument("--weight-decay", type=float)
+        g.add_argument("--lr", type=float, help="Base learning rate.")
+        g.add_argument("--weight-decay", type=float, help="AdamW weight decay.")
         g.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
-        g.add_argument("--max-epochs", type=int)
-        g.add_argument("--accumulate-grad-batches", type=int)
+        g.add_argument("--max-epochs", type=int, help="Maximum training epochs.")
+        g.add_argument("--accumulate-grad-batches", type=int, help="Gradient accumulation steps.")
         g.add_argument("--grad-clip", type=float, help="Max grad norm. Set to 0 or negative to disable. Default 1.0 if neither CLI nor config set.")
 
         # --- EMA (weight averaging) ----------------------------------------
@@ -334,9 +426,9 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
 
     # --- Hardware, precision & compile -------------------------------------
     g = parser.add_argument_group("hardware, precision & compile")
-    g.add_argument("--accelerator", default=None)
-    g.add_argument("--devices", default=None)
-    g.add_argument("--precision", default=None)
+    g.add_argument("--accelerator", default=None, help="Device selector: auto/gpu/cpu/cuda/mps.")
+    g.add_argument("--devices", default=None, help="Reserved compatibility flag; single-device trainer currently ignores it.")
+    g.add_argument("--precision", default=None, help="Training/eval precision, e.g. 16-mixed, bf16-mixed, 32-true.")
     if train_only:
         g.add_argument(
             "--compile-model",
@@ -358,13 +450,13 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
 
     # --- Backbone -----------------------------------------------------------
     g = parser.add_argument_group("backbone")
-    g.add_argument("--backbone-name")
-    g.add_argument("--no-pretrained", action="store_true")
+    g.add_argument("--backbone-name", help="Override model.timm_init_args.model_name.")
+    g.add_argument("--no-pretrained", action="store_true", help="Disable timm pretrained backbone weights.")
 
     if train_only:
         # --- Debug ----------------------------------------------------------
         g = parser.add_argument_group("debug")
-        g.add_argument("--fast-dev-run", action="store_true")
+        g.add_argument("--fast-dev-run", action="store_true", help="Run a tiny one-epoch smoke test.")
 
         # --- Grad-CAM panels ------------------------------------------------
         g = parser.add_argument_group("Grad-CAM panels")

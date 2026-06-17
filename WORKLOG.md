@@ -2130,3 +2130,18 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Gotchas.** `-h` still imports the model entrypoint before argparse exits, so existing import-time warnings from requests/Albumentations/Matplotlib can appear before help text in this environment. This change surfaces defaults but does not address those startup warnings.
 
 **Follow-ups.** If the warning noise remains annoying, move more imports inside `main()` or disable Albumentations' online version check for CLI help paths.
+
+## 2026-06-17 - move CLI defaults beside each flag
+
+**Goal.** Fix the awkward help layout where model defaults appeared as a YAML block at the bottom of `-h`; the user wanted each flag to show its own current default directly beside the flag.
+
+**Changes.**
+- `training/common.py:44` - extended the shared help formatter so it appends config/runtime defaults to individual argparse actions.
+- `training/common.py:61` - added a config-to-flag default map for common train/eval flags, including data paths, batch sizing, optimizer/trainer settings, early stopping, precision/compile flags, backbone name, and common text/cache toggles.
+- `training/common.py:207` - replaced the large help epilog with a short note and kept `--print-config-defaults` for full YAML dumps.
+
+**Reasoning.** Per-flag defaults are easier to scan while constructing a command, and the shared `add_common_args()` hook still updates every active model entrypoint without touching them one by one. The formatter does not mutate argparse defaults, so runtime resolution and config override behavior stay unchanged.
+
+**Gotchas.** Defaults are shown for flags that map cleanly to shared config/runtime settings. Optional paths like checkpoints and model-specific pretrained state dicts remain unset unless passed. Existing import-time warnings can still appear before help text.
+
+**Follow-ups.** If model-specific entrypoints add new flags whose defaults live in YAML but are not in the shared map, add their `dest` to `_config_default_by_dest()` rather than duplicating help logic in the entrypoint.
