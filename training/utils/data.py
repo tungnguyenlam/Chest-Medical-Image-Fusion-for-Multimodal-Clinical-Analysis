@@ -493,7 +493,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     # (image paths don't depend on the text cache; the text columns are dropped after.)
     precompute_channels_for_paths(
         data_cfg, _prior_aware_image_paths([train_ds.df, val_ds.df]), desc="prior_aware channels",
-        cpu_fraction=resolve_cpu_fraction(args),
+        cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False),
     )
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
     train_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")

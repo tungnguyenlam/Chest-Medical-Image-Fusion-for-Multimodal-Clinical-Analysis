@@ -2102,3 +2102,31 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Gotchas.** With the channel cache enabled, a warm cache can hide raw JPEG problems because `load_or_build_channels()` may return cached arrays without reading the source file. Use `--disable-channel-cache` to force a worst-case rebuild-from-JPEG audit. OpenCV libjpeg warnings such as `Premature end of JPEG file` can still appear even when the image is accepted by training; those are not counted as lost unless preprocessing returns `None` or raises.
 
 **Follow-ups.** Add parquet/prior-aware support if the next question is about `PriorAwareDataset` Grad-CAM specifically; that report should separate current-block all-fail neighbor substitution from prior-block zeroing.
+
+## 2026-06-17 - honor skip-precompute in prior-aware training
+
+**Goal.** Diagnose the prior-aware v5nano training startup where `--skip-precompute` was passed but the run still launched the full image channel cache prebuild.
+
+**Changes.**
+- `training/utils/data.py:494` - passed `skip=getattr(args, "skip_precompute", False)` from `make_prior_aware_loaders()` into `precompute_channels_for_paths()`, matching the existing single-view, camchex, vitals, and eval loader paths.
+
+**Reasoning.** The shared `precompute_channels_for_paths()` already implements the intended skip behavior while still logging the channel composition. The bug was only in the prior-aware training call site, which forwarded `cpu_fraction` but forgot the skip flag. Keeping the fix at the call site preserves the existing helper semantics and avoids changing lazy channel-cache behavior.
+
+**Gotchas.** The skip smoke imports `training.utils.data`, which imports Albumentations; in this environment that triggered an import-time network version-check warning and a requests dependency warning. Those are startup-noise issues, not the precompute bug. With `--skip-precompute`, channel images will still build lazily on cache misses during dataloader access.
+
+**Follow-ups.** Run a real short prior-aware v5nano job after the cache is warm enough to confirm the lazy-miss rate is acceptable. If startup warnings are distracting, consider disabling Albumentations' online version check in the training environment.
+
+## 2026-06-17 - print model config defaults in CLI help
+
+**Goal.** Make every active training/eval entrypoint show the model's current default parameters without forcing the user to open `training/<model>/config.yaml` separately.
+
+**Changes.**
+- `training/common.py:40` - added shared config-default formatting helpers that read the entrypoint's default YAML and compact it into the parameters users usually need before launching a run.
+- `training/common.py:103` - made `add_common_args()` append a `Default config params` epilog to every parser that uses the shared training CLI.
+- `training/common.py:113` - added shared `--print-config-defaults`, which prints the full YAML defaults for the selected `--config` and exits.
+
+**Reasoning.** All active train/eval scripts already call `add_common_args()`, so the shared hook gives every model the same behavior without touching each model entrypoint. The `-h` view is intentionally compact and omits noisy class lists / per-class loss counts; `--print-config-defaults` is the escape hatch for the complete YAML.
+
+**Gotchas.** `-h` still imports the model entrypoint before argparse exits, so existing import-time warnings from requests/Albumentations/Matplotlib can appear before help text in this environment. This change surfaces defaults but does not address those startup warnings.
+
+**Follow-ups.** If the warning noise remains annoying, move more imports inside `main()` or disable Albumentations' online version check for CLI help paths.

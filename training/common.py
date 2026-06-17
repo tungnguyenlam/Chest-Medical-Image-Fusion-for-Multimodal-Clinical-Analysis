@@ -19,6 +19,10 @@ to look up — see ``training/FLAGS.md`` for which flag applies to which script.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+from typing import Any
+
+import yaml
 
 # Re-export the full helper API so existing `from training.common import ...` lines
 # keep resolving. (Star imports from modules without __all__ pull only public names.)
@@ -37,6 +41,100 @@ from training.utils.constants import CPU_FRACTION, ENABLED_THIRD_CHANNELS
 from src.loss import LOSS_REGISTRY
 
 
+class _DefaultsHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Preserve the config-summary epilog layout."""
+
+
+def _load_default_config(config_path: str | Path) -> tuple[Path, dict[str, Any] | None, str | None]:
+    path = resolve_path(config_path) or Path(config_path)
+    try:
+        with open(path, "r") as f:
+            return path, yaml.safe_load(f) or {}, None
+    except OSError as exc:
+        return path, None, str(exc)
+
+
+def _drop_keys(mapping: dict[str, Any], keys: set[str]) -> dict[str, Any]:
+    return {k: v for k, v in mapping.items() if k not in keys}
+
+
+def _config_defaults_payload(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Compact the YAML to the parts people usually need before launching a run."""
+    model = dict(cfg.get("model", {}) or {})
+    data = dict(cfg.get("data", {}) or {})
+    datamodule = dict(data.get("datamodule_cfg", {}) or {})
+    loss_args = dict(model.get("loss_init_args", {}) or {})
+
+    payload: dict[str, Any] = {
+        "model": {
+            "arch": model.get("arch"),
+            "lr": model.get("lr"),
+            "loss": model.get("loss", "ASL"),
+            "text_model": model.get("text_model"),
+            "timm_init_args": model.get("timm_init_args"),
+            "model_init_args": model.get("model_init_args"),
+            "optimizer_init_args": model.get("optimizer_init_args"),
+            "scheduler_init_args": model.get("scheduler_init_args"),
+        },
+        "data": {
+            "dataloader_init_args": data.get("dataloader_init_args"),
+            "datamodule_cfg": _drop_keys(datamodule, {"classes", "vital_stats"}),
+        },
+        "trainer": cfg.get("trainer", {}),
+    }
+    if loss_args:
+        payload["model"]["loss_init_args"] = _drop_keys(loss_args, {"class_instance_nums"})
+
+    return {
+        section: {k: v for k, v in values.items() if v is not None}
+        for section, values in payload.items()
+        if isinstance(values, dict) and any(v is not None for v in values.values())
+    }
+
+
+def _format_config_defaults(config_path: str | Path) -> str:
+    path, cfg, error = _load_default_config(config_path)
+    if error:
+        return f"Default config params:\n  Could not read {path}: {error}"
+    assert cfg is not None
+    summary = yaml.safe_dump(
+        _config_defaults_payload(cfg),
+        sort_keys=False,
+        default_flow_style=False,
+        width=100,
+    ).rstrip()
+    return (
+        "Default config params "
+        f"(from {path}; CLI flags override these):\n"
+        f"{summary}"
+    )
+
+
+def _print_full_config_defaults(config_path: str | Path) -> None:
+    path, cfg, error = _load_default_config(config_path)
+    if error:
+        raise SystemExit(f"--print-config-defaults: could not read {path}: {error}")
+    assert cfg is not None
+    print(f"# Default config params from {path}")
+    print(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False, width=100).rstrip())
+
+
+def _install_print_config_defaults(parser: argparse.ArgumentParser) -> None:
+    if getattr(parser, "_prints_config_defaults", False):
+        return
+    original_parse_args = parser.parse_args
+
+    def parse_args_with_config_defaults(args=None, namespace=None):
+        parsed = original_parse_args(args=args, namespace=namespace)
+        if getattr(parsed, "print_config_defaults", False):
+            _print_full_config_defaults(parsed.config)
+            raise SystemExit(0)
+        return parsed
+
+    parser.parse_args = parse_args_with_config_defaults
+    setattr(parser, "_prints_config_defaults", True)
+
+
 def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_config: str | None = None, mode: str = "train") -> None:
     """Flags shared by training/eval entry points, grouped by concern so the set is easy
     to scan here and in ``--help``. Model-specific flags (image pretrained paths,
@@ -52,10 +150,20 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     ``--skip-report-ablation``. The full flag set is still defined here in one place;
     the gating only controls visibility per entry point."""
     train_only = mode != "eval"
+    config_default = default_config or f"training/{model_name}/config.yaml"
+    parser.formatter_class = _DefaultsHelpFormatter
+    config_defaults = _format_config_defaults(config_default)
+    parser.epilog = f"{parser.epilog}\n\n{config_defaults}" if parser.epilog else config_defaults
+    _install_print_config_defaults(parser)
 
     # --- Run identity & I/O -------------------------------------------------
     g = parser.add_argument_group("run identity & I/O")
-    g.add_argument("--config", default=default_config or f"training/{model_name}/config.yaml")
+    g.add_argument("--config", default=config_default)
+    g.add_argument(
+        "--print-config-defaults",
+        action="store_true",
+        help="Print the full YAML defaults for this model (or --config) and exit.",
+    )
     g.add_argument("--train-df-path")
     g.add_argument("--val-df-path")
     g.add_argument("--test-df-path")
