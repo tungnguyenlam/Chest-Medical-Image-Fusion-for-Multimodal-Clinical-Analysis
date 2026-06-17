@@ -1950,6 +1950,71 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 
 **Gotchas.** The LaTeX build still reports unrelated warnings about duplicate page anchors and an empty bibliography; these were present in the broader document flow and were not caused by the title-page format change.
 
+## 2026-06-16 - Fix Conda 7z resolution for bundle archives
+
+**Goal.** Diagnose and fix the full-bundle archive failure where `scripts/build_mimic_subset.py --bundle-mode full --stage-mode symlink --public` found a `7z` binary but failed with `Codec Load Error: ./7z.so` / unsupported archive type.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:61` - added `resolve_7z_executable()`, with `MIMIC_BUNDLE_7Z` override support and Conda-env handling that prefers the base Miniforge `bin/7z` wrapper before the env-local binary.
+- `scripts/build_mimic_subset.py:302` - changed archive creation to invoke the resolved 7z executable and print the exact selected executable in the redacted command line.
+- `scripts/download_subset.py:16` - imported `shutil` for executable lookup.
+- `scripts/download_subset.py:33` - added the same resolver to the download/extract path so extraction does not hit the same broken env-local 7z binary.
+- `scripts/download_subset.py:191` - changed extraction to use the resolved executable and print it.
+
+**Reasoning.** The active `pip13` Conda env has a 7-Zip 26.01 binary at `envs/pip13/bin/7z` but no adjacent `7z.so`, so running it from the symlink stage makes it unable to load codecs. The base Miniforge `bin/7z` is a wrapper around the older p7zip install under `miniforge3/lib/p7zip`, and it successfully finds its codecs from arbitrary working directories. Prefering that wrapper in named Conda envs fixes the observed failure without requiring users to edit PATH or reinstall packages. `MIMIC_BUNDLE_7Z` remains available for machines with a different known-good 7z installation.
+
+**Assumptions.**
+- Conda named environments live under `<base>/envs/<name>`, which matches the failing `pip13` layout observed on this machine.
+- The base `bin/7z` wrapper is preferable to the env-local binary when both exist, because the env-local 26.01 install is incomplete in this environment.
+
+**Gotchas.** `which 7z` can still point at the broken env-local binary when `pip13` is activated, so simply resolving PATH is not enough. The failure message may mention `./7z.so` or an absolute `envs/.../bin/7z.so` depending on how the binary is invoked and where cwd is set.
+
+**Follow-ups.** Full dataset archiving was not rerun because it is a large operation; verification used `py_compile`, resolver selection under a simulated `pip13` `CONDA_PREFIX`, and a tiny encrypted 7z smoke archive from a staging-style working directory.
+
+## 2026-06-16 - Dereference nested full-bundle symlinks
+
+**Goal.** Check why full-bundle symlink staging did not fully trace through symlinks and fix the case where extracted archives would contain dangling `files` links instead of real dataset contents.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:378` - changed full symlink staging from one top-level symlink per dataset root to a one-level staged directory per root.
+- `scripts/build_mimic_subset.py:386` - top-level child directories, including directory symlinks such as `MIMIC-CXR-JPG/files` and `MIMIC-CXR/files`, are now symlinked into the stage and passed to 7z as explicit source arguments.
+- `scripts/build_mimic_subset.py:392` - top-level regular files are copied into the stage instead of symlinked, because this p7zip build stores symlinked files as link-target text rather than dereferencing them.
+- `scripts/build_mimic_subset.py:542` - symlink-stage archive cwd now uses the lexical absolute stage path instead of `resolve()`, avoiding path spelling mismatches such as `/var` versus `/private/var` in tests.
+
+**Reasoning.** p7zip follows a directory symlink when that symlink is an explicit command-line source, but it does not recursively dereference nested symlinks discovered while walking a real directory. The actual local data layout has real roots like `data/MIMIC-CXR-JPG/` whose `files` child is a symlink to external storage. The old stage caused 7z to archive that nested `files` link itself; the new stage promotes `MIMIC-CXR-JPG/files` to an explicit 7z input, so it is archived as a real directory with real file contents.
+
+**Gotchas.** Symlinked regular files are not safe archive inputs with the tested p7zip wrapper: a smoke test extracted the symlink target path as file content. Copying top-level metadata files is cheap and avoids that behavior while still avoiding any large dataset copy.
+
+**Follow-ups.** The full 500+ GB bundle was not rerun. Verification used a fake MIMIC-like tree with a metadata CSV plus nested `files` symlink; the resulting encrypted archive extracted `MIMIC-CXR-JPG/files` as a real directory, not a symlink.
+
+## 2026-06-16 - Add opaque parallel shard bundle layout
+
+**Goal.** Let full dataset bundles use obfuscated independent archive filenames so downloads remain opaque but extraction can run multiple 7z processes in parallel, avoiding the single logical split-volume archive bottleneck.
+
+**Changes.**
+- `scripts/build_mimic_subset.py:114` - added `--archive-layout {single,opaque-shards}`, defaulting to the previous `single` layout for compatibility.
+- `scripts/build_mimic_subset.py:159` - constrained `opaque-shards` to `--bundle-mode full --stage-mode symlink`, reusing the symlink staging path that dereferences nested data links correctly.
+- `scripts/build_mimic_subset.py:341` - added opaque shard naming/discovery helpers using `<archive-stem>.NNNN.7z` external names, with split volume support via `<archive-stem>.NNNN.7z.001` etc.
+- `scripts/build_mimic_subset.py:465` - added shard grouping: `files/pXX` children become independent archive groups, while small top-level metadata files are grouped by dataset root.
+- `scripts/build_mimic_subset.py:485` - added `archive_opaque_shards()` to run 7z once per independent group while preserving encrypted internal paths and optional per-shard volume splitting.
+- `scripts/build_mimic_subset.py:629` - full symlink builds route through opaque shard creation when requested.
+- `scripts/build_mimic_subset.py:775` - `--upload-existing --archive-layout opaque-shards` now discovers existing opaque shard outputs for upload retry.
+- `scripts/download_subset.py:86` - added `--extract-workers` to control how many independent shard archives extract in parallel.
+- `scripts/download_subset.py:118` - added opaque shard repo discovery for both unsplit `bundle-a3f9.0001.7z` and split `bundle-a3f9.0001.7z.001` forms.
+- `scripts/download_subset.py:232` - added parallel extraction for independent shard entry archives.
+- `scripts/download_subset.py:289` - downloader now auto-detects opaque shards first and falls back to legacy single/split archive discovery.
+
+**Reasoning.** 7z split volumes are one logical archive stream, so they can download in parallel but must extract from the first volume sequentially. Independent shard archives are the right unit for parallel extraction. External filenames are opaque numeric IDs, while real internal paths such as `MIMIC-CXR-JPG/files/p10` stay inside header-encrypted archives (`-mhe=on`). Sharding by `files/pXX` avoids one huge `MIMIC-CXR-JPG` archive while preserving the final extracted `data/` layout.
+
+**Assumptions.**
+- Full MIMIC shard layout should be opt-in until tested on the real 500+ GB bundle.
+- `pXX` folder sharding is a reasonable balance between obfuscation, archive count, retry size, and parallel extraction granularity.
+- Parallel extraction into the same `data/` root is acceptable because shards write mostly disjoint subtrees; 7z handled shared parent directory creation in the smoke test.
+
+**Gotchas.** With the default `--volume-size 10g`, each independent shard may itself become multiple volumes. The downloader extracts only each shard group's first volume (`.001`), which is correct for 7z split archives as long as the sibling parts are downloaded into the same directory. `--extract-workers` controls independent 7z processes; `--extract-threads` is still passed to each 7z process, so using high values for both can oversubscribe CPU and disk.
+
+**Follow-ups.** The full bundle was not rebuilt. Verification covered `py_compile`, CLI help, shard-name discovery, and an end-to-end fake MIMIC-like archive/extract test that produced opaque archives and extracted them in parallel into real directories.
+
 ## 2026-06-17 - Add CXR-LT 2024 task1 path
 
 **Goal.** Move the project toward CXR-LT 2024 while keeping the 2023 challenge setup as a reproducible baseline. The key requirement was to support the newer 2024 label schema and class counts without making the old 26-class path brittle.

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,35 @@ def require_env(name: str) -> str:
     if not value:
         sys.exit(f"{name} not set in .env")
     return value
+
+
+def resolve_7z_executable() -> str:
+    """Prefer a Conda base p7zip wrapper when env-local 7zip lacks 7z.so."""
+    override = os.environ.get("MIMIC_BUNDLE_7Z", "").strip()
+    if override:
+        return override
+
+    candidates: list[Path] = []
+    conda_prefix = os.environ.get("CONDA_PREFIX", "").strip()
+    if conda_prefix:
+        prefix = Path(conda_prefix)
+        if prefix.parent.name == "envs":
+            candidates.append(prefix.parent.parent / "bin" / "7z")
+        candidates.append(prefix / "bin" / "7z")
+
+    which_7z = shutil.which("7z")
+    if which_7z:
+        candidates.append(Path(which_7z))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.expanduser()
+        if candidate in seen or not candidate.exists():
+            continue
+        seen.add(candidate)
+        return str(candidate)
+
+    return "7z"
 
 
 def _workers_from_cpu_fraction(fraction: float) -> int:
@@ -53,6 +83,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--extract-threads", type=int, default=None,
                    help="Number of CPU threads for 7z extraction "
                         "(default: cpu_count() * --cpu-fraction)")
+    p.add_argument("--extract-workers", type=int, default=None,
+                   help="Number of independent shard archives to extract in parallel "
+                        "(default: cpu_count() * --cpu-fraction)")
     args = p.parse_args()
     if not 0 < args.cpu_fraction <= 1:
         p.error("--cpu-fraction must be > 0 and <= 1")
@@ -61,10 +94,14 @@ def parse_args() -> argparse.Namespace:
         args.download_workers = default_workers
     if args.extract_threads is None:
         args.extract_threads = default_workers
+    if args.extract_workers is None:
+        args.extract_workers = default_workers
     if args.download_workers < 1:
         p.error("--download-workers must be >= 1")
     if args.extract_threads < 1:
         p.error("--extract-threads must be >= 1")
+    if args.extract_workers < 1:
+        p.error("--extract-workers must be >= 1")
     return args
 
 
@@ -76,6 +113,31 @@ def repo_archive_names(repo_files: list[str], archive_name: str) -> list[str]:
     if archive_name in repo_files:
         return [archive_name]
     return []
+
+
+def repo_opaque_shard_groups(repo_files: list[str], archive_name: str) -> list[list[str]]:
+    prefix = Path(archive_name).stem
+    single_pattern = re.compile(rf"{re.escape(prefix)}\.(\d{{4}})\.7z")
+    volume_pattern = re.compile(rf"{re.escape(prefix)}\.(\d{{4}})\.7z\.(\d{{3}})")
+    singles: dict[str, str] = {}
+    volumes: dict[str, list[str]] = {}
+
+    for name in repo_files:
+        volume_match = volume_pattern.fullmatch(name)
+        if volume_match:
+            volumes.setdefault(volume_match.group(1), []).append(name)
+            continue
+        single_match = single_pattern.fullmatch(name)
+        if single_match:
+            singles[single_match.group(1)] = name
+
+    groups: list[list[str]] = []
+    for shard_id in sorted(set(singles) | set(volumes)):
+        if shard_id in volumes:
+            groups.append(sorted(volumes[shard_id]))
+        else:
+            groups.append([singles[shard_id]])
+    return groups
 
 
 def resolve_hf_repo_id(repo_id: str, username: str) -> str:
@@ -158,12 +220,51 @@ def extract_archive(archive_path: Path, *, data_dir: Path, password: str, extrac
         sys.exit("--extract-threads must be >= 1")
 
     print(f"Extracting into {data_dir} with {extract_threads} thread(s) ...")
-    print(f"  $ 7z x -y -p<DATA_PASSWORD> -mmt={extract_threads} {archive_path}", flush=True)
+    seven_zip = resolve_7z_executable()
+    print(f"  $ {seven_zip} x -y -p<DATA_PASSWORD> -mmt={extract_threads} {archive_path}", flush=True)
     subprocess.run(
-        ["7z", "x", "-y", f"-p{password}", f"-mmt={extract_threads}", str(archive_path)],
+        [seven_zip, "x", "-y", f"-p{password}", f"-mmt={extract_threads}", str(archive_path)],
         cwd=str(data_dir),
         check=True,
     )
+
+
+def extract_independent_archives(
+    archive_paths: list[Path],
+    *,
+    data_dir: Path,
+    password: str,
+    extract_threads: int,
+    extract_workers: int,
+) -> None:
+    if extract_workers < 1:
+        sys.exit("--extract-workers must be >= 1")
+
+    worker_count = min(extract_workers, len(archive_paths))
+    print(f"Extracting {len(archive_paths)} independent archive(s) with {worker_count} worker(s) ...")
+    if worker_count == 1:
+        for archive_path in archive_paths:
+            extract_archive(
+                archive_path,
+                data_dir=data_dir,
+                password=password,
+                extract_threads=extract_threads,
+            )
+        return
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [
+            executor.submit(
+                extract_archive,
+                archive_path,
+                data_dir=data_dir,
+                password=password,
+                extract_threads=extract_threads,
+            )
+            for archive_path in archive_paths
+        ]
+        for future in as_completed(futures):
+            future.result()
 
 
 def main() -> int:
@@ -185,13 +286,23 @@ def main() -> int:
     api = HfApi(token=token)
     args.hf_repo = resolve_hf_repo_id(args.hf_repo, username)
     repo_files = api.list_repo_files(repo_id=args.hf_repo, repo_type="dataset", token=token)
-    archive_names = repo_archive_names(repo_files, args.archive_name)
+    opaque_shard_groups = repo_opaque_shard_groups(repo_files, args.archive_name)
+    if opaque_shard_groups:
+        archive_names = [name for group in opaque_shard_groups for name in group]
+        layout = "opaque-shards"
+    else:
+        archive_names = repo_archive_names(repo_files, args.archive_name)
+        layout = "single"
     if not archive_names:
-        sys.exit(f"No archive named {args.archive_name} or split volumes {args.archive_name}.001, ... found")
+        prefix = Path(args.archive_name).stem
+        sys.exit(
+            f"No archive named {args.archive_name}, split volumes {args.archive_name}.001, "
+            f"or opaque shards {prefix}.0001.7z found"
+        )
 
     worker_count = min(args.download_workers, len(archive_names))
     print(
-        f"Downloading {len(archive_names)} archive file(s) from {args.hf_repo} "
+        f"Downloading {len(archive_names)} archive file(s) ({layout}) from {args.hf_repo} "
         f"with {worker_count} worker(s) ..."
     )
     archive_paths = download_archives(
@@ -202,12 +313,23 @@ def main() -> int:
         download_workers=args.download_workers,
     )
 
-    extract_archive(
-        archive_paths[0],
-        data_dir=data_dir,
-        password=password,
-        extract_threads=args.extract_threads,
-    )
+    if layout == "opaque-shards":
+        archive_paths_by_name = dict(zip(archive_names, archive_paths, strict=True))
+        shard_entry_paths = [archive_paths_by_name[group[0]] for group in opaque_shard_groups]
+        extract_independent_archives(
+            shard_entry_paths,
+            data_dir=data_dir,
+            password=password,
+            extract_threads=args.extract_threads,
+            extract_workers=args.extract_workers,
+        )
+    else:
+        extract_archive(
+            archive_paths[0],
+            data_dir=data_dir,
+            password=password,
+            extract_threads=args.extract_threads,
+        )
 
     if not args.keep_archive:
         for archive_path in archive_paths:
