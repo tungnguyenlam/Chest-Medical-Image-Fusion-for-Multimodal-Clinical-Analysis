@@ -368,6 +368,13 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         )
         g.add_argument("--lr", type=float, help="Base learning rate.")
         g.add_argument("--weight-decay", type=float, help="AdamW weight decay.")
+        g.add_argument(
+            "--backbone-lr-mult",
+            type=float,
+            help="Discriminative LR: train the pretrained image backbone (params under "
+            "'image_encoder.') at this multiple of the base --lr. Default 0.3; set 1.0 to "
+            "disable (uniform LR). Ignored if the config sets optimizer_init_args.param_group_lrs.",
+        )
         g.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
         g.add_argument("--max-epochs", type=int, help="Maximum training epochs.")
         g.add_argument("--accumulate-grad-batches", type=int, help="Gradient accumulation steps.")

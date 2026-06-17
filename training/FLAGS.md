@@ -59,8 +59,9 @@ instead of stalling mid-loop; `--skip-precompute` bypasses it.
 |------|-----|
 | `--loss NAME [NAME ...]` | Loss(es), overriding `model.loss` / default ASL. Several names → weighted sum. |
 | `--loss-weights W [W ...]` | Positional weights for a multi-loss `--loss`. |
-| `--lr FLOAT` | Learning rate. |
+| `--lr FLOAT` | Base learning rate (the freshly-initialised fusion + decoder train at this). |
 | `--weight-decay FLOAT` | Weight decay. |
+| `--backbone-lr-mult FLOAT` | Discriminative LR: train the pretrained image backbone (params under `image_encoder.`) at this multiple of `--lr`. **Default 0.3** (applied to every model); `1.0` disables (uniform LR). Overridden by `optimizer_init_args.param_group_lrs` if a config sets it. See [docs/discriminative_lr.md](../docs/discriminative_lr.md). |
 | `--warmup-ratio FLOAT` | Warmup as a fraction of steps/epoch (default 0.05). |
 | `--max-epochs INT` | Epoch cap. |
 | `--accumulate-grad-batches INT` | Gradient accumulation (effective batch = batch × accumulate). |
