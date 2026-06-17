@@ -48,7 +48,7 @@ from src.optimizer import build_adamw_optimizer
 from src.scheduler import build_warmup_cosine_scheduler
 
 
-def train_step(model, criterion, batch, device: torch.device, precision: str | None):
+def train_step(model, criterion, batch, device: torch.device, precision: str | None, include_aux: bool = True):
     data, label = batch
     data = move_to_device(data, device)
     label = label.to(device).float()
@@ -61,7 +61,10 @@ def train_step(model, criterion, batch, device: torch.device, precision: str | N
         if isinstance(pred, tuple):
             pred, aux_loss = pred
         loss = criterion(pred, label)
-        if aux_loss is not None:
+        # The aux term is a training-only regularizer; fold it in for the backward pass
+        # but leave it out of validation so val/loss stays the pure criterion loss
+        # (comparable across variants and not double-counting the penalty).
+        if aux_loss is not None and include_aux:
             loss = loss + aux_loss
     return loss, pred, label
 
@@ -103,7 +106,7 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
             for batch_idx, batch in enumerate(pbar):
                 if max_batches is not None and batch_idx >= max_batches:
                     break
-                loss, pred, label = train_step(model, criterion, batch, device, precision)
+                loss, pred, label = train_step(model, criterion, batch, device, precision, include_aux=False)
                 losses.append(float(loss.detach().cpu()))
                 prob = torch.sigmoid(pred.detach()).cpu()
                 preds.append(prob)
@@ -168,6 +171,7 @@ def save_checkpoint(
     early_stop_monitor: str = "val_ap",
     early_stop_mode: str = "max",
     schedule: str = "warm_restarts",
+    weights_are_ema: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     model_to_save = unwrap_compiled_model(model)
@@ -178,6 +182,11 @@ def save_checkpoint(
         "checkpoint_kind": checkpoint_kind,
         "completed_epoch": checkpoint_kind == "epoch",
         "schedule": schedule,
+        # The saved weights are the EMA snapshot, but the optimizer state belongs to the
+        # raw (non-EMA) weights -- so this checkpoint is eval-ready but NOT safe for a full
+        # --resume-from. load_training_checkpoint refuses to resume from it (use weights-only
+        # --checkpoint-path instead). See ModelEMA's docstring.
+        "weights_are_ema": bool(weights_are_ema),
         "best_monitor_value": best_monitor_value,
         "best_monitor_epoch": best_monitor_epoch,
         "early_stop_bad_epochs": early_stop_bad_epochs,
@@ -217,6 +226,18 @@ def load_training_checkpoint(model, optimizer, scheduler, checkpoint_path: str |
     from .config import resolve_path
 
     checkpoint = torch.load(resolve_path(checkpoint_path), map_location="cpu")
+    # The saved weights of an EMA run are the smoothed snapshot, but the optimizer/scheduler
+    # state belongs to the raw weights -- transplanting that optimizer state onto the EMA
+    # weights is the mismatch ModelEMA's docstring warns about. Refuse a full resume (this is
+    # also what --quick-continue does under the hood) and point at weights-only init.
+    if isinstance(checkpoint, dict) and checkpoint.get("weights_are_ema"):
+        raise RuntimeError(
+            f"--resume-from checkpoint {checkpoint_path} was saved from an EMA run: its weights are "
+            f"the EMA snapshot while the optimizer state belongs to the raw weights, so a full resume "
+            f"would apply mismatched optimizer moments. Use --checkpoint-path (weights-only init, fresh "
+            f"optimizer/scheduler) to continue from these weights instead. (If you reached this via "
+            f"--quick-continue, that run used EMA and cannot be auto-resumed.)"
+        )
     load_model_state(model, checkpoint)
     # A full resume restores the optimizer + scheduler *state*; that state is only
     # valid for the schedule shape that produced it. Switching schedules (e.g.
@@ -543,6 +564,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 early_stop_monitor=early_stop_monitor,
                 early_stop_mode=early_stop_mode,
                 schedule=schedule,
+                weights_are_ema=ema is not None,
             )
         finally:
             if ema is not None:
@@ -695,15 +717,22 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                     running_grad_norm += last_grad_norm
                     grad_norm_count += 1
                 if scaler.is_enabled():
+                    # On inf/NaN grads the scaler skips optimizer.step() and shrinks the
+                    # scale. Detect that (scale strictly decreased) so we don't advance the
+                    # LR schedule or the EMA past an update that never actually happened.
+                    scale_before = scaler.get_scale()
                     scaler.step(optimizer)
                     scaler.update()
+                    optimizer_stepped = scaler.get_scale() >= scale_before
                 else:
                     optimizer.step()
-                scheduler.step()
+                    optimizer_stepped = True
+                if optimizer_stepped:
+                    scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
                 stepped = True
-                if ema is not None:
+                if optimizer_stepped and ema is not None:
                     ema.update(model)
 
             loss_value = float(loss.detach().cpu())

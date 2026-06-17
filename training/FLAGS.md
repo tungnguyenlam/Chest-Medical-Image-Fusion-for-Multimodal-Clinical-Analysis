@@ -36,8 +36,8 @@ instead of stalling mid-loop; `--skip-precompute` bypasses it.
 | Flag | Use |
 |------|-----|
 | `--checkpoint-path PATH` | Eval: weights to load (and, unless `--config` is passed, the config is auto-resolved from this checkpoint's run dir). Train: **weights-only** warm-start (fresh optimizer/scheduler/epoch). |
-| `--resume-from PATH` | *Train only.* Full resume (model + optimizer + scheduler + epoch + step + early-stop state); run dir inferred from the path. |
-| `--quick-continue` | *Train only.* Resume the **most recently created** run under `--output-dir` (its latest checkpoint). Pass `--run-id` to target a specific run instead. |
+| `--resume-from PATH` | *Train only.* Full resume (model + optimizer + scheduler + epoch + step + early-stop state); run dir inferred from the path. Refuses an **EMA** checkpoint (its weights are the EMA snapshot but the optimizer state is for the raw weights) — use `--checkpoint-path` for a weights-only warm-start instead. |
+| `--quick-continue` | *Train only.* Resume the **most recently created** run under `--output-dir` (its latest checkpoint). Pass `--run-id` to target a specific run instead. Resumes under the hood, so it inherits the EMA-checkpoint refusal above (EMA runs can't be auto-continued). |
 | `--seed INT` | Seed python/numpy/torch RNGs. |
 
 ### data & batching
@@ -69,7 +69,7 @@ instead of stalling mid-loop; `--skip-precompute` bypasses it.
 ### EMA (weight averaging) — *train only*
 | Flag | Use |
 |------|-----|
-| `--ema` / `--no-ema` | Maintain an EMA of weights and evaluate/save it. Best with `schedule=single_cosine`. Do **not** `--resume-from` an EMA checkpoint. |
+| `--ema` / `--no-ema` | Maintain an EMA of weights and evaluate/save it. Best with `schedule=single_cosine`. EMA checkpoints are eval-ready but **cannot be full-resumed** (`--resume-from` / `--quick-continue` refuse them); warm-start from them with `--checkpoint-path` instead. |
 | `--ema-decay FLOAT` | EMA decay (default 0.999; higher = smoother/slower). |
 
 ### validation, early stopping & logging — *train only*

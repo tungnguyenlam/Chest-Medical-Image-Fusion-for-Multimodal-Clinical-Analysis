@@ -498,8 +498,7 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
     train_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     val_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
-    for ds in (train_ds, val_ds):
-        dropped = ds.drop_unused_text_columns()
+    dropped = sum(ds.drop_unused_text_columns() for ds in (train_ds, val_ds))
     if dropped:
         print(f"[dataloader] dropped {dropped} unused raw-text column(s) from the parquet to save host RAM")
     train_dl_args = dataloader_args_from_config(cfg, args, shuffle=True)
