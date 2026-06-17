@@ -58,6 +58,35 @@ def require_env(name: str) -> str:
     return value
 
 
+def resolve_7z_executable() -> str:
+    """Prefer a Conda base p7zip wrapper when env-local 7zip lacks 7z.so."""
+    override = os.environ.get("MIMIC_BUNDLE_7Z", "").strip()
+    if override:
+        return override
+
+    candidates: list[Path] = []
+    conda_prefix = os.environ.get("CONDA_PREFIX", "").strip()
+    if conda_prefix:
+        prefix = Path(conda_prefix)
+        if prefix.parent.name == "envs":
+            candidates.append(prefix.parent.parent / "bin" / "7z")
+        candidates.append(prefix / "bin" / "7z")
+
+    which_7z = shutil.which("7z")
+    if which_7z:
+        candidates.append(Path(which_7z))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.expanduser()
+        if candidate in seen or not candidate.exists():
+            continue
+        seen.add(candidate)
+        return str(candidate)
+
+    return "7z"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data-dir", default="data", help="Project data/ directory (default: data)")
@@ -82,6 +111,11 @@ def parse_args() -> argparse.Namespace:
                         "(default: direct)")
     p.add_argument("--archive-name", default="bundle-a3f9.7z",
                    help="Output archive filename (default: bundle-a3f9.7z)")
+    p.add_argument("--archive-layout", choices=["single", "opaque-shards"], default="single",
+                   help="Archive layout. 'single' keeps the current one logical archive, optionally split "
+                        "into volumes. 'opaque-shards' writes independent obfuscated shard archives named "
+                        "<archive-stem>.0001.7z, <archive-stem>.0002.7z, ...; with --volume-size each shard "
+                        "can still be split into .001 volumes (default: single)")
     p.add_argument("--archive-dir", default="data/_bundles",
                    help="Directory to write the archive to (default: data/_bundles)")
     p.add_argument("--hf-repo", default="tung-thesis",
@@ -125,6 +159,10 @@ def parse_args() -> argparse.Namespace:
         p.error("--tail-threshold must be > 0 and <= 1")
     if args.bundle_mode != "full" and args.stage_mode != "direct":
         p.error("--stage-mode is only supported with --bundle-mode full")
+    if args.archive_layout == "opaque-shards" and args.bundle_mode != "full":
+        p.error("--archive-layout opaque-shards is only supported with --bundle-mode full")
+    if args.archive_layout == "opaque-shards" and args.stage_mode != "symlink":
+        p.error("--archive-layout opaque-shards requires --stage-mode symlink")
     default_workers = _workers_from_cpu_fraction(args.cpu_fraction)
     if args.workers is None:
         args.workers = default_workers
@@ -270,8 +308,9 @@ def run_7z(
         source = source if source.is_absolute() else Path.cwd() / source
         rels.append(str(source.absolute().relative_to(workdir)))
     volume_args = [f"-v{volume_size}"] if volume_size else []
+    seven_zip = resolve_7z_executable()
     cmd = [
-        "7z",
+        seven_zip,
         "a",
         "-t7z",
         "-mhe=on",
@@ -284,7 +323,7 @@ def run_7z(
     ]
     volume_display = f" -v{volume_size}" if volume_size else ""
     print(
-        "  $ 7z a -t7z -mhe=on -p<DATA_PASSWORD> "
+        f"  $ {seven_zip} a -t7z -mhe=on -p<DATA_PASSWORD> "
         f"-mx={compression_level} -mmt={archive_threads}{volume_display} "
         f"{archive.name} {' '.join(rels)}"
     )
@@ -299,6 +338,14 @@ def archive_outputs(archive: Path, volume_size: str | None) -> list[Path]:
     return []
 
 
+def opaque_shard_archive(archive: Path, shard_index: int) -> Path:
+    return archive.parent / f"{archive.stem}.{shard_index:04d}.7z"
+
+
+def opaque_shard_outputs(archive: Path) -> list[Path]:
+    return sorted(archive.parent.glob(f"{archive.stem}.[0-9][0-9][0-9][0-9].7z*"))
+
+
 def discover_existing_archives(archive: Path) -> list[Path]:
     parts = sorted(archive.parent.glob(f"{archive.name}.[0-9][0-9][0-9]"))
     if parts:
@@ -306,6 +353,10 @@ def discover_existing_archives(archive: Path) -> list[Path]:
     if archive.exists():
         return [archive]
     return []
+
+
+def discover_existing_opaque_shards(archive: Path) -> list[Path]:
+    return opaque_shard_outputs(archive)
 
 
 def print_archive_summary(archives: list[Path]) -> None:
@@ -320,6 +371,12 @@ def remove_archive_outputs(archive: Path) -> None:
     print(f"Removing old archive output(s) for {archive.name} in {archive.parent}", flush=True)
     archive.unlink(missing_ok=True)
     for part in archive.parent.glob(f"{archive.name}.[0-9][0-9][0-9]"):
+        part.unlink()
+
+
+def remove_opaque_shard_outputs(archive: Path) -> None:
+    print(f"Removing old opaque shard output(s) for {archive.stem}.NNNN.7z in {archive.parent}", flush=True)
+    for part in opaque_shard_outputs(archive):
         part.unlink()
 
 
@@ -350,11 +407,25 @@ def full_symlink_stage_sources(sources: list[Path], stage_root: Path) -> list[Pa
     staged_sources = []
     print(f"Full symlink stage -> {stage_root}")
     for source in sources:
-        link = stage_root / source.name
-        target = source.resolve()
-        link.symlink_to(target, target_is_directory=target.is_dir())
-        staged_sources.append(link)
-        print(f"  {link.name} -> {target}")
+        if source.is_dir():
+            staged_root = stage_root / source.name
+            staged_root.mkdir()
+            for child in sorted(source.iterdir(), key=lambda path: path.name):
+                staged_child = staged_root / child.name
+                if child.is_dir():
+                    target = child.resolve()
+                    staged_child.symlink_to(target, target_is_directory=True)
+                    print(f"  {source.name}/{child.name} -> {target}")
+                else:
+                    shutil.copy2(child, staged_child, follow_symlinks=True)
+                    print(f"  {source.name}/{child.name} copied")
+                staged_sources.append(staged_child)
+            continue
+
+        staged_file = stage_root / source.name
+        shutil.copy2(source, staged_file, follow_symlinks=True)
+        staged_sources.append(staged_file)
+        print(f"  {staged_file.name} copied")
     return staged_sources
 
 
@@ -387,6 +458,69 @@ def archive_sources(
     archives = archive_outputs(archive, volume_size)
     if not archives:
         sys.exit(f"No archive outputs found for {archive}")
+    print_archive_summary(archives)
+    return archives
+
+
+def opaque_shard_source_groups(sources: list[Path], workdir: Path) -> list[list[Path]]:
+    workdir = workdir.absolute()
+    shard_groups: list[list[Path]] = []
+    small_groups: dict[str, list[Path]] = {}
+
+    for source in sorted(sources, key=lambda path: str(path)):
+        source_abs = source.absolute()
+        rel = source_abs.relative_to(workdir)
+        top = rel.parts[0] if rel.parts else source.name
+        if len(rel.parts) == 2 and rel.parts[1] == "files" and source.is_dir():
+            for child in sorted(source.iterdir(), key=lambda path: path.name):
+                shard_groups.append([child])
+            continue
+        small_groups.setdefault(top, []).append(source)
+
+    shard_groups.extend(small_groups[key] for key in sorted(small_groups))
+    return shard_groups
+
+
+def archive_opaque_shards(
+    sources: list[Path],
+    *,
+    archive: Path,
+    data_dir: Path,
+    args: argparse.Namespace,
+    volume_size: str | None,
+    workdir: Path | None = None,
+) -> list[Path]:
+    if args.archive_threads < 1:
+        sys.exit("--archive-threads must be >= 1")
+
+    password = require_env("DATA_PASSWORD")
+    shard_workdir = workdir or data_dir.resolve()
+    groups = opaque_shard_source_groups(sources, shard_workdir)
+    if not groups:
+        sys.exit("No source groups found for opaque shard archive layout")
+
+    remove_archive_outputs(archive)
+    remove_opaque_shard_outputs(archive)
+
+    archives: list[Path] = []
+    print(f"Archiving {len(groups)} independent opaque shard(s) -> {archive.parent}")
+    for shard_index, group in enumerate(groups, start=1):
+        shard_archive = opaque_shard_archive(archive, shard_index)
+        print(f"Shard {shard_index:04d}/{len(groups):04d} -> {shard_archive.name}")
+        run_7z(
+            shard_archive,
+            group,
+            password,
+            shard_workdir,
+            args.compression_level,
+            args.archive_threads,
+            volume_size,
+        )
+        shard_outputs = archive_outputs(shard_archive, volume_size)
+        if not shard_outputs:
+            sys.exit(f"No archive outputs found for {shard_archive}")
+        archives.extend(shard_outputs)
+
     print_archive_summary(archives)
     return archives
 
@@ -492,13 +626,22 @@ def build_archives(args: argparse.Namespace, data_dir: Path, archive: Path, volu
         if args.stage_mode == "symlink":
             stage_root = data_dir / "_bundle_stage" / archive.stem
             staged_sources = full_symlink_stage_sources(sources, stage_root)
+            if args.archive_layout == "opaque-shards":
+                return archive_opaque_shards(
+                    staged_sources,
+                    archive=archive,
+                    data_dir=data_dir,
+                    args=args,
+                    volume_size=volume_size,
+                    workdir=stage_root.absolute(),
+                )
             return archive_sources(
                 staged_sources,
                 archive=archive,
                 data_dir=data_dir,
                 args=args,
                 volume_size=volume_size,
-                workdir=stage_root.resolve(),
+                workdir=stage_root.absolute(),
             )
         return archive_sources(sources, archive=archive, data_dir=data_dir, args=args, volume_size=volume_size)
 
@@ -629,7 +772,10 @@ def main() -> int:
     volume_size = None if args.single_archive else args.volume_size
 
     if args.upload_existing:
-        archives = discover_existing_archives(archive)
+        if args.archive_layout == "opaque-shards":
+            archives = discover_existing_opaque_shards(archive)
+        else:
+            archives = discover_existing_archives(archive)
         if not archives:
             sys.exit(f"No existing archive outputs found for {archive}")
         print(f"Using existing archive output(s) from {archive.parent}")
