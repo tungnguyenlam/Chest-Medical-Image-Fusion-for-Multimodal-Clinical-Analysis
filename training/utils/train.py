@@ -56,17 +56,21 @@ def train_step(model, criterion, batch, device: torch.device, precision: str | N
     with precision_context(device, precision):
         pred = model(data)
         # A model may return (logits, aux_loss) -- e.g. the background-attention
-        # penalty on the v5 bgpenalty variant. Add the (already-scaled) aux term to
-        # the criterion. Models that return a bare tensor are unaffected.
+        # penalty on the v5 bgpenalty variant. The aux term is a dimensionless
+        # regularizer (already scaled by its own lambda); we scale it by the detached
+        # criterion loss below. Models that return a bare tensor are unaffected.
         aux_loss = None
         if isinstance(pred, tuple):
             pred, aux_loss = pred
         loss = criterion(pred, label)
-        # The aux term is a training-only regularizer; fold it in for the backward pass
-        # but leave it out of validation so val/loss stays the pure criterion loss
-        # (comparable across variants and not double-counting the penalty).
+        # Couple the aux term to the DETACHED criterion loss so it stays a fixed fraction
+        # of the classification objective across all of training (the criterion shrinks
+        # as the model converges; an un-coupled penalty would grow to dominate the tail).
+        # detach() keeps the coupling from distorting the classification gradient -- it
+        # only sets the penalty's scale. Training-only: left out of validation so
+        # val/loss stays the pure criterion loss (comparable across variants).
         if aux_loss is not None and include_aux:
-            loss = loss + aux_loss
+            loss = loss + loss.detach() * aux_loss
     return loss, pred, label
 
 

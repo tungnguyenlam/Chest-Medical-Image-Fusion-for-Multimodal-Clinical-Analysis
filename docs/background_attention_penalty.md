@@ -34,8 +34,12 @@ $$
 F \in \mathbb{R}^{(B\cdot S)\times C \times H \times W}
 $$
 
-— in [`CaMCheXV2NanoVitalsModel.forward`](../src/model/CaMCheXV2NanoVitalsModel.py),
-this is the `feats` tensor right after `image_encoder`. Here $B$ = batch,
+— in [`PriorAwareV5NanoModel._encode_image_block`](../src/model/PriorAwareV5NanoModel.py),
+this is the `content` tensor: the `image_proj` output taken **before the positional
+encoding and segment embedding are added**. Those two are a large,
+content-independent energy floor (the same for every cell no matter what the image
+shows); penalizing them would just punish position, so we exclude them and act only
+on the image-feature energy the model controls. Here $B$ = batch,
 $S$ = views per study, $C$ = channels (feature dimension), and $H\times W$ is a
 small spatial grid (e.g. $8\times 8$). **Crucially, each of the $H\times W$ cells
 still corresponds to a patch of the original image** — cell $(i,j)$ summarizes a
@@ -81,69 +85,99 @@ a **partial weight**, proportional to how much background it actually contains.
 
 ## 3. The penalty term
 
-Penalize activation energy **weighted by how much background each cell holds**:
+Penalize the **fraction of total feature energy that sits in background cells**:
 
 $$
 \boxed{\;
 \mathcal{L}_{\text{bg}}
 \;=\;
 \frac{\displaystyle\sum_{i,j}\widetilde{M}_{i,j}\,E_{i,j}}
-     {\displaystyle\sum_{i,j}\widetilde{M}_{i,j} \;+\; \varepsilon}
+     {\displaystyle\sum_{i,j} E_{i,j} \;+\; \varepsilon}
+\;\in\;[0,1]
 \;}
 $$
 
-(averaged over the batch; $\varepsilon$ is a tiny constant so an image with **no**
-background — no bars, nothing flagged — gives $\mathcal{L}_{\text{bg}}=0$ instead
-of dividing by zero).
+(sums run over all *valid* cells of the batch; $\varepsilon$ is a tiny constant so
+an all-silent grid gives $0$ instead of dividing by zero).
+
+The denominator changed from "total background weight" to **total energy**. That one
+change is what makes $\mathcal{L}_{\text{bg}}$ a **dimensionless ratio in $[0,1]$**:
+*"of all the energy the encoder produces, what fraction is it spending on
+background?"* This matters because it is now **scale-free** — independent of the
+feature magnitude, the channel count $C$, the grid size, and the batch size. (The
+earlier form normalized by background weight only, so its value scaled with the raw
+feature magnitude — which on this model is dominated by an arbitrary, content-free
+positional/segment floor of order several hundred. That made the absolute penalty
+huge and impossible to weight intuitively; see §5.)
 
 Term by term:
 
 | symbol | meaning | effect in the sum |
 |---|---|---|
-| $E_{i,j}$ | encoder's response at cell $(i,j)$ | the thing we want small in background |
-| $\widetilde{M}_{i,j}$ | fraction of that cell that is background | gates the penalty: $0$ over anatomy ⇒ **anatomy contributes nothing** |
-| denominator | total background weight | normalizes, so the value is "mean energy *per unit of background*", not "more bars ⇒ bigger number" |
+| $E_{i,j}$ | encoder's response at cell $(i,j)$ (content features only) | the thing we want small in background |
+| $\widetilde{M}_{i,j}$ | fraction of that cell that is background | gates the numerator: $0$ over anatomy ⇒ **anatomy contributes nothing to the penalty** |
+| denominator | total energy over all valid cells | turns the term into a *fraction*, so the value answers "how much of my energy is background-bound" |
 
 Because $\widetilde{M}_{i,j}=0$ on every anatomy cell, those cells are
-**multiplied out of the sum entirely**. The penalty literally cannot see, reward,
-or punish what happens over the lungs/heart/chest wall. The mask's guarantee
+**multiplied out of the numerator entirely**. The penalty cannot reward or punish
+what happens over the lungs/heart/chest wall; it only measures how much of the
+total energy leaked into the confident-background frame. The mask's guarantee
 (never flags anatomy) is inherited directly by the loss.
 
 ---
 
 ## 4. How it joins training
 
-The total loss is the usual classification loss plus this term, scaled by a
-single knob $\lambda$:
+The total loss is the classification loss plus this term, and we want the penalty
+to stay a **fixed fraction of the classification loss** $\mathcal{L}_{\text{cls}}$
+throughout training. So we scale it by the *detached* classification loss:
 
 $$
-\mathcal{L} \;=\; \mathcal{L}_{\text{cls}} \;+\; \lambda\,\mathcal{L}_{\text{bg}} .
+\mathcal{L} \;=\; \mathcal{L}_{\text{cls}} \;+\;
+\lambda\,\operatorname{sg}[\mathcal{L}_{\text{cls}}]\,\mathcal{L}_{\text{bg}},
 $$
+
+where $\operatorname{sg}[\cdot]$ is stop-gradient (`.detach()` in
+[`train_step`](../training/utils/train.py)). Read it as: the penalty contributes at
+most $\lambda$ of the classification loss (it reaches exactly $\lambda\,\mathcal{L}_{\text{cls}}$
+only if *all* energy is background-bound, $\mathcal{L}_{\text{bg}}=1$), and
+proportionally less when the model already keeps background quiet.
 
 - $\lambda = 0$ → the term vanishes; training is exactly as before (this is the
   default — the feature is opt-in).
 - $\lambda > 0$ → at every step the optimizer gets a gradient that nudges the
   encoder's weights to **lower the energy it produces in background cells.**
 
+**Why detach the classification loss?** Two reasons. (1) Without it, a fixed
+$\lambda$ does *not* give a fixed ratio: $\mathcal{L}_{\text{cls}}$ falls as the
+model converges (e.g. $0.1 \to 0.03$) while $\mathcal{L}_{\text{bg}}$ does not, so an
+uncoupled penalty would grow to *dominate* the converged tail — exactly when you
+want it to fade. (2) The stop-gradient means the coupling only sets the penalty's
+*scale*; it injects no gradient into the classifier through that $\mathcal{L}_{\text{cls}}$
+factor, so the classification objective itself is untouched.
+
 ### What the gradient actually does
 
-For any feature value $F_{c,i,j}$ sitting in a background cell, the term's
-gradient is
+Because $\mathcal{L}_{\text{bg}}$ is now a ratio (numerator $N=\sum\widetilde{M}E$
+over denominator $D=\sum E$), the gradient for a feature $F_{c,i,j}$ is
 
 $$
 \frac{\partial \mathcal{L}_{\text{bg}}}{\partial F_{c,i,j}}
-\;\propto\; \widetilde{M}_{i,j}\,\cdot\, 2\,F_{c,i,j}.
+\;=\; \frac{2\,F_{c,i,j}}{D}\,\bigl(\widetilde{M}_{i,j} - \mathcal{L}_{\text{bg}}\bigr).
 $$
 
-Plain reading: **push that feature toward zero, with a strength proportional to
-how much background the cell contains.** Over anatomy ($\widetilde{M}=0$) the push
-is exactly zero. At a half-background edge cell the push is half-strength. In the
-black bar it's full-strength. This is the "soft, fractional, asymmetric"
-behaviour we wanted, falling straight out of the formula.
+Plain reading: a cell is pushed **quieter** when its background fraction
+$\widetilde{M}_{i,j}$ exceeds the current overall background fraction
+$\mathcal{L}_{\text{bg}}$ (the black bars, the corners), and is left alone — or
+gently *encouraged* — where $\widetilde{M}_{i,j}<\mathcal{L}_{\text{bg}}$ (anatomy,
+$\widetilde{M}=0$). So the model minimizes the term by **moving energy out of the
+background and into the body**, not merely by going globally silent. Over pure
+anatomy the only effect is the mild "use me instead" pull from the denominator;
+the numerator still cannot single out or punish any anatomy cell.
 
 ---
 
-## 5. Why $\lambda$ must be small
+## 5. Why $\lambda$ stays modest
 
 The mask is excellent on the collimation/black-bar side but has **rare false
 positives** on the saturated-white side (it occasionally clips real tissue —
@@ -151,18 +185,21 @@ chin, neck, upper abdomen — sitting right at the image edge). On those rare ce
 $\widetilde{M}>0$ even though it's really anatomy, so the penalty *would* push
 down a legitimate feature.
 
-A small $\lambda$ is the safety margin:
+A modest $\lambda$ is the safety margin. Now that $\lambda$ is the penalty's size
+**as a fraction of the classification loss** (§4), it reads directly as a budget:
 
-- **Where the mask is right** (the common case): a steady, gentle pressure across
-  thousands of steps still adds up to "stop using the bars."
+- **Where the mask is right** (the common case): a steady pressure capped at
+  $\lambda\cdot\mathcal{L}_{\text{cls}}$ across thousands of steps still adds up to
+  "stop using the bars."
 - **Where the mask is wrong** (rare edge tissue): the push is too weak to teach
   the model to ignore that tissue, so we don't trade the background bias for a
   *new* "ignore the lower chest" bias.
 
-In other words: we trust the mask enough to nudge, not enough to shove. We'll
-start around $\lambda = 0.01$ and tune by watching (a) val AUC doesn't drop,
-especially on off-lung classes, and (b) the Grad-CAMs stop lighting up the
-corners.
+In other words: we trust the mask enough to nudge, not enough to shove. We start at
+$\lambda = 0.1$ (the penalty is at most ~10% of the ASL loss, and proportionally
+less once little energy is background-bound) and tune by watching (a) val AUC
+doesn't drop, especially on off-lung classes, and (b) the Grad-CAMs stop lighting
+up the corners.
 
 ---
 
@@ -192,7 +229,11 @@ corners.
 1. Mask $M$ = where the background is (you've verified it).
 2. Average-pool it to the feature grid → $\widetilde{M}$ = *fraction of each cell
    that is background*.
-3. Penalize $\widetilde{M}\cdot(\text{feature energy})$, normalized.
-4. Add $\lambda$ × that to the loss; $\lambda$ small.
-5. Anatomy cells have $\widetilde{M}=0$, so they're untouchable by construction;
-   only confident-background cells feel a gentle "go quiet" pressure.
+3. Penalty = **fraction of total feature energy that sits in background**:
+   $\mathcal{L}_{\text{bg}} = \sum\widetilde{M}E / \sum E \in [0,1]$, using only the
+   content features (pre positional/segment), so it's scale-free.
+4. Add $\lambda\cdot\operatorname{sg}[\mathcal{L}_{\text{cls}}]\cdot\mathcal{L}_{\text{bg}}$
+   to the loss: the penalty is pinned at $\le\lambda$ of the classification loss
+   throughout training. Start $\lambda = 0.1$.
+5. Anatomy cells have $\widetilde{M}=0$, so they can never be *punished*; the model
+   minimizes the term by moving energy out of the background frame into the body.

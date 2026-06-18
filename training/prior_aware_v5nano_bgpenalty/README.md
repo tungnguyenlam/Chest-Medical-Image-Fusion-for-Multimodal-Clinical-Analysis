@@ -19,26 +19,32 @@ emission in the dataloader.
    through the **same augmentation transform** as the image, so it stays aligned
    under rotation/crop/flip. Stored at 32×32 per view in `data["bg_mask"]`.
 2. **Penalty.** The model average-pools `M` to its encoder grid (so each cell gets
-   the *fraction* of it that is background), then penalizes the pre-LayerNorm
-   feature energy there:
-   `L_bg = Σ M̃·‖F‖² / Σ M̃`. Anatomy cells have `M̃ = 0`, so they are
-   mathematically untouchable.
-3. **Loss.** `L = L_cls + λ·L_bg`. `train_step` adds the (already λ-scaled) term
-   the model returns alongside its logits.
+   the *fraction* of it that is background), then computes the **fraction of total
+   image-feature energy that lands in background**:
+   `L_bg = Σ M̃·‖F‖² / Σ ‖F‖² ∈ [0,1]`. `‖F‖²` is the energy of the *content*
+   features only (the `image_proj` output, before the positional/segment embeddings,
+   which are a content-independent floor). Being a ratio, `L_bg` is scale-free.
+   Anatomy cells have `M̃ = 0`, so they never enter the numerator.
+3. **Loss.** `L = L_cls + λ·sg[L_cls]·L_bg`, where `sg[·]` is `.detach()`. The
+   penalty is therefore pinned at **at most λ of the classification loss**
+   throughout training (proportionally less when little energy is background-bound).
+   `train_step` applies the `sg[L_cls]` factor; the model returns `λ·L_bg`.
 
-## Why λ is small (default `0.01`)
+## Why λ is modest (default `0.1`)
 
+`λ` is now the penalty's size *as a fraction of the ASL loss* — `0.1` ⇒ at most ~10%.
 The mask is near-perfect on the black-bar/collimation side but has **rare false
-positives** on saturated edge tissue (chin/neck/upper abdomen at the frame). A
-gentle λ steadily discourages the shortcut where the mask is right, without
-punishing the model hard enough to learn "ignore the lower chest" where it's
-wrong. Tune by watching: (a) val AUC holds — especially off-lung classes
-(Support Devices, Pneumomediastinum, Subcutaneous Emphysema, Fracture) — and
-(b) Grad-CAMs stop firing on the corners.
+positives** on saturated edge tissue (chin/neck/upper abdomen at the frame). A 10%
+ceiling steadily discourages the shortcut where the mask is right, without punishing
+the model hard enough to learn "ignore the lower chest" where it's wrong. Tune by
+watching: (a) val AUC holds — especially off-lung classes (Support Devices,
+Pneumomediastinum, Subcutaneous Emphysema, Fracture) — and (b) Grad-CAMs stop firing
+on the corners.
 
 ## Config knobs
 
-- `model.model_init_args.background_penalty_lambda` — penalty strength (`0.0` = off).
+- `model.model_init_args.background_penalty_lambda` — penalty size as a fraction of
+  the classification loss (`0.0` = off, `0.1` = up to ~10% of ASL).
 - `data.datamodule_cfg.compute_bg_mask` — must be `true` when lambda `> 0`.
 - `data.datamodule_cfg.bg_mask_cfg` — optional `BodyMaskConfig` overrides
   (e.g. `{bright_frac: 0.99}` to tighten the white gate).

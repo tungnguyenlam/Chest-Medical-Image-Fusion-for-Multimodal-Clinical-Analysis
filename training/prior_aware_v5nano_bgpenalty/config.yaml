@@ -94,13 +94,17 @@ model:
     #   so focal evidence reaches the classifier even if fusion dilutes it.
     highres_skip: true
     # ---- background-attention penalty (this family's added knob) ----
-    # >0 penalizes current-image feature energy in confident-background cells
-    # (outside-patient frame/corners), discouraging the shortcut where the model
-    # draws evidence from the image margins. Kept deliberately SMALL: the mask has
-    # rare false positives on saturated edge tissue, so a gentle nudge avoids
-    # teaching the model to ignore legitimate edge anatomy. See
-    # docs/background_attention_penalty.md. 0.0 == base prior_aware_v5nano.
-    background_penalty_lambda: 0.01
+    # >0 penalizes the FRACTION of current-image feature energy that lands in
+    # confident-background cells (outside-patient frame/corners), discouraging the
+    # shortcut where the model draws evidence from the image margins. The value is the
+    # penalty's target size as a fraction of the classification (ASL) loss: 0.1 => the
+    # penalty is at most ~10% of the ASL loss (proportionally less when little energy
+    # sits in background), held at that ratio across training via the detached-loss
+    # coupling in train_step. Kept modest: the mask has rare false positives on
+    # saturated edge tissue, so a 10% ceiling nudges without teaching the model to
+    # ignore legitimate edge anatomy. See docs/background_attention_penalty.md.
+    # 0.0 == base prior_aware_v5nano.
+    background_penalty_lambda: 0.1
   optimizer_init_args:
     weight_decay: 0.01
     betas: [0.9, 0.999]

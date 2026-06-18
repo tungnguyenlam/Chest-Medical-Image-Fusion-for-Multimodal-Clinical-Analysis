@@ -137,7 +137,9 @@ class PriorAwareV5NanoModel(nn.Module):
         self.highres_skip = highres_skip
         # >0 turns on the confident-background attention penalty: discourage current
         # image features that land on outside-patient cells (see docs/background_attention_penalty.md).
-        # 0.0 = exactly the base v5 behaviour (forward returns only logits).
+        # It is the penalty's target size as a fraction of the classification loss (e.g.
+        # 0.1 => at most ~10% of the ASL loss), pinned via the detached-loss coupling in
+        # train_step. 0.0 = exactly the base v5 behaviour (forward returns only logits).
         self.background_penalty_lambda = float(background_penalty_lambda)
         self.register_buffer("text_embedding_table", None, persistent=False)
 
@@ -244,10 +246,12 @@ class PriorAwareV5NanoModel(nn.Module):
         x: torch.Tensor,
         view_positions: torch.Tensor,
         view_seg_indices: tuple[int, int, int, int],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return_content: bool = False,
+    ) -> tuple[torch.Tensor, ...]:
         b, s = x.shape[:2]
         feats, nonzero_mask = self.image_encoder(x, view_positions)
         feats = self.image_proj(feats)
+        content = feats  # projected image features BEFORE positional/segment (the part the model controls)
         feats = self.pos_encoding(feats)
         h2, w2 = feats.shape[2], feats.shape[3]
 
@@ -258,7 +262,14 @@ class PriorAwareV5NanoModel(nn.Module):
         seg = einops.repeat(seg_for_views, "s c 1 1 -> (b s) c h w", b=b, h=h2, w=w2).type_as(feats)
         pad_tokens[nonzero_mask] = feats + seg[nonzero_mask]
         block = einops.rearrange(pad_tokens, "(b s) c h w -> b s c h w", b=b, s=s)
-        return block, nonzero_mask.view(b, s)
+        if not return_content:
+            return block, nonzero_mask.view(b, s)
+        # Scatter the pre-pos/segment features into a full (B,S,C,H,W) grid (zeros at
+        # padded views) so the background penalty sees only model-controlled energy.
+        content_block = torch.zeros_like(pad_tokens)
+        content_block[nonzero_mask] = content
+        content_block = einops.rearrange(content_block, "(b s) c h w -> b s c h w", b=b, s=s)
+        return block, nonzero_mask.view(b, s), content_block
 
     def enable_input_normalization(self, mean, std) -> None:
         """Normalize raw uint8 image batches on-device (see ConvNeXtV2NanoImageEncoder).
@@ -307,38 +318,60 @@ class PriorAwareV5NanoModel(nn.Module):
         return latents, None
 
     def _background_penalty(
-        self, cur_block: torch.Tensor, cur_slot_valid: torch.Tensor, bg_mask: torch.Tensor
+        self, cur_content: torch.Tensor, cur_slot_valid: torch.Tensor, bg_mask: torch.Tensor
     ) -> torch.Tensor:
-        """Mean current-image feature energy in confident-background cells.
+        """Fraction of current-image feature energy that lands in confident-background cells.
 
-        ``cur_block`` (B,S,C,H,W) is the PRE-LayerNorm image grid (energy is only
-        meaningful pre-norm; LayerNorm would flatten every token to ~unit norm).
+        ``cur_content`` (B,S,C,H,W) is the projected image grid taken BEFORE the
+        positional encoding and segment embedding are added. Those two are a large,
+        content-independent energy floor (identical for every cell regardless of what
+        the image shows), so including them would dominate the denominator and make the
+        ratio nearly insensitive to what the model actually learns. We penalize only the
+        image-feature energy the model controls.
+
         ``bg_mask`` (B,S,G,G) is the per-view confident-background weight; we
-        average-pool it to the (H,W) grid so each cell's weight is the fraction of
-        it that is background. Invalid (padded) views are zeroed via ``cur_slot_valid``.
-        See docs/background_attention_penalty.md for the full derivation.
+        average-pool it to the (H,W) grid so each cell's weight is the fraction of it
+        that is background. Invalid (padded) views are zeroed via ``cur_slot_valid``.
+
+        Returns a dimensionless scalar in [0, 1]: (energy in background) / (total
+        energy). Being a ratio it is scale-free -- independent of feature magnitude,
+        channel count, grid size and batch size -- so the caller's weight maps directly
+        onto "what fraction of the image-feature energy is background", and (with the
+        detached-loss coupling in train_step) onto "what fraction of the classification
+        loss is this penalty". See docs/background_attention_penalty.md.
         """
-        b, s, c, h, w = cur_block.shape
-        energy = cur_block.pow(2).sum(dim=2)                                  # (B,S,H,W)
-        bg = bg_mask.to(cur_block.dtype).reshape(b * s, 1, bg_mask.shape[-2], bg_mask.shape[-1])
-        bg = F.adaptive_avg_pool2d(bg, (h, w)).reshape(b, s, h, w)            # (B,S,H,W) fractional weight
-        weight = bg * cur_slot_valid.to(cur_block.dtype).view(b, s, 1, 1)
-        return (weight * energy).sum() / (weight.sum() + 1e-6)
+        b, s, c, h, w = cur_content.shape
+        energy = cur_content.pow(2).sum(dim=2)                               # (B,S,H,W)
+        valid = cur_slot_valid.to(cur_content.dtype).view(b, s, 1, 1)
+        bg = bg_mask.to(cur_content.dtype).reshape(b * s, 1, bg_mask.shape[-2], bg_mask.shape[-1])
+        bg = F.adaptive_avg_pool2d(bg, (h, w)).reshape(b, s, h, w)           # (B,S,H,W) fractional weight
+        bg_energy = (bg * valid * energy).sum()
+        total_energy = (valid * energy).sum()
+        return bg_energy / (total_energy + 1e-6)
 
     # ---- forward ----------------------------------------------------------
     def forward(self, data: dict):
         # ---- current branch (tgt) ----------------------------------------
-        cur_block, cur_slot_valid = self._encode_image_block(
-            data["img"], data["view_positions"], SEG_CUR_VIEWS
+        want_bg = self.background_penalty_lambda > 0.0 and "bg_mask" in data
+        enc = self._encode_image_block(
+            data["img"], data["view_positions"], SEG_CUR_VIEWS, return_content=want_bg
         )
+        if want_bg:
+            cur_block, cur_slot_valid, cur_content = enc
+        else:
+            cur_block, cur_slot_valid = enc
         b, s_img, cdim, h2, w2 = cur_block.shape
         cur_img_tokens = einops.rearrange(cur_block, "b s c h w -> b (s h w) c")
 
-        # Confident-background attention penalty (opt-in; pre-norm energy).
+        # Confident-background attention penalty (opt-in). Penalize the dimensionless
+        # FRACTION of image-feature energy the model places in outside-patient cells.
+        # The lambda is the penalty's target size *as a fraction of the classification
+        # loss*; the detached-loss-ratio coupling that pins that ratio lives in
+        # train_step. See docs/background_attention_penalty.md.
         bg_penalty = None
-        if self.background_penalty_lambda > 0.0 and "bg_mask" in data:
+        if want_bg:
             bg_penalty = self.background_penalty_lambda * self._background_penalty(
-                cur_block, cur_slot_valid, data["bg_mask"]
+                cur_content, cur_slot_valid, data["bg_mask"]
             )
 
         cur_clin_cls = self._encode_text(data["clin_input_ids"], data["clin_attn_mask"])
@@ -443,8 +476,9 @@ class PriorAwareV5NanoModel(nn.Module):
             tgt_pad = torch.cat([tgt_pad, torch.zeros(b, 1, dtype=torch.bool, device=tgt.device)], dim=1)
 
         logits = self.head(x, tgt_pad)
-        # When the background penalty is active, hand it back as an auxiliary loss
-        # (train_step adds it to the criterion). Otherwise behave exactly like base v5.
+        # When the background penalty is active, hand back the dimensionless penalty
+        # (already multiplied by its lambda) as an auxiliary loss; train_step scales it
+        # by the detached criterion loss and adds it. Otherwise behave exactly like base v5.
         if bg_penalty is not None:
             return logits, bg_penalty
         return logits
