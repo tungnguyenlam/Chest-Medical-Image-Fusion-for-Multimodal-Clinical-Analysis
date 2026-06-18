@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -351,9 +352,9 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     # EMA is initialised after weights are loaded (resume/checkpoint_path) and after
     # compile, so the shadow tracks the same parameters the optimizer updates.
     ema_enabled = bool(resolve_trainer_arg(args, cfg, "ema", False))
+    ema_decay = float(resolve_trainer_arg(args, cfg, "ema_decay", 0.999))
     ema: ModelEMA | None = None
     if ema_enabled:
-        ema_decay = float(resolve_trainer_arg(args, cfg, "ema_decay", 0.999))
         ema = ModelEMA(model, ema_decay)
         print(f"[ema] enabled decay={ema_decay} (EMA weights are evaluated and saved)")
 
@@ -428,6 +429,25 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     early_stop_min_delta = float(resolve_trainer_arg(args, cfg, "early_stop_min_delta", 0.0) or 0.0)
     if early_stop_min_delta < 0:
         raise ValueError("early_stop_min_delta must be >= 0")
+
+    # Two-stage exploration -> exploitation. When enabled, the FIRST time early stopping
+    # fires we do NOT stop: we roll back to the best epoch's weights and switch the LR
+    # schedule to a single monotone CosineAnnealingLR decay for the rest of the budget
+    # (exploitation). This is meant to pair with schedule=warm_restarts in stage 1: the
+    # per-epoch sawtooth explores, early stopping detects it has stopped finding better
+    # basins, and stage 2 lets the model finally settle into the best one. Early stopping
+    # stays armed in stage 2, but the rollback happens only once (guarded by `stage`).
+    two_stage = bool(resolve_trainer_arg(args, cfg, "two_stage_exploitation", False))
+    # eta_min for the stage-2 cosine, as a fraction of lr (defaults to the stage-1 floor).
+    stage2_eta_min_factor = float(
+        resolve_trainer_arg(args, cfg, "stage2_eta_min_factor", sched_kwargs.get("eta_min_factor", 0.1))
+    )
+    stage = 1
+    if two_stage and not early_stop_patience:
+        raise ValueError(
+            "two_stage_exploitation requires early_stop_patience > 0 (the early-stop trigger is "
+            "what ends the exploration phase and starts exploitation)."
+        )
 
     quick_val_every_steps = resolve_trainer_arg(args, cfg, "quick_val_every_steps", None)
     quick_val_frac = float(resolve_trainer_arg(args, cfg, "quick_val_frac", 0.1) or 0.1)
@@ -834,6 +854,58 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         _maybe_dump_gradcam(epoch, epoch_path, gradcam_selection)
 
         if early_stop_patience and early_stop_bad_epochs >= early_stop_patience:
+            if two_stage and stage == 1 and best_monitor_epoch is not None:
+                # Exploration (warm restarts) has plateaued. Roll back to the best epoch and
+                # switch to a single CosineAnnealingLR decay for the remaining budget -- the
+                # exploitation phase. The warm-restart sawtooth is dropped so the model can
+                # finally settle into the basin it found instead of being re-kicked each epoch.
+                best_ckpt = checkpoint_dir / f"epoch_{best_monitor_epoch:03d}.pt"
+                tqdm.write(
+                    f"[two-stage] exploration stopped at epoch={epoch}; rolling back to best "
+                    f"epoch={best_monitor_epoch} ({early_stop_monitor}={best_monitor_value:.6f}) "
+                    f"and continuing with CosineAnnealingLR (exploitation)."
+                )
+                # Weights-only rollback: restore the best weights, then start a FRESH optimizer
+                # and scheduler. Resetting the optimizer moments is deliberate -- stage 2 is a new
+                # descent from the best point -- and it sidesteps the EMA optimizer-state mismatch
+                # that blocks a full resume of an EMA checkpoint. Load into the unwrapped module so
+                # a torch.compile wrapper's key prefixes don't break the match.
+                from .model import load_weights
+
+                load_weights(unwrap_compiled_model(model), best_ckpt)
+                # Continue the LR descent from where stage 1 left off rather than re-warming to
+                # full lr: capture the current per-group LR (what the warm-restart schedule had us
+                # at this step) and make it the cosine's starting peak.
+                current_lrs = [float(g["lr"]) for g in optimizer.param_groups]
+                optimizer = build_adamw_optimizer(model, lr=lr, **optimizer_args_from_config(cfg, args))
+                # CosineAnnealingLR reads each group's 'lr' as its base (peak) at construction, so
+                # pin the fresh optimizer's groups to the LR we just had -> cosine decays from here.
+                for group, cur in zip(optimizer.param_groups, current_lrs):
+                    group["lr"] = cur
+                remaining_epochs = max_epochs - (epoch + 1)
+                remaining_steps = max(1, steps_per_epoch * remaining_epochs)
+                stage2_eta_min = lr * stage2_eta_min_factor
+                # A warm-restart sawtooth can leave us near a cycle bottom, so the captured start
+                # LR may already sit at/below the requested floor. Keep eta_min strictly below the
+                # smallest start LR so every group still makes a monotone descent (no inversion).
+                min_start = min(current_lrs)
+                if stage2_eta_min >= min_start:
+                    stage2_eta_min = min_start * stage2_eta_min_factor
+                scheduler = CosineAnnealingLR(optimizer, T_max=remaining_steps, eta_min=stage2_eta_min)
+                # Re-seed the EMA shadow from the rolled-back weights so it tracks stage 2.
+                if ema is not None:
+                    ema = ModelEMA(model, ema_decay)
+                # Stage-2 checkpoints record single_cosine so a later --resume-from rebuilds the
+                # matching scheduler shape rather than the stage-1 warm_restarts.
+                schedule = "single_cosine"
+                stage = 2
+                early_stop_bad_epochs = 0
+                tqdm.write(
+                    f"[two-stage] stage 2: CosineAnnealingLR from lr={max(current_lrs):.2e} over "
+                    f"{remaining_steps} steps (~{remaining_epochs} epoch(s)), eta_min={stage2_eta_min:.2e}; "
+                    f"early stopping stays armed (patience={early_stop_patience})."
+                )
+                continue
             tqdm.write(
                 f"[early-stop] stopping at epoch={epoch}: {early_stop_monitor} did not improve "
                 f"for {early_stop_bad_epochs} epoch(s)"

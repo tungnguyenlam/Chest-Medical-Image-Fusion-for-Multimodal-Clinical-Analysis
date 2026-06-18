@@ -194,18 +194,22 @@ class PriorAwareAttributor(CaMCheXAttributor):
             return (key, title, batch[ids], batch[mask])
 
         cn = self.class_name_for_title
+        # "indication" = the reason-for-exam written *before* imaging (an input).
+        # "report" = the radiologist's findings/impression. Only the PRIOR report is
+        # an input — the current study's report is withheld (it would leak the labels),
+        # which is why there is deliberately no "current radiology report" panel.
         if self.has_vitals:
             return [
-                s("cur_clin", f"{cn} — current clinical indication", clin),
-                s("prv_clin", f"{cn} — prior clinical indication", pclin),
-                s("prv_report", f"{cn} — prior radiology report", prep),
+                s("cur_clin", f"{cn} — current clinical indication (reason for exam)", clin),
+                s("prv_clin", f"{cn} — prior clinical indication (reason for exam)", pclin),
+                s("prv_report", f"{cn} — prior radiology report (findings & impression)", prep),
             ]
         return [
-            s("cur_clin", f"{cn} — current clinical indication", clin),
+            s("cur_clin", f"{cn} — current clinical indication (reason for exam)", clin),
             s("cur_obs", f"{cn} — current observation/vitals text", obs),
-            s("prv_clin", f"{cn} — prior clinical indication", pclin),
+            s("prv_clin", f"{cn} — prior clinical indication (reason for exam)", pclin),
             s("prv_obs", f"{cn} — prior observation/vitals text", pobs),
-            s("prv_report", f"{cn} — prior radiology report", prep),
+            s("prv_report", f"{cn} — prior radiology report (findings & impression)", prep),
         ]
 
     # -- main entry points -----------------------------------------------------

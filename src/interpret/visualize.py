@@ -547,10 +547,12 @@ def render_prior_attribution_split(result, out_dir: str | Path, tokens_per_row: 
                                   result.class_name, out_dir / "class_distribution.png",
                                   logits=result.all_logits),
     ]
-    # text streams: one PNG per stream, named by its key (current_*/prior_*).
+    # text streams: one PNG per stream, named by its key so the current and prior
+    # panels read as a parallel set (cur_clin.png, prv_clin.png, prv_report.png).
+    # Note there is intentionally no current-report panel: the current study's
+    # radiology report is withheld as input (it would leak the labels).
     for st in result.cur_texts + result.prv_texts:
-        name = "text.png" if st.key == "cur_clin" else f"{st.key}.png"
-        paths.append(_render_token_chips(st.tokens, st.scores, st.title, out_dir / name,
+        paths.append(_render_token_chips(st.tokens, st.scores, st.title, out_dir / f"{st.key}.png",
                                          tokens_per_row=tokens_per_row, empty_msg="(no text)"))
     # vitals (Nano variants only; the base model uses obs text streams instead).
     if result.has_vitals:

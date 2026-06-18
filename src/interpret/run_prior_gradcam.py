@@ -9,7 +9,8 @@ next to the unchanged current-branch panels.
 Per class (default ``--layout split``) it writes ``<Class>/`` containing:
 
     image.png  prior_image.png            current / prior CXR Grad-CAM
-    text.png   prv_clin.png  prv_report.png   current clin / prior clin / prior report
+    cur_clin.png  prv_clin.png  prv_report.png   current indication / prior indication / prior report
+                                           (no current-report panel: it would leak the labels)
     vitals.png prior_vitals.png            (Nano variants; base model writes obs streams)
     prior_label.png                        per-class grad×value on the prior label vector
     time_delta.png                         the time-gap bucket token's contribution
