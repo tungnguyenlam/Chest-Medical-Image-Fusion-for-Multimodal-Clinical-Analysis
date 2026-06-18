@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import gridspec
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm, to_rgb
+from matplotlib.colors import LinearSegmentedColormap, Normalize, TwoSlopeNorm, to_rgb
 
 from src.interpret.attribution import VIEW_NAMES, AttributionResult
 
@@ -44,7 +44,32 @@ C_MUTED = "#a9bcce"    # neutral / below-threshold bar
 C_ZERO = "#888888"     # zero / threshold reference lines
 C_INK = "#222222"      # primary text (titles)
 C_FAINT = "0.45"       # captions / secondary annotation
-GRADCAM_CMAP = "viridis"  # perceptually uniform, colourblind-safe (was "jet")
+# Grad-CAM overlay style. "turbo" (Google's perceptual fix for "jet") gives an
+# unmistakable cold->hot ramp so salient regions read at a glance. Swap to
+# "viridis"/"magma" here if colour-blind-safety matters more than hot/cold punch.
+# The key change vs a flat overlay is the *per-pixel* alpha below: low-relevance
+# pixels (incl. background) stay transparent so the CXR shows through, instead of
+# the whole frame being washed in the colormap's low colour (the old viridis-purple).
+GRADCAM_CMAP = "turbo"
+_CAM_MAX_ALPHA = 0.78   # opacity at the hottest pixel
+_CAM_ALPHA_GAMMA = 0.7  # <1 lifts mid-relevance so warm regions ink in; near-zero stays clear
+
+
+def _overlay_cam(ax, cam, cmap_name: str = GRADCAM_CMAP):
+    """Overlay a [0,1] Grad-CAM with per-pixel alpha proportional to relevance.
+
+    A constant-alpha overlay tints every pixel — including empty background — with
+    the colormap, so you cannot tell where the model actually looked or whether it
+    leans on background. Here alpha = (relevance**gamma) * max_alpha, so background
+    and other low-relevance pixels fall away to transparent and only salient regions
+    are inked. Returns a ScalarMappable so the caller can draw a relevance colorbar.
+    """
+    cam = np.clip(np.asarray(cam, dtype=float), 0.0, 1.0)
+    cmap = plt.get_cmap(cmap_name)
+    rgba = cmap(cam)
+    rgba[..., 3] = (cam ** _CAM_ALPHA_GAMMA) * _CAM_MAX_ALPHA
+    ax.imshow(rgba, interpolation="bilinear")
+    return ScalarMappable(norm=Normalize(vmin=0.0, vmax=1.0), cmap=cmap)
 
 plt.rcParams.update({
     "figure.dpi": 140,
@@ -153,10 +178,10 @@ def _render_image_rows(views: list, header: str, out_path: str | Path,
         ax_h = axes[row, ncols - 1]
         ax_h.imshow(v.image, cmap="gray", vmin=0, vmax=1)
         if v.encoded:
-            hm = ax_h.imshow(v.cam, cmap=GRADCAM_CMAP, alpha=0.55, vmin=0, vmax=1)
+            sm = _overlay_cam(ax_h, v.cam)
             share = 100.0 * v.contribution / total
             ax_h.set_title(f"{name} — Grad-CAM ({share:.0f}% of image signal)", fontsize=10)
-            cbar = fig.colorbar(hm, ax=ax_h, fraction=0.046, pad=0.04)
+            cbar = fig.colorbar(sm, ax=ax_h, fraction=0.046, pad=0.04)
             cbar.set_label("relevance", fontsize=8)
             cbar.outline.set_visible(False)
             cbar.ax.tick_params(labelsize=7, length=0)
@@ -444,7 +469,7 @@ def render_attribution(result: AttributionResult, out_path: str | Path, tokens_p
         v = result.views[col]
         ax.imshow(v.image, cmap="gray", vmin=0, vmax=1)
         if v.encoded:
-            ax.imshow(v.cam, cmap=GRADCAM_CMAP, alpha=0.55, vmin=0, vmax=1)
+            _overlay_cam(ax, v.cam)
             ax.set_title(f"{VIEW_NAMES.get(v.view_position, '?')} ({100*v.contribution/total:.0f}%)", fontsize=10)
         else:
             ax.set_title(f"{VIEW_NAMES.get(v.view_position, '?')} (not encoded)", fontsize=10)

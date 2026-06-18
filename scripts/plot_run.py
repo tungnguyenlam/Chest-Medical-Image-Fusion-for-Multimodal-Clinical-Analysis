@@ -4,7 +4,9 @@ Reads `<run_dir>/logs/train_steps.csv` and `<run_dir>/logs/val_epochs.csv`
 (produced by training/common.py) and writes PNGs to `<run_dir>/plots/`.
 
 The LR plot shows one curve per parameter group when discriminative LR is used
-(`train/lr/<component>` columns); otherwise the single `train/lr` curve. The loss plot
+(`train/lr/<component>` columns), each annotated with its peak LR and multiplier relative
+to the highest group (so a throttled backbone reads as e.g. `0.30x`); otherwise the single
+`train/lr` curve. The loss plot
 overlays each weighted loss-component term (`train/loss/<name>` columns) on the total
 when a composite loss (e.g. `--loss FC ASL`) is in use.
 
@@ -125,20 +127,43 @@ def plot_loss(train_df: pd.DataFrame | None, val_df: pd.DataFrame | None, smooth
     _save(fig, out / "loss_curves.png")
 
 
+def _clean_group_name(name: str) -> str:
+    """Tidy a param-group label for the legend. Group names come from the optimizer as raw
+    name *prefixes* (e.g. ``image_encoder.``); strip the trailing dot/underscore and keep
+    ``base`` as-is (the freshly-initialised fusion/decoder head)."""
+    return name.rstrip("._") or name
+
+
 def plot_lr(train_df: pd.DataFrame | None, out: Path, dpi: int) -> None:
     if train_df is None or "train/lr" not in train_df.columns:
         return
-    fig, ax = plt.subplots(figsize=(9, 4), dpi=dpi)
+    fig, ax = plt.subplots(figsize=(9, 4.5), dpi=dpi)
+    x = train_df["global_step"]
     # Per-component LR curves (discriminative LR): train/lr/<component>. Fall back to the
     # single aggregate train/lr column when no per-group columns are present.
     group_cols = [c for c in train_df.columns if c.startswith("train/lr/")]
     if group_cols:
-        for col in sorted(group_cols):
-            name = col[len("train/lr/"):]
-            ax.plot(train_df["global_step"], train_df[col], linewidth=1.2, label=name)
-        ax.legend(title="param group", fontsize=8)
+        # Discriminative-LR groups are scaled copies of one schedule, so on a log axis they
+        # are near-parallel and indistinguishable by shape alone. Sort by peak LR (descending)
+        # for a stable legend, and annotate each with its peak value and multiplier relative to
+        # the highest group, so the throttled backbone (e.g. 0.30x) is obvious at a glance.
+        series = []
+        for col in group_cols:
+            vals = pd.to_numeric(train_df[col], errors="coerce")
+            peak = float(np.nanmax(vals.to_numpy())) if vals.notna().any() else float("nan")
+            series.append((col, vals, peak))
+        series.sort(key=lambda s: (np.isnan(s[2]), -s[2] if not np.isnan(s[2]) else 0.0))
+        top_peak = next((p for _, _, p in series if not np.isnan(p)), float("nan"))
+        for col, vals, peak in series:
+            name = _clean_group_name(col[len("train/lr/"):])
+            if np.isfinite(peak) and np.isfinite(top_peak) and top_peak > 0:
+                label = f"{name}  (peak {peak:.1e}, {peak / top_peak:.2f}x)"
+            else:
+                label = name
+            ax.plot(x, vals, linewidth=1.4, label=label)
+        ax.legend(title="param group (peak LR, mult)", fontsize=8)
     else:
-        ax.plot(train_df["global_step"], train_df["train/lr"], color="tab:green", linewidth=1.2)
+        ax.plot(x, pd.to_numeric(train_df["train/lr"], errors="coerce"), color="tab:green", linewidth=1.4)
     ax.set_xlabel("global step")
     ax.set_ylabel("learning rate")
     ax.set_title("learning rate schedule")

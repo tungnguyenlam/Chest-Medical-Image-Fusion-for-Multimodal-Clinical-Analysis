@@ -80,6 +80,13 @@ grad×value on `prior_label`/vitals — all preserved by name) works unchanged. 
 cross-attention, so the prior attention map doubles as a "what the model chose to remember
 from the prior" figure.
 
+The Grad-CAM overlay (`image.png`, `prior_image.png`) uses a `turbo` cold→hot ramp with
+**per-pixel alpha proportional to relevance**: low-relevance pixels (including background)
+stay transparent so the CXR shows through, which makes it easy to see whether the model is
+leaning on background instead of anatomy. The colormap is the single `GRADCAM_CMAP` constant
+in [`src/interpret/visualize.py`](../../src/interpret/visualize.py) (swap to `viridis`/`magma`
+for colour-blind-safety).
+
 ```bash
 python -m src.interpret.run_prior_gradcam \
   --config training/prior_aware_v5nano/config.yaml \
