@@ -1,0 +1,167 @@
+model:
+  arch: prior_aware_v6nano
+  lr: 3.0e-5
+  classes: &classes
+    - Atelectasis
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fracture
+    - Hernia
+    - Infiltration
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - No Finding
+    - Nodule
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+  loss_init_args:
+    class_instance_nums:
+      - 67597
+      - 4361
+      - 76900
+      - 16038
+      - 38574
+      - 4255
+      - 30119
+      - 1158
+      - 11883
+      - 4049
+      - 10218
+      - 2533
+      - 79931
+      - 5529
+      - 41869
+      - 7663
+      - 69240
+      - 675
+      - 3369
+      - 788
+      - 48093
+      - 543
+      - 14983
+      - 2453
+      - 89140
+      - 3499
+    total_instance_num: 264849
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 26
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
+    pretrained: true
+    # Stochastic depth on the shared backbone. v5 ran this at 0.0; the prior_aware_v5nano
+    # family overfit, and with the text encoder frozen the backbone is the single largest
+    # trainable block, so v6 turns it on as the first regularization lever.
+    drop_path_rate: 0.15
+  model_init_args:
+    # v6 bus width = ConvNeXtV2-Nano's native 640 (v5 used 768). Smaller bus => smaller
+    # fusion/pooler tensors AND no image channel projection (see image_pool_* below).
+    d_model: 640
+    transformer_layers: 2  # number of asymmetric cross-attention fusion layers
+    nhead: 8               # 640 / 8 = 80 (integer head dim)
+    dropout: 0.1
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
+    # ---- v5 knobs (carried over; see src/model/PriorAwareV6NanoModel.py) ----
+    # n_prior_latents: K learned latents the prior memory is selectively pooled to. 0
+    #   disables pooling -> v4-style full memory. See docs/prior_latents.md.
+    n_prior_latents: 16
+    pooler_nhead: 8
+    # prior_latent_dropout: drop whole prior latents during training (>=1 always kept) so
+    #   no single latent becomes "the label channel."
+    prior_latent_dropout: 0.1
+    # context_bottleneck_dim: squeeze each non-image context token (clin/report/vitals/
+    #   label) through this many dims before fusion. v5 left this null; v6 turns it on as
+    #   a regularizer (the copy-shortcut path lives in these context tokens). null disables.
+    context_bottleneck_dim: 64
+    # highres_skip: append a max-pool over the un-fused current image tokens to the head,
+    #   so focal evidence reaches the classifier even if fusion dilutes it.
+    highres_skip: true
+    # ---- v6 geometry knobs ----
+    # image_pool_type: how the backbone's 640x16x16 grid is downsampled to 640x8x8.
+    #   max  -> keeps focal bright/dark lesions (matches the highres_skip max-pool); default.
+    #   avg  -> blurs focal findings (the "safe" baseline-equivalent cell).
+    #   depthwise -> a learned per-channel 3x3 strided conv (~5.8K params).
+    image_pool_type: max
+    # image_pool_stride: 2 -> 8x8=64 tok/view (default); 1 -> keep 16x16=256 tok/view (the
+    #   expensive high-resolution small-finding cell, no pooling).
+    image_pool_stride: 2
+    # text_embed_dim: width of the frozen CXR-BERT CLS the text path consumes (768). The
+    #   CLS cache stores vectors at this width; text_proj maps CLS -> n_text_tokens * d_model.
+    text_embed_dim: 768
+    # n_text_tokens: fusion tokens emitted per text signal. v5 used 1; v6 expands the single
+    #   frozen CLS into 2 tokens so cross-attention reads each text signal through >1 slot.
+    n_text_tokens: 2
+    # fusion_ffn_dim: feed-forward width inside each fusion + pooler TransformerDecoderLayer.
+    #   v5 silently used the nn default 2048; v6 exposes it and halves it as a capacity cut.
+    fusion_ffn_dim: 1024
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    schedule: single_cosine  # one cosine decay over the whole run (no per-epoch warm restarts)
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/prior_aware_train.parquet
+    devel_df_path: data/data-camchex/prior_aware_development.parquet
+    pred_df_path: data/data-camchex/prior_aware_test.parquet
+    use_text_embedding_cache: false
+    text_embedding_streams: [clin_text, prior_clin_text, prior_report_text]
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
+    # Shared on-disk cache for built 3-channel images (uint8, keyed by
+    # path+mode+cfg). Reused across models/runs and prebuilt before training.
+    image_channel_cache_dir: ../cache/channels
+    # Full channel_mode name: ch0=raw, ch1=mild CLAHE (both pinned), ch2 here=histeq.
+    # Override ONLY ch2 per-run with --third-channel-mode (clahe|histeq|lbp) -- it maps
+    # the short name to the full mode (histeq -> raw_clahe_histeq). --third-channel-mode
+    # none (or channel_mode: null) reverts to the plain direct JPEG decode (grayscale
+    # duplicated to 3 channels).
+    channel_mode: raw_clahe_histeq
+    size: 512
+    classes: *classes
+    label_dropout_p: 0.3
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 2
+  grad_clip: 1.0
+  precision: 16-mixed
+  compile_model: false
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  # Fraction-of-epoch validation schedule (batch-size independent): quick val mid-epoch, full val only at epoch end.
+  full_val_fracs: []  # no mid-epoch full validation (end-of-epoch full val always runs)
+  quick_val_fracs: [0.25, 0.5, 0.75]
+  quick_val_frac: 0.1
+  val_num_workers: 0  # 0 = run val in-process (no 2nd worker pool); raise to use val workers
+  seed: null
+  accelerator: null
