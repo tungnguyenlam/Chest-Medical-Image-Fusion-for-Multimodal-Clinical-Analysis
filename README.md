@@ -231,10 +231,10 @@ Full list: `python training/camchex/camchex_train.py --help`.
         "text_encoder.": 1.0e-5   # prefixes match model.named_parameters()
   ```
 
-  Per-group LRs compose with the schedules (each group is scaled relative to its own
-  initial LR). Caveat: the cosine `eta_min` is a single scalar (`base_lr *
-  eta_min_factor`), so all groups converge to the *same* floor — the LR ratio holds
-  early/mid-training and shrinks toward 1.0 in the tail.
+  Per-group LRs compose with the schedules: the cosine is a multiplicative factor in
+  `[eta_min_factor, 1.0]` applied to each group's own initial LR, so a group's floor is
+  `its_lr * eta_min_factor`. The LR ratio between groups (e.g. the 0.3× backbone) is
+  therefore preserved across the *entire* cycle, peak and trough alike.
 
 ### Loss function
 

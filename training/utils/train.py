@@ -311,7 +311,6 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
     schedule = sched_kwargs.get("schedule", "warm_restarts")
     scheduler = build_warmup_cosine_scheduler(
         optimizer,
-        lr=lr,
         steps_per_epoch=steps_per_epoch,
         warmup_steps=warmup_steps,
         total_steps=total_steps,
