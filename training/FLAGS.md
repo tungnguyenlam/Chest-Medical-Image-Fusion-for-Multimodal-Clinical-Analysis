@@ -59,6 +59,7 @@ instead of stalling mid-loop; `--skip-precompute` bypasses it.
 |------|-----|
 | `--loss NAME [NAME ...]` | Loss(es), overriding `model.loss` / default ASL. Several names → weighted sum. |
 | `--loss-weights W [W ...]` | Positional weights for a multi-loss `--loss`. |
+| `--label-smoothing EPS` | Positive-only (asymmetric) label smoothing for ASL: positive targets `1 → 1-EPS` (negatives stay 0). Overrides `model.loss_init_args.pos_smoothing`. Default 0.0 (off). Noise/calibration knob, not a long-tail fix; try ~0.05. |
 | `--lr FLOAT` | Base learning rate (the freshly-initialised fusion + decoder train at this). |
 | `--weight-decay FLOAT` | Weight decay. |
 | `--backbone-lr-mult FLOAT` | Discriminative LR: train the pretrained image backbone (params under `image_encoder.`) at this multiple of `--lr`. **Default 0.3** (applied to every model); `1.0` disables (uniform LR). Overridden by `optimizer_init_args.param_group_lrs` if a config sets it. See [docs/discriminative_lr.md](../docs/discriminative_lr.md). |

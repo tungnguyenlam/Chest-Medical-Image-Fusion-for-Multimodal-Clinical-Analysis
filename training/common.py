@@ -374,6 +374,14 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             help="Weights for a multi-loss --loss, positionally matched (e.g. '--loss FC ASL "
             "--loss-weights 1.0 0.5'). Must match the number of losses.",
         )
+        g.add_argument(
+            "--label-smoothing",
+            type=float,
+            metavar="EPS",
+            help="Positive-only (asymmetric) label smoothing for ASL: soften positive targets "
+            "1 -> 1-EPS (negatives stay 0). Overrides model.loss_init_args.pos_smoothing. "
+            "Default 0.0 (off). A noise/calibration knob, not an imbalance fix; try ~0.05.",
+        )
         g.add_argument("--lr", type=float, help="Base learning rate.")
         g.add_argument("--weight-decay", type=float, help="AdamW weight decay.")
         g.add_argument(

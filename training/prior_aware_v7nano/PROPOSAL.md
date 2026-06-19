@@ -9,6 +9,9 @@ EHR thesis.
 This is a *head-only* contribution. It does **not** touch the image/text/prior modality
 balance and does **not** add multi-prior/temporal-decay modeling — those are deliberately
 deferred to a separate v8 line so the two thesis contributions get clean attribution.
+One such deferred modality-path idea — a learned-query (Perceiver) pooler on the
+**current** image that decouples fusion token count from input resolution — is parked in
+[`docs/learned_query_image_pooling.md`](../../docs/learned_query_image_pooling.md).
 
 > **The labels are noisy.** This short proposal assumes clean co-occurrence; the real design
 > must defend against report-derived label noise (spurious co-mention edges, high-variance

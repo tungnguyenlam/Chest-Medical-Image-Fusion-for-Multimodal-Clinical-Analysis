@@ -370,6 +370,9 @@ def build_criterion(args: argparse.Namespace, cfg: dict[str, Any] | None, asl_in
         kwargs = dict(loss_kwargs.get(name, {}) or {})
         if name == "ASL":
             kwargs = {**asl_init_args, **kwargs}  # flat loss_init_args is ASL's args
+            cli_smoothing = getattr(args, "label_smoothing", None)
+            if cli_smoothing is not None:  # --label-smoothing overrides config pos_smoothing
+                kwargs["pos_smoothing"] = cli_smoothing
         losses.append(LOSS_REGISTRY[name](**kwargs))
         weights.append(float(cli_weights[i]) if cli_weights is not None else float(cfg_weights.get(name, 1.0)))
 
