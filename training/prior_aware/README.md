@@ -404,13 +404,19 @@ Each class writes one folder of inspect-by-hand PNGs:
 
 The model declares `gradcam_runner_module = "src.interpret.run_prior_gradcam"`, so after
 each epoch's validation the trainer reuses the validation logits (no extra scan) to pick
-two representative studies per class and dumps panels to:
+representative studies per class and dumps panels to:
 
 ```text
 <run_dir>/gradcam/epoch_<N>/
-  best/<Class>/...    # highest-confidence true positive (varies per epoch)
-  first/<Class>/...   # first true positive in val order (FIXED across epochs)
+  best/<Class>/...      # highest-confidence true positive (varies per epoch)
+  first/<Class>/...     # first true positive in val order (FIXED across epochs)
+  wrong_fp/<Class>/...  # highest-prob negative -> confident false positive (hallucination)
+  wrong_fn/<Class>/...  # lowest-prob positive  -> confident miss / false negative
 ```
+
+The two `wrong_*` sets surface the model's most confident mistakes per class: `wrong_fp`
+shows what spurious features fire a finding that isn't there, `wrong_fn` shows where the
+model looked instead of the finding it missed.
 
 Control with `--gradcam-epochs 0,4,9` (or `all`/`none`) and `--gradcam-device cuda`
 (default `cpu`; the dump runs in a subprocess to protect GPU memory). Studies without a

@@ -112,9 +112,16 @@ def find_quick_continue_checkpoint(args: argparse.Namespace) -> Path:
         if not ckpt_dir.exists():
             continue
         saw_checkpoint_dir = True
+        # last.pt is the rolling full checkpoint -- the correct seamless-resume target.
+        last_ckpt = ckpt_dir / "last.pt"
+        if last_ckpt.exists():
+            return last_ckpt.resolve()
+        # Legacy / --keep-epoch-checkpoints runs: fall back to the highest epoch archive,
+        # then any other checkpoint (but never best.pt, which is weights-only and can't
+        # drive a full resume).
         run_candidates = list(ckpt_dir.glob("epoch_*.pt"))
         if not run_candidates:
-            run_candidates = list(ckpt_dir.glob("*.pt"))
+            run_candidates = [p for p in ckpt_dir.glob("*.pt") if p.name != "best.pt"]
         if run_candidates:
             return max(run_candidates, key=_checkpoint_sort_key).resolve()
 

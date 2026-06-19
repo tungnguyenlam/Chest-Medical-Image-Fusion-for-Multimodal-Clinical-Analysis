@@ -84,6 +84,6 @@ access, so the prior modality contributions reflect the v4 "prior as evidence" d
 ```bash
 python -m src.interpret.run_prior_gradcam \
   --config training/prior_aware_v4nano/config.yaml \
-  --checkpoint-path output/prior_aware_v4nano/runs/<run>/checkpoints/epoch_000.pt \
+  --checkpoint-path output/prior_aware_v4nano/runs/<run>/checkpoints/best.pt \
   --split val --scan-limit 800 --device cuda
 ```

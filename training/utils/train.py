@@ -93,14 +93,19 @@ def batch_study_ids(data: Any) -> list[str] | None:
 def validate_model(model, criterion, loader, classes: list[str], device: torch.device, precision: str | None, max_batches: int | None = None, desc: str = "val", selection_out: dict[str, dict] | None = None):
     """Run validation. If ``selection_out`` is provided, fill it in-place per class with
     {study_id (highest-confidence true positive), prob, first_study_id (first true positive
-    in loader order — stable across epochs for progression views)}, reusing the predictions
-    already computed here (no extra forward pass)."""
+    in loader order — stable across epochs for progression views), fp_study_id (highest-prob
+    negative — confident false positive), fn_study_id (lowest-prob positive — confident
+    miss)}, reusing the predictions already computed here (no extra forward pass)."""
     was_training = model.training
     model.eval()
     n_classes = len(classes)
     sel_prob = [-1.0] * n_classes if selection_out is not None else None
     sel_sid: list[str | None] = [None] * n_classes if selection_out is not None else []
     sel_first: list[str | None] = [None] * n_classes if selection_out is not None else []
+    sel_fp_prob = [-1.0] * n_classes if selection_out is not None else None
+    sel_fp_sid: list[str | None] = [None] * n_classes if selection_out is not None else []
+    sel_fn_prob = [2.0] * n_classes if selection_out is not None else None
+    sel_fn_sid: list[str | None] = [None] * n_classes if selection_out is not None else []
     try:
         losses: list[float] = []
         preds: list[torch.Tensor] = []
@@ -123,23 +128,33 @@ def validate_model(model, criterion, loader, classes: list[str], device: torch.d
                     lab = label.detach().cpu()
                     for bi in range(prob.shape[0]):
                         for c in range(n_classes):
-                            if lab[bi, c] != 1:
-                                continue
-                            if sel_first[c] is None:
-                                sel_first[c] = study_ids[bi]
-                            if prob[bi, c] > sel_prob[c]:
-                                sel_prob[c] = float(prob[bi, c])
-                                sel_sid[c] = study_ids[bi]
+                            p = float(prob[bi, c])
+                            if lab[bi, c] == 1:
+                                if sel_first[c] is None:
+                                    sel_first[c] = study_ids[bi]
+                                if p > sel_prob[c]:
+                                    sel_prob[c] = p
+                                    sel_sid[c] = study_ids[bi]
+                                if p < sel_fn_prob[c]:
+                                    sel_fn_prob[c] = p
+                                    sel_fn_sid[c] = study_ids[bi]
+                            elif p > sel_fp_prob[c]:
+                                sel_fp_prob[c] = p
+                                sel_fp_sid[c] = study_ids[bi]
         finally:
             pbar.close()
 
         if selection_out is not None:
             for c in range(n_classes):
-                if sel_sid[c] is not None:
+                if sel_sid[c] is not None or sel_fp_sid[c] is not None or sel_fn_sid[c] is not None:
                     selection_out[classes[c]] = {
                         "study_id": sel_sid[c],
                         "prob": sel_prob[c],
                         "first_study_id": sel_first[c],
+                        "fp_study_id": sel_fp_sid[c],
+                        "fp_prob": sel_fp_prob[c] if sel_fp_sid[c] is not None else None,
+                        "fn_study_id": sel_fn_sid[c],
+                        "fn_prob": sel_fn_prob[c] if sel_fn_sid[c] is not None else None,
                     }
 
         if not losses:
@@ -177,7 +192,13 @@ def save_checkpoint(
     early_stop_mode: str = "max",
     schedule: str = "warm_restarts",
     weights_are_ema: bool = False,
+    weights_only: bool = False,
 ) -> None:
+    # weights_only checkpoints (best.pt) keep all the lightweight metadata but drop the
+    # optimizer/scheduler/scaler state -- the only consumers of best.pt are eval and the
+    # two-stage rollback, which loads weights into a FRESH optimizer + scheduler, so that
+    # state would be dead bytes (and unusable anyway across the warm_restarts->single_cosine
+    # switch and the EMA optimizer-state mismatch). A full resume must use last.pt.
     path.parent.mkdir(parents=True, exist_ok=True)
     model_to_save = unwrap_compiled_model(model)
     payload = {
@@ -198,9 +219,9 @@ def save_checkpoint(
         "early_stop_monitor": early_stop_monitor,
         "early_stop_mode": early_stop_mode,
         "model_state_dict": model_to_save.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
-        "scaler_state_dict": scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
+        "optimizer_state_dict": None if weights_only else optimizer.state_dict(),
+        "scheduler_state_dict": None if weights_only or scheduler is None else scheduler.state_dict(),
+        "scaler_state_dict": None if weights_only or scaler is None or not scaler.is_enabled() else scaler.state_dict(),
     }
     if early_stop_monitor == "val_ap" and best_monitor_value is not None:
         payload["best_val_ap"] = best_monitor_value
@@ -566,7 +587,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             return current > best + early_stop_min_delta
         return current < best - early_stop_min_delta
 
-    def _save_training_checkpoint(path: Path, epoch: int, kind: str) -> None:
+    def _save_training_checkpoint(path: Path, epoch: int, kind: str, weights_only: bool = False) -> None:
         # Save the EMA weights as the model state (eval-ready), then restore raw weights.
         if ema is not None:
             ema.apply_to(model)
@@ -588,6 +609,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 early_stop_mode=early_stop_mode,
                 schedule=schedule,
                 weights_are_ema=ema is not None,
+                weights_only=weights_only,
             )
         finally:
             if ema is not None:
@@ -616,14 +638,18 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             tqdm.write("[gradcam] no per-class true-positive selection captured during validation; skipping.")
             return
         # Reuse the studies chosen from this epoch's validation logits — no extra scan.
-        #   best  = highest-confidence true positive per class (varies across epochs)
-        #   first = first true positive per class in val order (fixed -> progression view)
+        #   best     = highest-confidence true positive per class (varies across epochs)
+        #   first    = first true positive per class in val order (fixed -> progression view)
+        #   wrong_fp = highest-prob negative per class (confident false positive)
+        #   wrong_fn = lowest-prob positive per class (confident miss / false negative)
         gradcam_dir = run_dir / "gradcam" / f"epoch_{epoch}"
         gradcam_dir.mkdir(parents=True, exist_ok=True)
         sel_path = gradcam_dir / "selection.json"
         sets = {
-            "best": {cls: info["study_id"] for cls, info in selection.items()},
+            "best": {cls: info["study_id"] for cls, info in selection.items() if info.get("study_id")},
             "first": {cls: info["first_study_id"] for cls, info in selection.items() if info.get("first_study_id")},
+            "wrong_fp": {cls: info["fp_study_id"] for cls, info in selection.items() if info.get("fp_study_id")},
+            "wrong_fn": {cls: info["fn_study_id"] for cls, info in selection.items() if info.get("fn_study_id")},
         }
         with open(sel_path, "w") as f:
             json.dump(sets, f, indent=2)
@@ -851,10 +877,26 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
             f"bad_epochs={early_stop_bad_epochs}/{early_stop_patience or 'disabled'}"
         )
 
-        epoch_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"
-        _save_training_checkpoint(epoch_path, epoch, "epoch")
-        tqdm.write(f"[checkpoint] saved epoch checkpoint: {epoch_path}")
-        _maybe_dump_gradcam(epoch, epoch_path, gradcam_selection)
+        # Rolling full checkpoint: --quick-continue / --resume-from picks this up and restores
+        # the optimizer + scheduler so the run continues seamlessly on the same schedule.
+        last_path = checkpoint_dir / "last.pt"
+        _save_training_checkpoint(last_path, epoch, "epoch")
+        tqdm.write(f"[checkpoint] saved last checkpoint: {last_path}")
+        # Best snapshot: weights-only (eval + two-stage rollback are the only consumers).
+        if improved:
+            best_path = checkpoint_dir / "best.pt"
+            _save_training_checkpoint(best_path, epoch, "best", weights_only=True)
+            tqdm.write(
+                f"[checkpoint] saved best checkpoint (weights-only): {best_path} "
+                f"({early_stop_monitor}={best_monitor_value:.6f})"
+            )
+        # Opt-in per-epoch archive for debugging; off by default to save disk.
+        if getattr(args, "keep_epoch_checkpoints", False):
+            epoch_path = checkpoint_dir / f"epoch_{epoch:03d}.pt"
+            _save_training_checkpoint(epoch_path, epoch, "epoch")
+            tqdm.write(f"[checkpoint] saved epoch archive: {epoch_path}")
+        # Grad-CAM dumps against this epoch's eval-ready (EMA) weights, which last.pt holds.
+        _maybe_dump_gradcam(epoch, last_path, gradcam_selection)
 
         if early_stop_patience and early_stop_bad_epochs >= early_stop_patience:
             if two_stage and stage == 1 and best_monitor_epoch is not None:
@@ -862,7 +904,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
                 # switch to a single CosineAnnealingLR decay for the remaining budget -- the
                 # exploitation phase. The warm-restart sawtooth is dropped so the model can
                 # finally settle into the basin it found instead of being re-kicked each epoch.
-                best_ckpt = checkpoint_dir / f"epoch_{best_monitor_epoch:03d}.pt"
+                best_ckpt = checkpoint_dir / "best.pt"
                 tqdm.write(
                     f"[two-stage] exploration stopped at epoch={epoch}; rolling back to best "
                     f"epoch={best_monitor_epoch} ({early_stop_monitor}={best_monitor_value:.6f}) "

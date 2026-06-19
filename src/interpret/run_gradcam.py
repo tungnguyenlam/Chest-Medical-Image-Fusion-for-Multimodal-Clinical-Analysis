@@ -6,14 +6,16 @@ For each class it runs gradient attribution (image Grad-CAM + text-token grad x 
 
 Two ways to pick the study per class:
 
-* default (standalone): scan the split and take the *highest-confidence true positive*
-  for each class. ``--scan-limit N`` caps how many studies are scanned.
+* default (standalone): scan the split once and emit three sets per class — ``best``
+  (highest-confidence true positive, in the output dir) plus ``wrong_fp`` and ``wrong_fn``
+  subfolders for the model's most confident errors (highest-prob negative = false positive;
+  lowest-prob positive = confident miss). ``--scan-limit N`` caps how many studies scanned.
 * ``--studies-json``: skip the scan and attribute preselected studies. Accepts either a
   flat ``{class: study_id}`` map (-> panels in the output dir) or a nested
   ``{set_name: {class: study_id}}`` map (-> one subfolder per set). The trainer uses the
-  nested form to emit two sets reusing its validation logits (no scan):
-  ``best`` (highest-confidence TP, varies per epoch) and ``first`` (first TP in val order,
-  fixed across epochs so you can watch a single study's heatmap evolve).
+  nested form to emit four sets reusing its validation logits (no scan): ``best``
+  (highest-confidence TP, varies per epoch), ``first`` (first TP in val order, fixed across
+  epochs so you can watch a single study's heatmap evolve), ``wrong_fp`` and ``wrong_fn``.
 
 Multilabel: attribution is class-conditional (one logit backprops per panel), so a study
 with several findings gets a separate panel under each class; the header lists co-positives.
@@ -123,24 +125,42 @@ def build_model(cfg, args, device):
 
 
 def select_studies(attributor: CaMCheXAttributor, dataset, classes, scan_limit: int):
-    """Highest-confidence true-positive study index per class."""
+    """One scan -> per-class study index for three inspection sets:
+
+    * ``best``     : highest-confidence true positive (model right and confident).
+    * ``wrong_fp`` : negative label but highest predicted prob (confident false positive
+                     -- what the model hallucinates; reveals spurious features in the CAM).
+    * ``wrong_fn`` : positive label but lowest predicted prob (confident miss / false
+                     negative -- the heatmap shows where it looked instead of the finding).
+
+    Returns ``{set_name: idx_list}`` (idx ``-1`` where no qualifying study was seen).
+    """
     n = len(dataset)
     if scan_limit > 0:
         n = min(n, scan_limit)
-    best_idx = [-1] * len(classes)
-    best_prob = [-1.0] * len(classes)
+    nc = len(classes)
+    best_idx, best_prob = [-1] * nc, [-1.0] * nc
+    fp_idx, fp_prob = [-1] * nc, [-1.0] * nc
+    fn_idx, fn_prob = [-1] * nc, [2.0] * nc
     for i in range(n):
         sample = dataset[i]
         _, label = sample
         label = np.asarray(label)
         probs = attributor.predict_probs(sample)
-        for c in range(len(classes)):
-            if label[c] == 1 and probs[c] > best_prob[c]:
-                best_prob[c] = float(probs[c])
-                best_idx[c] = i
+        for c in range(nc):
+            if c >= len(label):
+                continue
+            p = float(probs[c])
+            if label[c] == 1:
+                if p > best_prob[c]:
+                    best_prob[c], best_idx[c] = p, i
+                if p < fn_prob[c]:
+                    fn_prob[c], fn_idx[c] = p, i
+            elif p > fp_prob[c]:
+                fp_prob[c], fp_idx[c] = p, i
         if (i + 1) % 50 == 0:
             print(f"  scanned {i + 1}/{n} studies", flush=True)
-    return best_idx, best_prob
+    return {"best": best_idx, "wrong_fp": fp_idx, "wrong_fn": fn_idx}
 
 
 def indices_from_mapping(mapping, dataset, classes):
@@ -209,14 +229,18 @@ def main() -> None:
         else:
             print(f"[gradcam] selecting 1 study/class over {len(dataset)} studies "
                   f"({'all' if args.scan_limit <= 0 else args.scan_limit})...")
-            best_idx, _ = select_studies(attributor, dataset, classes, args.scan_limit)
+            idx_sets = select_studies(attributor, dataset, classes, args.scan_limit)
             sets = None
 
         if sets is None:
-            saved, missing = dump_set(attributor, dataset, classes, best_idx, out_dir, args.layout, args.tokens_per_row)
-            print(f"[gradcam] saved {saved} panels to {out_dir}")
-            if missing:
-                print(f"[gradcam] no positive study found for: {', '.join(missing)}")
+            # best -> out_dir (flat, back-compat); wrong_fp/wrong_fn -> subfolders.
+            for set_name, idx in idx_sets.items():
+                set_dir = out_dir if set_name == "best" else out_dir / set_name
+                label = "" if set_name == "best" else set_name
+                saved, missing = dump_set(attributor, dataset, classes, idx, set_dir, args.layout, args.tokens_per_row, set_label=label)
+                print(f"[gradcam] saved {saved} '{set_name}' panels to {set_dir}")
+                if missing:
+                    print(f"[gradcam]   no study found for: {', '.join(missing)}")
         else:
             for set_name, mapping in sets.items():
                 idx = indices_from_mapping(mapping, dataset, classes)

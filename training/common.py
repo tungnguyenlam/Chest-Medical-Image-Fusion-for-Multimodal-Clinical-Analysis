@@ -278,8 +278,16 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "--quick-continue",
             action="store_true",
             help=(
-                "Train only: resume the most recently created run under --output-dir (its latest checkpoint). "
+                "Train only: resume the most recently created run under --output-dir (its last.pt). "
                 "Use --run-id to force a specific run instead."
+            ),
+        )
+        g.add_argument(
+            "--keep-epoch-checkpoints",
+            action="store_true",
+            help=(
+                "Train only: also archive a full epoch_NNN.pt every epoch. Off by default -- "
+                "training keeps only last.pt (full, for resume) and best.pt (weights-only)."
             ),
         )
     g.add_argument("--seed", type=int, help="Optional seed for python/numpy/torch RNGs.")

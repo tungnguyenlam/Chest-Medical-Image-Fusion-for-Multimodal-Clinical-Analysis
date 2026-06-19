@@ -343,12 +343,14 @@ Each class writes three PNGs you can inspect by hand:
 ### During training (default: on, every epoch)
 
 After each epoch's validation, the trainer reuses the validation logits (no extra
-scan) to pick, per class, two representative studies and dumps panels to:
+scan) to pick, per class, representative studies and dumps panels to:
 
 ```text
 <run_dir>/gradcam/epoch_<N>/
-  best/<Class>/{image,text,vitals}.png    # highest-confidence true positive (varies per epoch)
-  first/<Class>/{image,text,vitals}.png   # first true positive in val order (FIXED across epochs)
+  best/<Class>/{image,text,vitals}.png      # highest-confidence true positive (varies per epoch)
+  first/<Class>/{image,text,vitals}.png     # first true positive in val order (FIXED across epochs)
+  wrong_fp/<Class>/{image,text,vitals}.png  # highest-prob negative -> confident false positive
+  wrong_fn/<Class>/{image,text,vitals}.png  # lowest-prob positive  -> confident miss / false negative
 ```
 
 Flip through `epoch_*/first/<Class>/image.png` to watch one fixed study's heatmap

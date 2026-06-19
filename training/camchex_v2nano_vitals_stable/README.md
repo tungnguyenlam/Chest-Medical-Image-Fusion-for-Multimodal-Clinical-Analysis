@@ -55,7 +55,7 @@ optimizer/scheduler/epoch — note `--checkpoint-path`, **not** `--resume-from`)
 
 ```bash
 python training/camchex_v2nano_vitals_stable/camchex_v2nano_vitals_stable_train.py \
-  --checkpoint-path output/camchex_v2nano_vitals/runs/<baseline-run>/checkpoints/epoch_007.pt \
+  --checkpoint-path output/camchex_v2nano_vitals/runs/<baseline-run>/checkpoints/best.pt \
   --use-precomputed-text-embeddings \
   --batch-size 16 --num-workers 4 --prefetch-factor 1 --val-batch-size 16
 ```
@@ -64,7 +64,7 @@ Evaluate the best checkpoint (its `model_state_dict` is already the EMA weights)
 
 ```bash
 python training/camchex_v2nano_vitals_stable/camchex_v2nano_vitals_stable_eval.py \
-  --checkpoint-path output/camchex_v2nano_vitals_stable/runs/<run>/checkpoints/epoch_XXX.pt
+  --checkpoint-path output/camchex_v2nano_vitals_stable/runs/<run>/checkpoints/best.pt
 ```
 
 ### From-scratch run instead

@@ -197,13 +197,13 @@ Standalone (run any checkpoint by hand). `--device` defaults to auto-detect; pas
 # scan the split for the best true-positive study per class
 python -m src.interpret.run_prior_gradcam \
   --config training/prior_aware_v3nano/config.yaml \
-  --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/epoch_000.pt \
+  --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/best.pt \
   --split val --scan-limit 800 --device cuda
 
 # or reuse the studies the trainer already selected (no scan)
 python -m src.interpret.run_prior_gradcam \
   --config training/prior_aware_v3nano/config.yaml \
-  --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/epoch_000.pt \
+  --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/best.pt \
   --split val --device cuda \
   --studies-json output/prior_aware_v3nano/runs/<run>/gradcam/epoch_0/selection.json \
   --gradcam-out output/prior_aware_v3nano/runs/<run>/gradcam/epoch_0

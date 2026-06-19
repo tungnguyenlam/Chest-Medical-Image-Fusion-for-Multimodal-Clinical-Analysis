@@ -99,6 +99,6 @@ grad×value on `prior_label`/vitals — all preserved by name — so it works un
 ```bash
 python -m src.interpret.run_prior_gradcam \
   --config training/prior_aware_v6nano/config.yaml \
-  --checkpoint-path output/prior_aware_v6nano/runs/<run>/checkpoints/epoch_000.pt \
+  --checkpoint-path output/prior_aware_v6nano/runs/<run>/checkpoints/best.pt \
   --split val --scan-limit 800 --device cuda
 ```
