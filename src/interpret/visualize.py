@@ -39,7 +39,7 @@ C_NEG = "#4d7ea8"      # away from class / negative        (muted slate blue)
 C_IMAGE = "#6f9e6f"    # image modality                    (muted green)
 C_TEXT = "#8d7aa8"     # text modality                     (muted purple)
 C_VITALS = "#cc8a52"   # vitals modality                   (muted ochre)
-C_TARGET = "#d98a3d"   # the targeted class                (muted orange)
+C_TARGET = "#e6c229"   # the Grad-CAM target class         (yellow)
 C_MUTED = "#a9bcce"    # neutral / below-threshold bar
 C_ZERO = "#888888"     # zero / threshold reference lines
 C_INK = "#222222"      # primary text (titles)
@@ -383,9 +383,11 @@ def render_class_distribution(class_names, probs, true_labels, target_class,
 
     This is the model's full last-layer read-out for the sample (multi-label
     sigmoid, so the bars are independent per-class probabilities, NOT a softmax
-    that sums to 1). The *targeted* class (the one this folder's Grad-CAM explains)
-    is highlighted; ground-truth-positive classes are starred so you can see at a
-    glance whether the high bars line up with the truth.
+    that sums to 1). Encoding is purely visual -- no glyphs in the labels:
+      * yellow bar  -> the Grad-CAM target class (the one this folder explains)
+      * red bar     -> a class the model selected (prob >= threshold)
+      * grey bar    -> below threshold
+      * bold label  -> a ground-truth-positive class
     """
     out_path = Path(out_path)
     names = list(class_names)
@@ -401,46 +403,43 @@ def render_class_distribution(class_names, probs, true_labels, target_class,
     fig, ax = plt.subplots(figsize=(8.5, max(4.5, 0.30 * len(names))))
     y = np.arange(len(names_s))
 
-    colors, edgecolors, lws = [], [], []
+    colors = []
     for nm, p in zip(names_s, probs_s):
         if nm == target_class:
-            colors.append(C_TARGET)                        # targeted class
+            colors.append(C_TARGET)                        # Grad-CAM target: yellow
         elif p >= threshold:
-            colors.append(C_POS)                           # above threshold
+            colors.append(C_POS)                           # model-selected: red
         else:
-            colors.append(C_MUTED)                         # below threshold
-        if nm in truth:
-            edgecolors.append(C_INK); lws.append(1.4)      # ground truth: dark outline
-        else:
-            edgecolors.append("none"); lws.append(0.0)
+            colors.append(C_MUTED)                         # below threshold: grey
 
-    ax.barh(y, probs_s, color=colors, edgecolor=edgecolors, linewidth=lws)
+    ax.barh(y, probs_s, color=colors)
     ax.set_yticks(y)
-    # arrow marks the targeted class, star marks ground-truth-positive classes
-    ticklabels = [f"{'» ' if nm == target_class else ''}{'★ ' if nm in truth else ''}{nm}"
-                  for nm in names_s]
-    labels = ax.set_yticklabels(ticklabels)
+    labels = ax.set_yticklabels(names_s)                   # plain names, no glyphs
     for lbl, nm in zip(labels, names_s):
         lbl.set_fontsize(8)
         if nm in truth:
-            lbl.set_fontweight("bold")
-        if nm == target_class:
-            lbl.set_color(C_TARGET)
+            lbl.set_fontweight("bold")                     # ground truth: bold label
 
     ax.invert_yaxis()
     ax.set_xlim(0, 1.0)
+    ax.set_xticks(np.linspace(0, 1.0, 6))
     ax.axvline(threshold, color=C_ZERO, lw=1.0, ls="--")
-    ax.text(threshold, -0.8, f" threshold={threshold:g}", color=C_FAINT, fontsize=8, va="bottom")
+    ax.text(threshold, 1.0, f" threshold={threshold:g}", color=C_FAINT, fontsize=8,
+            va="top", ha="left", transform=ax.get_xaxis_transform())
+    ax.grid(axis="x", color="0.9", lw=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
 
     # value at each bar end (prob, and raw logit if provided)
     for yi, p in zip(y, probs_s):
-        txt = f"{p:.2f}" + (f"  (z={logits_s[yi]:+.1f})" if logits_s is not None else "")
-        ax.text(min(p + 0.012, 0.995), yi, txt, va="center", ha="left", fontsize=7, color="0.35")
+        txt = f"{p:.2f}" + (f"  z={logits_s[yi]:+.1f}" if logits_s is not None else "")
+        ax.text(min(p + 0.012, 0.995), yi, txt, va="center", ha="left", fontsize=7, color=C_FAINT)
 
     ax.set_xlabel("per-class probability  =  sigmoid(logit)")
-    ax.set_title(f"{target_class} — class distribution for this study (» targeted, ★ ground truth)")
+    ax.set_title(f"{target_class} — per-class probabilities for this study")
     fig.tight_layout()
-    fig.savefig(out_path)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
