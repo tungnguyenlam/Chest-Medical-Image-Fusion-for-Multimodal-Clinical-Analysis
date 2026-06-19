@@ -105,6 +105,26 @@ def resolve_label_set(version: str, label_set: LabelSet = "auto") -> str:
     return "standard"
 
 
+def cxr_lt_classes(version: str = "cxr-lt-2023", label_set: LabelSet = "auto") -> list[str]:
+    """Canonical, ordered class list for a CXR-LT release/label set.
+
+    Pure metadata lookup -- needs no data files. Returns exactly the ``label_cols``
+    that :func:`load_cxr_lt_labels` would yield for the same arguments, so any
+    pipeline (label vectors, configs, parquet builds) can agree on the label space
+    without reading a CSV.
+    """
+    resolved = resolve_label_set(version, label_set)
+    if version == "cxr-lt-2023":
+        # The 2023 release is a single 26-label task regardless of label_set.
+        return list(CXRLT_2023_LABELS)
+    if version == "cxr-lt-2024":
+        if resolved not in CXRLT_2024_LABELS_BY_SET:
+            valid = ", ".join(sorted(CXRLT_2024_LABELS_BY_SET))
+            raise ValueError(f"unsupported CXR-LT 2024 label set {resolved!r}; choose one of: {valid}")
+        return list(CXRLT_2024_LABELS_BY_SET[resolved])
+    raise ValueError(f"unsupported CXR-LT version: {version!r}")
+
+
 def _read_csv(path: Path, required_cols: list[str] | None = None) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Missing CXR-LT label file: {path}")

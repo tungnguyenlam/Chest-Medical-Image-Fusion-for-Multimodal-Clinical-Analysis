@@ -107,6 +107,7 @@ def render_attribution_split(result: AttributionResult, out_dir: str | Path, tok
         render_text(result, out_dir / "text.png", tokens_per_row=tokens_per_row),
         render_vitals(result, out_dir / "vitals.png"),
         render_modality(result, out_dir / "modality.png"),
+        render_modality_log(result, out_dir / "modality_log.png"),
         render_class_distribution(result.class_names, result.all_probs, result.true_labels,
                                   result.class_name, out_dir / "class_distribution.png",
                                   logits=result.all_logits),
@@ -373,6 +374,44 @@ def render_modality(result: AttributionResult, out_path: str | Path) -> Path:
     return out_path
 
 
+# floor for log-scale contribution plots: anything below this rounds to "invisible".
+_LOG_FLOOR_PCT = 0.01
+
+
+def render_modality_log(result: AttributionResult, out_path: str | Path) -> Path:
+    """Same modality share as ``render_modality`` but on a log y-axis.
+
+    On a linear axis the image bar (~99%) flattens text/vitals to nothing. The log
+    axis makes the small contributions readable, so you can see that text/vitals do
+    carry signal even when the image dominates the total.
+    """
+    out_path = Path(out_path)
+    fig, ax = plt.subplots(figsize=(5.5, 4.6))
+
+    mc = result.modality_contrib
+    keys = ["image", "text", "vitals"]
+    vals = [100.0 * mc[k] for k in keys]
+    # clip to the floor so a 0%/near-0% bar still draws a sliver instead of vanishing.
+    plotted = [max(v, _LOG_FLOOR_PCT) for v in vals]
+    ax.bar(keys, plotted, color=[C_IMAGE, C_TEXT, C_VITALS])
+    ax.set_yscale("log")
+    ax.set_ylim(_LOG_FLOOR_PCT, 200)
+    ax.set_ylabel("% of |grad × input|  (log scale)")
+    ax.set_title(f"{result.class_name} — modality share (log, heuristic)")
+    for i, val in enumerate(vals):
+        ax.text(i, max(val, _LOG_FLOOR_PCT) * 1.15,
+                f"{val:.2g}%", ha="center", fontsize=11, fontweight="semibold", color=C_INK)
+
+    fig.text(0.5, 0.01,
+             "Log y-axis: small modalities stay visible under the image's dominance. "
+             f"Bars floored at {_LOG_FLOOR_PCT:g}%.",
+             ha="center", fontsize=8, color=C_FAINT)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    fig.savefig(out_path)
+    plt.close(fig)
+    return out_path
+
+
 # --------------------------------------------------------------------------- #
 # class distribution: per-class sigmoid prob for this one sample
 # --------------------------------------------------------------------------- #
@@ -540,6 +579,7 @@ def render_prior_attribution_split(result, out_dir: str | Path, tokens_per_row: 
         _render_image_rows(result.prv_views, header, out_dir / "prior_image.png",
                            empty_msg="(no prior study)"),
         render_prior_modality(result, out_dir / "modality.png"),
+        render_prior_modality_log(result, out_dir / "modality_log.png"),
         render_time_delta(result, out_dir / "time_delta.png"),
         render_prior_label(result, out_dir / "prior_label.png"),
         render_class_distribution(result.class_names, result.all_probs, result.true_labels,
@@ -655,6 +695,49 @@ def render_prior_modality(result, out_path: str | Path) -> Path:
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=9)
     fig.text(0.5, 0.005,
              "Rough share of total |grad × input| at each token group's native input — comparable-ish, not exact.",
+             ha="center", fontsize=8, color=C_FAINT)
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    fig.savefig(out_path)
+    plt.close(fig)
+    return out_path
+
+
+def render_prior_modality_log(result, out_path: str | Path) -> Path:
+    """Same current-vs-prior breakdown as ``render_prior_modality`` but log y-axis.
+
+    When an image is present it swamps the linear plot and the text/vitals/label
+    groups read as ~0. On the log axis those small-but-real contributions stay
+    visible — which is exactly where the prior report / current vitals show up.
+    """
+    out_path = Path(out_path)
+    mc = result.modality_contrib
+    keys = ["cur_image", "cur_clin", "cur_vitals",
+            "prv_image", "prv_clin", "prv_report", "prv_vitals", "prv_label", "time_delta"]
+    labels = ["cur img", "cur clin", "cur vit/obs",
+              "prv img", "prv clin", "prv report", "prv vit/obs", "prv label", "Δt"]
+    vals = [100.0 * mc.get(k, 0.0) for k in keys]
+    plotted = [max(v, _LOG_FLOOR_PCT) for v in vals]
+    colors = [C_IMAGE, C_TEXT, C_VITALS,
+              "#9bb79b", "#bbb1cc", "#e3c4a3", "#d8b48a", "#b9a39c", "#cccccc"]
+
+    fig, ax = plt.subplots(figsize=(10, 4.8))
+    ax.bar(labels, plotted, color=colors)
+    ax.set_yscale("log")
+    ax.set_ylim(_LOG_FLOOR_PCT, 200)
+    ax.set_ylabel("% of |grad × input|  (log scale)")
+    ax.set_title(f"{result.class_name} — current vs prior contribution (log, heuristic)")
+    cur_share = sum(mc.get(k, 0.0) for k in ("cur_image", "cur_clin", "cur_vitals"))
+    ax.axvline(2.5, color=C_ZERO, ls="--", lw=1.0)
+    ax.text(1.0, 120, f"current {100*cur_share:.0f}%", ha="center", fontsize=10, color=C_FAINT)
+    ax.text(5.5, 120, f"prior {100*(1-cur_share):.0f}%", ha="center", fontsize=10, color=C_FAINT)
+    for i, val in enumerate(vals):
+        if val > _LOG_FLOOR_PCT:
+            ax.text(i, max(val, _LOG_FLOOR_PCT) * 1.15, f"{val:.2g}",
+                    ha="center", fontsize=9, color=C_INK)
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=9)
+    fig.text(0.5, 0.005,
+             "Log y-axis: small token groups stay visible under the image's dominance. "
+             f"Bars floored at {_LOG_FLOOR_PCT:g}%.",
              ha="center", fontsize=8, color=C_FAINT)
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     fig.savefig(out_path)

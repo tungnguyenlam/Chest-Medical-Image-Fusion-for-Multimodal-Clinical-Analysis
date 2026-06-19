@@ -16,11 +16,20 @@ encoder is frozen.
 
 Defaults to the `mimic` source (03_mimic_*.csv) to match training/camchex/config.yaml.
 Use --in-prefix 03_kaggle_ to build from the kaggle-hosted images instead.
+
+Label space is selectable. By default it builds the CXR-LT 2023 26-label set (the
+historic behavior). Pass ``--cxr-lt-version cxr-lt-2024 --cxr-lt-label-set task1``
+(and point ``--in-dir/--in-prefix/--splits`` at the relabeled 2024 CSVs produced by
+``scripts/relabel_prepared_cxrlt.py``) to build a 40-label prior-aware dataset. The
+images are identical to 2023, so the expensive image-channel and text-embedding
+caches are keyed by path/content and are reused verbatim -- only this lightweight
+parquet (labels + 2024 split-aware prior linkage) is rebuilt.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -34,15 +43,9 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.dataloader.cxr_lt import cxr_lt_classes, resolve_label_set
 from src.dataloader.utils import resolve_preferred_image_path
-CLASSES = [
-    "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation",
-    "Edema", "Emphysema", "Enlarged Cardiomediastinum", "Fibrosis", "Fracture",
-    "Hernia", "Infiltration", "Lung Lesion", "Lung Opacity", "Mass", "No Finding",
-    "Nodule", "Pleural Effusion", "Pleural Other", "Pleural Thickening",
-    "Pneumomediastinum", "Pneumonia", "Pneumoperitoneum", "Pneumothorax",
-    "Subcutaneous Emphysema", "Support Devices", "Tortuous Aorta",
-]
+
 OBS_FIELDS = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp", "gender"]
 MAX_VIEWS = 4
 # The prior study's full radiology report (findings + impression) is fed only for
@@ -64,10 +67,10 @@ def _view_code(vp: object) -> int:
     return 0
 
 
-def _label_vector(row: pd.Series) -> np.ndarray:
-    """26-d label vector. CheXpert uncertain (-1) → 0.5, NaN → 0."""
-    out = np.zeros(len(CLASSES), dtype=np.float32)
-    for i, c in enumerate(CLASSES):
+def _label_vector(row: pd.Series, classes: list[str]) -> np.ndarray:
+    """Per-class label vector over ``classes``. CheXpert uncertain (-1) → 0.5, NaN → 0."""
+    out = np.zeros(len(classes), dtype=np.float32)
+    for i, c in enumerate(classes):
         v = row.get(c)
         if pd.isna(v):
             continue
@@ -158,9 +161,19 @@ def _resolve_and_trim(paths: list, views: list, cap: int = MAX_VIEWS) -> tuple[l
 def build_split(
     csv_path: Path,
     out_path: Path,
-) -> None:
+    classes: list[str],
+) -> dict:
+    """Build one split parquet. Returns a small stats dict (study count + per-class
+    positive counts) so the caller can record loss-weight metadata."""
     print(f"[build] reading {csv_path}")
     df = pd.read_csv(csv_path, low_memory=False)
+    missing = [c for c in classes if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{csv_path} is missing {len(missing)} label column(s) for the selected "
+            f"label set: {missing}. Did you point --in-dir/--cxr-lt-label-set at the "
+            f"matching relabeled CSVs (see scripts/relabel_prepared_cxrlt.py)?"
+        )
     studies = collapse_to_study(df)
     print(f"[build] {len(df)} image rows -> {len(studies)} studies")
 
@@ -214,7 +227,7 @@ def build_split(
         p, v = _resolve_and_trim(row["img_paths_all"], row["view_codes_all"])
         cur_paths.append(p)
         cur_views.append(v)
-        cur_labels.append(_label_vector(row))
+        cur_labels.append(_label_vector(row, classes))
         cur_vitals.append(_vital_vector(row))
 
         pid = int(row["_prior_id"])
@@ -225,7 +238,7 @@ def build_split(
             pp, pv = _resolve_and_trim(prow["img_paths_all"], prow["view_codes_all"])
             prv_paths.append(pp)
             prv_views.append(pv)
-            prv_labels.append(_label_vector(prow))
+            prv_labels.append(_label_vector(prow, classes))
             prv_vitals.append(_vital_vector(prow))
             prior_has_image.append(len(pp) > 0)
             has_prior.append(True)
@@ -239,7 +252,7 @@ def build_split(
         else:
             prv_paths.append([])
             prv_views.append([])
-            prv_labels.append(np.zeros(len(CLASSES), dtype=np.float32))
+            prv_labels.append(np.zeros(len(classes), dtype=np.float32))
             prv_vitals.append(np.full(len(OBS_FIELDS), np.nan, dtype=np.float32))
             prior_has_image.append(False)
             has_prior.append(False)
@@ -275,6 +288,13 @@ def build_split(
     coverage = float(out_df["has_prior"].mean())
     print(f"[build] done. prior coverage = {coverage:.2%}")
 
+    # Per-class positive counts (label == 1.0) over this split's current studies.
+    # The loss's class_instance_nums wants the *train* split's positives; emitting
+    # them here makes a 2024 config trivial to fill for any model.
+    label_mat = np.stack(cur_labels) if cur_labels else np.zeros((0, len(classes)), np.float32)
+    pos_counts = (label_mat == 1.0).sum(axis=0).astype(int).tolist()
+    return {"num_studies": int(len(out_df)), "positive_counts": pos_counts}
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Pre-generate prior-aware parquet datasets.")
@@ -284,9 +304,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--in-prefix",
         default="03_mimic_",
-        help="Input CSV filename prefix. Default 03_mimic_ matches the output of src/prepare/03_filter_existing_images.py with --subset mimic.",
+        help="Input CSV filename prefix. Default 03_mimic_ matches the output of src/prepare/03_filter_existing_images.py with --subset mimic. For relabeled 2024 CSVs (train.csv/val.csv/test.csv) pass --in-prefix '' --splits train val test.",
     )
     p.add_argument("--out-prefix", default="prior_aware_")
+    p.add_argument(
+        "--cxr-lt-version",
+        default="cxr-lt-2023",
+        choices=["cxr-lt-2023", "cxr-lt-2024"],
+        help="CXR-LT release whose label space to bake into the parquet (default 2023, the historic 26-label set).",
+    )
+    p.add_argument(
+        "--cxr-lt-label-set",
+        default="auto",
+        choices=["auto", "all", "task1", "task2", "task3", "standard"],
+        help="Label set within the release. 'auto' = standard for 2023, task1 for 2024.",
+    )
     return p.parse_args()
 
 
@@ -295,10 +327,40 @@ def main() -> None:
     in_dir = (ROOT / args.in_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
 
+    resolved_label_set = resolve_label_set(args.cxr_lt_version, args.cxr_lt_label_set)
+    classes = cxr_lt_classes(args.cxr_lt_version, args.cxr_lt_label_set)
+    print(
+        f"[build] label space: {args.cxr_lt_version} / {resolved_label_set} "
+        f"({len(classes)} classes)"
+    )
+
+    split_stats: dict[str, dict] = {}
     for split in args.splits:
         csv_path = in_dir / f"{args.in_prefix}{split}.csv"
         out_path = out_dir / f"{args.out_prefix}{split}.parquet"
-        build_split(csv_path, out_path)
+        split_stats[split] = build_split(csv_path, out_path, classes)
+
+    # Sidecar metadata: the resolved class order plus per-split positive counts, so
+    # the loss's class_instance_nums (train positives) is copy-pasteable into any
+    # model config for this label space.
+    meta_path = out_dir / f"{args.out_prefix}label_metadata.json"
+    metadata = {
+        "cxr_lt_version": args.cxr_lt_version,
+        "cxr_lt_label_set": resolved_label_set,
+        "num_classes": len(classes),
+        "classes": classes,
+        "splits": {
+            split: {
+                "num_studies": stats["num_studies"],
+                "class_instance_nums": stats["positive_counts"],
+                "total_instance_num": int(sum(stats["positive_counts"])),
+            }
+            for split, stats in split_stats.items()
+        },
+    }
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"[build] metadata -> {meta_path}")
 
 
 if __name__ == "__main__":
