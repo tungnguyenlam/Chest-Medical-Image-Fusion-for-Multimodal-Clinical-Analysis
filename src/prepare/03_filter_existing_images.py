@@ -2,7 +2,7 @@ import argparse
 import functools
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 from PIL import Image
@@ -14,31 +14,6 @@ from tqdm import tqdm
 # cv2.imread (the training decode path) would — that half-decode + libjpeg warning spam
 # is exactly the slowdown this step exists to prevent.
 Image.MAX_IMAGE_PIXELS = None
-
-if not os.path.isdir('data') or not os.path.isdir('src'):
-    sys.exit("Run from project root: python src/prepare/03_filter_existing_images.py")
-
-_parser = argparse.ArgumentParser(description="Filter merged CSVs to images that exist (and decode) on disk.")
-_parser.add_argument(
-    '--subset', default='subset', choices=['full', 'subset', 'kaggle'],
-    help="Which image source to filter against (and rewrite path columns for). "
-         "'full' = data/MIMIC-CXR-JPG/files. "
-         "'subset' = data/subset/MIMIC-CXR-JPG/files. "
-         "'kaggle' = data/data-kaggle/official_data_iccv_final/files. "
-         "Default: subset."
-)
-_parser.add_argument(
-    '--verify-images', action=argparse.BooleanOptionalAction, default=True,
-    help="Fully decode each JPEG to drop corrupt/truncated files (not just missing ones). "
-         "On (default) makes the pass slower but stops corrupt images from spamming "
-         "libjpeg warnings and slowing training/precompute later. Use --no-verify-images "
-         "for a fast existence-only filter."
-)
-_parser.add_argument(
-    '--workers', type=int, default=min(8, os.cpu_count() or 1),
-    help="Parallel workers for the existence/decode check. Default: min(8, cpu_count)."
-)
-_args, _ = _parser.parse_known_args()
 
 # Reads 02_*.csv from data/data-camchex/, filters to rows whose image exists on disk,
 # and writes one set of 03_*.csv per image source. The training config picks which set
@@ -66,13 +41,8 @@ _SOURCE_BY_SUBSET = {
     'kaggle':       ('kaggle', 'data/data-kaggle/official_data_iccv_final/files',
                                 '../data/data-kaggle/official_data_iccv_final/files'),
 }
-SOURCES = [_SOURCE_BY_SUBSET[_args.subset]]
-print(f"[03_filter_existing_images] subset={_args.subset}  source={SOURCES[0][0]}  base={SOURCES[0][1]}  "
-      f"verify_images={_args.verify_images}  workers={_args.workers}")
 
 SPLITS = ['train', 'development', 'test']
-
-os.makedirs(OUT_DIR, exist_ok=True)
 
 
 def strip_images_prefix(p: str) -> str:
@@ -106,56 +76,101 @@ def classify_images(abs_paths: list[str], verify: bool, workers: int, desc: str)
     fn = functools.partial(_check_one, verify=verify)
     if workers <= 1 or len(abs_paths) <= 1:
         return [fn(p) for p in tqdm(abs_paths, desc=desc)]
-    # Decode is CPU-bound; chunk the work so per-task IPC overhead stays small.
+    # Threads, not processes: the hot path is Pillow's im.load() (JPEG decode) and
+    # os.stat(), both of which release the GIL, so threads parallelize the work nearly
+    # as well as processes would — without pickling overhead, and without the Windows
+    # 'spawn' re-import-the-main-module trap that needs a __main__ guard. chunksize
+    # keeps per-task dispatch cost small on the big train split.
     chunksize = max(1, min(256, len(abs_paths) // (workers * 4) or 1))
-    with ProcessPoolExecutor(max_workers=workers) as ex:
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         return list(tqdm(ex.map(fn, abs_paths, chunksize=chunksize),
                          total=len(abs_paths), desc=desc))
 
 
-for source_tag, base_dir, base_dir_from_camchex in SOURCES:
-    if not os.path.isdir(base_dir):
-        print(f"[{source_tag}] Base dir missing: {base_dir} — skipping this source.")
-        continue
+def main() -> None:
+    # All real work lives behind the __main__ guard. classify_images() now uses a
+    # ThreadPoolExecutor, so this guard is no longer load-bearing (threads don't
+    # re-import the module the way Windows 'spawn' process workers do), but keeping
+    # the entrypoint guarded is good hygiene and means importing this module never
+    # parses CLI args or touches the filesystem.
+    if not os.path.isdir('data') or not os.path.isdir('src'):
+        sys.exit("Run from project root: python src/prepare/03_filter_existing_images.py")
 
-    print(f"=== Source: {source_tag} (base: {base_dir}) ===")
-    for split in SPLITS:
-        in_path = os.path.join(DATA_CAMCHEX_ROOT, f'02_{split}.csv')
-        out_path = os.path.join(OUT_DIR, f'03_{source_tag}_{split}.csv')
+    parser = argparse.ArgumentParser(description="Filter merged CSVs to images that exist (and decode) on disk.")
+    parser.add_argument(
+        '--subset', default='subset', choices=['full', 'subset', 'kaggle'],
+        help="Which image source to filter against (and rewrite path columns for). "
+             "'full' = data/MIMIC-CXR-JPG/files. "
+             "'subset' = data/subset/MIMIC-CXR-JPG/files. "
+             "'kaggle' = data/data-kaggle/official_data_iccv_final/files. "
+             "Default: subset."
+    )
+    parser.add_argument(
+        '--verify-images', action=argparse.BooleanOptionalAction, default=True,
+        help="Fully decode each JPEG to drop corrupt/truncated files (not just missing ones). "
+             "On (default) makes the pass slower but stops corrupt images from spamming "
+             "libjpeg warnings and slowing training/precompute later. Use --no-verify-images "
+             "for a fast existence-only filter."
+    )
+    parser.add_argument(
+        '--workers', type=int, default=min(8, os.cpu_count() or 1),
+        help="Parallel workers for the existence/decode check. Default: min(8, cpu_count)."
+    )
+    args, _ = parser.parse_known_args()
 
-        if not os.path.exists(in_path):
-            print(f"  Not found, skipping: {in_path}")
+    sources = [_SOURCE_BY_SUBSET[args.subset]]
+    print(f"[03_filter_existing_images] subset={args.subset}  source={sources[0][0]}  base={sources[0][1]}  "
+          f"verify_images={args.verify_images}  workers={args.workers}")
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+    for source_tag, base_dir, base_dir_from_camchex in sources:
+        if not os.path.isdir(base_dir):
+            print(f"[{source_tag}] Base dir missing: {base_dir} — skipping this source.")
             continue
 
-        print(f"  Filtering {os.path.basename(in_path)} -> {os.path.basename(out_path)}")
-        df = pd.read_csv(in_path, low_memory=False)
+        print(f"=== Source: {source_tag} (base: {base_dir}) ===")
+        for split in SPLITS:
+            in_path = os.path.join(DATA_CAMCHEX_ROOT, f'02_{split}.csv')
+            out_path = os.path.join(OUT_DIR, f'03_{source_tag}_{split}.csv')
 
-        rels = df['path'].map(strip_images_prefix)
-        abs_paths = [os.path.join(base_dir, r) for r in rels]
-        statuses = pd.Series(
-            classify_images(abs_paths, _args.verify_images, _args.workers,
-                            desc=f"{source_tag}/{split}"),
-            index=df.index,
-        )
+            if not os.path.exists(in_path):
+                print(f"  Not found, skipping: {in_path}")
+                continue
 
-        keep_mask = statuses == 'ok'
-        filtered_df = df[keep_mask].copy()
-        filtered_df['path'] = rels[keep_mask].map(
-            lambda r: os.path.join(base_dir_from_camchex, r)
-        )
+            print(f"  Filtering {os.path.basename(in_path)} -> {os.path.basename(out_path)}")
+            df = pd.read_csv(in_path, low_memory=False)
 
-        kept, total = len(filtered_df), len(df)
-        n_missing = int((statuses == 'missing').sum())
-        n_corrupt = int((statuses == 'corrupt').sum())
-        print(f"    kept {kept} / {total} ({n_missing} missing, {n_corrupt} corrupt dropped)")
+            rels = df['path'].map(strip_images_prefix)
+            abs_paths = [os.path.join(base_dir, r) for r in rels]
+            statuses = pd.Series(
+                classify_images(abs_paths, args.verify_images, args.workers,
+                                desc=f"{source_tag}/{split}"),
+                index=df.index,
+            )
 
-        # Record corrupt paths so they can be inspected / re-fetched, not just silently dropped.
-        if n_corrupt:
-            corrupt_path = os.path.join(OUT_DIR, f'03_{source_tag}_{split}_corrupt.txt')
-            corrupt_rels = rels[statuses == 'corrupt']
-            with open(corrupt_path, 'w') as f:
-                f.write('\n'.join(corrupt_rels) + '\n')
-            print(f"    wrote {n_corrupt} corrupt paths to {corrupt_path}")
+            keep_mask = statuses == 'ok'
+            filtered_df = df[keep_mask].copy()
+            filtered_df['path'] = rels[keep_mask].map(
+                lambda r: os.path.join(base_dir_from_camchex, r)
+            )
 
-        filtered_df.to_csv(out_path, index=False)
-        print(f"    saved {out_path}")
+            kept, total = len(filtered_df), len(df)
+            n_missing = int((statuses == 'missing').sum())
+            n_corrupt = int((statuses == 'corrupt').sum())
+            print(f"    kept {kept} / {total} ({n_missing} missing, {n_corrupt} corrupt dropped)")
+
+            # Record corrupt paths so they can be inspected / re-fetched, not just silently dropped.
+            if n_corrupt:
+                corrupt_path = os.path.join(OUT_DIR, f'03_{source_tag}_{split}_corrupt.txt')
+                corrupt_rels = rels[statuses == 'corrupt']
+                with open(corrupt_path, 'w') as f:
+                    f.write('\n'.join(corrupt_rels) + '\n')
+                print(f"    wrote {n_corrupt} corrupt paths to {corrupt_path}")
+
+            filtered_df.to_csv(out_path, index=False)
+            print(f"    saved {out_path}")
+
+
+if __name__ == '__main__':
+    main()

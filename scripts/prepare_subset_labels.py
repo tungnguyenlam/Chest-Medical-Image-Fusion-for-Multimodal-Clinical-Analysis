@@ -202,9 +202,17 @@ def parse_all_reports(mimic_df: pd.DataFrame, reports_base: Path, workers: int) 
         mimic_df[col] = None
 
     args = list(zip(mimic_df.index, mimic_df["subject_id"], mimic_df["study_id"]))
-    ctx = get_context("fork")
+    try:
+        pool_cls = get_context("fork").Pool
+    except ValueError:
+        # 'fork' is unavailable on Windows (only 'spawn' is). ThreadPool shares the
+        # parent's memory like fork — no pickling, no __main__ guard, and it honors
+        # the same initializer/initargs API — so the worker global still gets set.
+        # Report parsing is regex- + I/O-bound, so threads parallelize acceptably.
+        from multiprocessing.pool import ThreadPool as pool_cls
+        print("  'fork' start method unavailable; using ThreadPool fallback.", flush=True)
     print(f"  starting report parser pool: {workers} worker(s), {len(args)} report candidate(s)", flush=True)
-    with ctx.Pool(
+    with pool_cls(
         workers, initializer=_worker_init,
         initargs=(str(reports_base), custom_section_names, custom_indices),
     ) as pool:
