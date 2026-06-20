@@ -2145,3 +2145,13 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 **Gotchas.** Defaults are shown for flags that map cleanly to shared config/runtime settings. Optional paths like checkpoints and model-specific pretrained state dicts remain unset unless passed. Existing import-time warnings can still appear before help text.
 
 **Follow-ups.** If model-specific entrypoints add new flags whose defaults live in YAML but are not in the shared map, add their `dest` to `_config_default_by_dest()` rather than duplicating help logic in the entrypoint.
+
+## 2026-06-20 — Use ThreadPool fallbacks on Windows/non-fork systems for report parsing and image filtering
+
+**Goal.** Commit and push the existing local modifications.
+
+**Changes.**
+- `scripts/prepare_subset_labels.py:205` — Fall back to `multiprocessing.pool.ThreadPool` when `get_context("fork")` is unavailable (e.g. on Windows).
+- `src/prepare/03_filter_existing_images.py:79` — Use `ThreadPoolExecutor` instead of `ProcessPoolExecutor` for image existence/decode checks and add a `__main__` guard.
+
+**Reasoning.** These changes fix cross-platform issues where the 'fork' start method or process spawning causes traps/errors on Windows. ThreadPool works identically on these CPU/IO-bound operations without needing complex serialization or process-spawning guards.
