@@ -142,8 +142,17 @@ def precompute_channels_for_paths(
         _build_channel_cache_entry, mode=mode, preprocess_cfg=preprocess_cfg, cache_dir=cache_dir
     )
     failures = 0
-    mp_ctx = multiprocessing.get_context("fork")
-    with mp_ctx.Pool(n_workers) as pool:
+    try:
+        pool_cls = multiprocessing.get_context("fork").Pool
+    except ValueError:
+        # 'fork' is unavailable on Windows (only 'spawn' is). ThreadPool shares the
+        # parent's memory like fork — no pickling of the partial/closure, no __main__
+        # guard — and exposes the same imap_unordered API. Each build is I/O-bound
+        # (read off a slow mount) plus cv2/numpy channel ops that release the GIL, so
+        # threads parallelize it acceptably.
+        from multiprocessing.pool import ThreadPool as pool_cls
+        print(f"[precompute] {desc}: 'fork' start method unavailable; using ThreadPool fallback.", flush=True)
+    with pool_cls(n_workers) as pool:
         # chunksize=1: each build is ~1s of I/O on a slow mount, so per-item
         # dispatch costs nothing and the bar moves per image (chunking would
         # batch results and make it look frozen for ~chunksize seconds) and load
