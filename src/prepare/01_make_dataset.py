@@ -183,8 +183,17 @@ report_args = list(zip(mimic_df.index, mimic_df['subject_id'], mimic_df['study_i
 n_workers = max(1, int(cpu_count() * CPU_FRACTION))
 print(f"Using {n_workers} parallel workers for report parsing...")
 
-mp_ctx = __import__('multiprocessing').get_context('fork')
-with mp_ctx.Pool(n_workers) as pool:
+try:
+    pool_cls = __import__('multiprocessing').get_context('fork').Pool
+except ValueError:
+    # 'fork' is unavailable on Windows; only 'spawn' is, which re-imports this
+    # module (re-running all top-level loading, since there is no __main__ guard).
+    # Threads share the parent's memory like fork and need no pickling/guard, and
+    # report parsing is I/O- + regex-bound so they still parallelize well.
+    from multiprocessing.pool import ThreadPool as pool_cls
+    print("[01_make_dataset] 'fork' start method unavailable; using ThreadPool fallback.")
+
+with pool_cls(n_workers) as pool:
     results = list(tqdm(
         pool.imap_unordered(_parse_single_report, report_args, chunksize=256),
         total=len(report_args),
