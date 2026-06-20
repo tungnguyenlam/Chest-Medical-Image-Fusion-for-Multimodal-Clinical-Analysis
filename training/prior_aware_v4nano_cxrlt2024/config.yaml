@@ -1,0 +1,175 @@
+# prior_aware_v4nano_cxrlt2024 on CXR-LT 2024 (task1, 40 labels).
+#
+# Auto-derived from training/prior_aware_v4nano/config.yaml: only the label space (40 task1
+# classes), num_classes/n_classes, the loss class frequencies, and the dataframe
+# paths differ. The 2024 images are identical to 2023, so the image-channel cache
+# (../cache/channels) and text-embedding cache (../cache/text_embeddings) are
+# reused verbatim.
+#
+# Build the data first (one command builds every variant incl. this one):
+#   python src/prepare/04_build_prior_aware_dataset.py
+# Train (reuse the base model's entry point, only --config changes):
+#   python training/prior_aware_v4nano/prior_aware_train.py --config training/prior_aware_v4nano_cxrlt2024/config.yaml
+#
+# Loss weights are per-STUDY positive counts from the build's sidecar
+#   data/data-camchex/prior_aware_cxrlt2024_task1_label_metadata.json
+model:
+  arch: prior_aware_v4nano
+  lr: 3.0e-5
+  classes: &classes
+    - Adenopathy
+    - Atelectasis
+    - Azygos Lobe
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Clavicle Fracture
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fissure
+    - Fracture
+    - Granuloma
+    - Hernia
+    - Hydropneumothorax
+    - Infarction
+    - Infiltration
+    - Kyphosis
+    - Lobar Atelectasis
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - Nodule
+    - Normal
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Pulmonary Embolism
+    - Pulmonary Hypertension
+    - Rib Fracture
+    - Round(ed) Atelectasis
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+    - Tuberculosis
+  loss_init_args:
+    class_instance_nums:
+      - 1532
+      - 35321
+      - 76
+      - 1807
+      - 38194
+      - 69
+      - 8495
+      - 21409
+      - 1680
+      - 13936
+      - 585
+      - 1299
+      - 5401
+      - 1205
+      - 1762
+      - 305
+      - 360
+      - 4841
+      - 290
+      - 76
+      - 1170
+      - 39827
+      - 2574
+      - 3381
+      - 15071
+      - 36559
+      - 282
+      - 1418
+      - 370
+      - 21855
+      - 305
+      - 7894
+      - 839
+      - 458
+      - 4057
+      - 72
+      - 1228
+      - 50701
+      - 1477
+      - 933
+    total_instance_num: 329114
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 40
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
+    pretrained: true
+    # Stochastic depth: a cheap regularization lever for the shared backbone. Kept at
+    # 0.0 here so a v4-vs-v3nano run isolates the fusion change; bump to 0.1-0.15 once
+    # the asymmetric-cross-attention effect is measured.
+    drop_path_rate: 0.0
+  model_init_args:
+    d_model: 768
+    transformer_layers: 2  # number of asymmetric cross-attention fusion layers
+    nhead: 8
+    dropout: 0.1
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    schedule: single_cosine  # one cosine decay over the whole run (no per-epoch warm restarts)
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/prior_aware_cxrlt2024_task1_train.parquet
+    devel_df_path: data/data-camchex/prior_aware_cxrlt2024_task1_val.parquet
+    pred_df_path: data/data-camchex/prior_aware_cxrlt2024_task1_test.parquet
+    use_text_embedding_cache: false
+    text_embedding_streams: [clin_text, prior_clin_text, prior_report_text]
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
+    # Shared on-disk cache for built 3-channel images (uint8, keyed by
+    # path+mode+cfg). Reused across models/runs and prebuilt before training.
+    image_channel_cache_dir: ../cache/channels
+    # Full channel_mode name: ch0=raw, ch1=mild CLAHE (both pinned), ch2 here=histeq.
+    # Override ONLY ch2 per-run with --third-channel-mode (clahe|histeq|lbp) -- it maps
+    # the short name to the full mode (histeq -> raw_clahe_histeq). --third-channel-mode
+    # none (or channel_mode: null) reverts to the plain direct JPEG decode (grayscale
+    # duplicated to 3 channels).
+    channel_mode: raw_clahe_histeq
+    size: 512
+    classes: *classes
+    label_dropout_p: 0.3
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 2
+  grad_clip: 1.0
+  precision: 16-mixed
+  compile_model: false
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  # Fraction-of-epoch validation schedule (batch-size independent): quick val mid-epoch, full val only at epoch end.
+  full_val_fracs: []  # no mid-epoch full validation (end-of-epoch full val always runs)
+  quick_val_fracs: [0.25, 0.5, 0.75]
+  quick_val_frac: 0.1
+  val_num_workers: 0  # 0 = run val in-process (no 2nd worker pool); raise to use val workers
+  seed: null
+  accelerator: null

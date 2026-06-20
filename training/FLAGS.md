@@ -18,7 +18,7 @@ Run `python training/<model>/<model>_train.py --help` to see the live, grouped l
 Grouped exactly as in `add_common_args`. Flags marked **train-only** below are not
 registered on `*_eval.py` at all — `add_common_args(..., mode="eval")` drops them, so
 they don't appear in `eval --help` (previously they were shown but silently ignored).
-The eval parser also adds the eval-only `--skip-report-ablation`. Eval loaders pre-warm
+The eval parser also adds the eval-only `--skip-report-ablation` and `--skip-task2-gold`. Eval loaders pre-warm
 the image channel cache for the test split up front (the same prebuild training runs for
 train+val), so the first eval over a fresh split pays the channel-build cost upfront
 instead of stalling mid-loop; `--skip-precompute` bypasses it.
@@ -116,6 +116,7 @@ instead of stalling mid-loop; `--skip-precompute` bypasses it.
 | Flag | Use |
 |------|-----|
 | `--skip-report-ablation` | *Eval.* Skip the second "current clinical indication blanked" pass (the leakage probe). |
+| `--skip-task2-gold` | *Eval.* Skip the extra CXR-LT 2024 task2 (gold) pass. By default a model whose label set is a superset of the 26 task2 labels (i.e. trained on 2024 task1/all) is also scored on the task2 gold test set: its outputs are sliced to the 26 task2 columns and written to `*_task2_gold.{csv,json}`. Needs the task2 gold file next to the eval file (`task1` → `task2` in the name); silently skipped if absent. No-op for CXR-LT 2023 models. |
 
 ---
 

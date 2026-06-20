@@ -5,16 +5,22 @@ import sys
 if not os.path.isdir('data') or not os.path.isdir('src'):
     sys.exit("Run from project root: python src/prepare/02_split_dataset.py")
 
+sys.path.insert(0, os.getcwd())
+from src.dataloader.cxr_lt import load_cxr_lt_labels
+
 DATA_CAMCHEX_ROOT = 'data/data-camchex'
-_CXRLT_2023 = 'data/CXR-LT/cxr-lt-multi-label-long-tailed-classification-on-chest-x-rays-2.0.0/cxr-lt-2023'
+CXRLT_VERSION = 'cxr-lt-2023'
 
 print("Loading 01_merged.csv...")
 dataset_df = pd.read_csv(f'{DATA_CAMCHEX_ROOT}/01_merged.csv', low_memory=False)
 
 print("Loading CXR-LT splits...")
-train_ids = set(pd.read_csv(f'{_CXRLT_2023}/train.csv', usecols=['dicom_id'])['dicom_id'])
-dev_ids = set(pd.read_csv(f'{_CXRLT_2023}/development.csv', usecols=['dicom_id'])['dicom_id'])
-test_ids = set(pd.read_csv(f'{_CXRLT_2023}/test.csv', usecols=['dicom_id'])['dicom_id'])
+# Split assignment comes from the shared helper (normalized split column), so the
+# 2023 release layout lives in one place. Stage 04 re-splits for the 2024 release.
+_cxrlt_df, _, _ = load_cxr_lt_labels('data', version=CXRLT_VERSION)
+train_ids = set(_cxrlt_df.loc[_cxrlt_df['split'] == 'train', 'dicom_id'])
+dev_ids = set(_cxrlt_df.loc[_cxrlt_df['split'] == 'validate', 'dicom_id'])
+test_ids = set(_cxrlt_df.loc[_cxrlt_df['split'] == 'test', 'dicom_id'])
 
 print("Creating splits...")
 train_df = dataset_df[dataset_df['dicom_id'].isin(train_ids)].copy()

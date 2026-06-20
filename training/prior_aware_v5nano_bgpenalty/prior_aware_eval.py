@@ -71,6 +71,7 @@ def main() -> None:
     if args.checkpoint_path:
         load_weights(model, args.checkpoint_path)
     evaluate_report_ablation(
+        cfg=cfg,
         model=model,
         classes=classes_from_config(cfg),
         device=select_device(args.accelerator),

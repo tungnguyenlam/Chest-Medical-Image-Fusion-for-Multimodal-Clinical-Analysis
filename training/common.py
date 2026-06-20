@@ -508,3 +508,14 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
                 "Pass this flag to run only the full pass."
             ),
         )
+        g.add_argument(
+            "--skip-task2-gold",
+            action="store_true",
+            help=(
+                "Eval only: by default a model trained on a CXR-LT 2024 label set that is a "
+                "superset of the 26 task2 labels (i.e. task1 / all) is ALSO scored on the task2 "
+                "(gold) test set -- its wide outputs are sliced to the 26 task2 columns and written "
+                "to *_task2_gold.{csv,json}. The extra pass needs the task2 gold file to exist next "
+                "to the eval file (task1 -> task2 in the name). Pass this flag to skip it."
+            ),
+        )

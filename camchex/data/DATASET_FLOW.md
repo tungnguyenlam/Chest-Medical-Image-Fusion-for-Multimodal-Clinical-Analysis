@@ -180,14 +180,24 @@ flowchart TD
 - `02_split_dataset.py` is optional when step 1 finishes normally because step 1 already writes `02_train.csv`, `02_development.csv`, and `02_test.csv`. Run step 2 when you want to rebuild splits from `01_merged.csv` without reparsing reports.
 - `03_filter_existing_images.py` is what makes the CSVs machine-aware. It drops rows whose image file is absent on the selected image source and rewrites `path` values so training can open them from the `camchex/` working directory.
 - `04_build_prior_aware_dataset.py` is optional, used only by the prior-aware model. It collapses the 03 CSV to one row per `study_id`, joins each study with its `PreviousStudy`, pre-tokenizes BioBERT inputs for both, and writes `prior_aware_{train,development,test}.parquet`. The runtime `PriorAwareDataset` only has to decode JPEGs.
-  - **Label space is selectable.** It defaults to the CXR-LT 2023 26-label set. To build a CXR-LT 2024 prior-aware dataset, first relabel/re-split the prepared CSVs with `scripts/relabel_prepared_cxrlt.py` (which writes `cxrlt2024_task1/{train,val,test}.csv`), then run stage 4 against those with the matching label set:
+  - **It builds every CXR-LT release/task variant by default.** Run with no flags and it reads the label-agnostic `03_mimic_*.csv` base once, then for each variant re-attaches that release's labels, re-splits the way the release defines splits (2024 reassigns them), and writes a parquet trio + a `*_label_metadata.json` sidecar:
+    ```bash
+    python src/prepare/04_build_prior_aware_dataset.py
+    #  -> prior_aware_{train,development,test}.parquet               (cxr-lt-2023 / standard, 26)
+    #  -> prior_aware_cxrlt2024_all_{train,val,test}.parquet         (cxr-lt-2024 / all,   45)
+    #  -> prior_aware_cxrlt2024_task1_{train,val,test}.parquet       (cxr-lt-2024 / task1, 40)
+    #  -> prior_aware_cxrlt2024_task2_{train,val,test}.parquet       (cxr-lt-2024 / task2, 26)
+    #  -> prior_aware_cxrlt2024_task3_{train,val,test}.parquet       (cxr-lt-2024 / task3,  5)
+    ```
+    Variants whose label CSVs are absent under `data/CXR-LT/.../<version>` are skipped with a warning, so a 2023-only checkout still works. The labeled/re-split CSVs are also written under `data/data-camchex/<variant>/` (the artifacts `scripts/relabel_prepared_cxrlt.py` used to produce by hand — that script is now only needed for one-off custom relabels).
+  - **To rebuild just one variant**, pass `--cxr-lt-version`/`--cxr-lt-label-set` (single-variant mode reads the pre-split CSVs named by `--in-prefix`/`--splits`):
     ```bash
     python src/prepare/04_build_prior_aware_dataset.py \
       --in-dir data/data-camchex/cxrlt2024_task1 --in-prefix "" --splits train val test \
       --out-dir data/data-camchex --out-prefix prior_aware_cxrlt2024_task1_ \
       --cxr-lt-version cxr-lt-2024 --cxr-lt-label-set task1
     ```
-    The 2024 release is the *same images* as 2023 — only the labels and the train/val/test assignment differ — so the expensive image-channel cache (`../cache/channels`) and frozen text-embedding cache (`../cache/text_embeddings`) are keyed by image path / text content and are **reused verbatim**; only this lightweight parquet is rebuilt. Prior linkage is re-resolved here because it is resolved *within a split*, and 2024 reassigns splits. A sidecar `prior_aware_cxrlt2024_task1_label_metadata.json` records the resolved class order and per-split positive counts (drop the train `class_instance_nums`/`total_instance_num` straight into a model's `loss_init_args`).
+    The 2024 release is the *same images* as 2023 — only the labels and the train/val/test assignment differ — so the expensive image-channel cache (`../cache/channels`) and frozen text-embedding cache (`../cache/text_embeddings`) are keyed by image path / text content and are **reused verbatim**; only these lightweight parquets are rebuilt. Prior linkage is re-resolved per variant because it is resolved *within a split*, and 2024 reassigns splits. Each sidecar `*_label_metadata.json` records that variant's resolved class order and per-split positive counts (drop the train `class_instance_nums`/`total_instance_num` straight into a model's `loss_init_args`).
 - The active default training files are `03_mimic_train.csv`, `03_mimic_development.csv`, and `03_mimic_test.csv`, because those are the paths in `camchex/config.yaml`. The Kaggle `03_kaggle_*` files are alternate outputs if that source directory exists and the config is changed to point at them.
 - `CaMCheXDataset` groups the final CSV rows by `study_id`, so the dataloader returns one study sample with up to four image views, view-position IDs, clinical indication tokens, vitals/gender tokens, and the 26-label target vector.
 - The merged CSVs retain a cleaned `report` column, but the current `CaMCheXDataset` returns `clinical_indication` and vitals/gender text, not the full `report` text.

@@ -18,6 +18,7 @@ from training.common import (
     resolve_eval_config,
     load_weights,
     make_single_view_eval_loader,
+    maybe_evaluate_cxrlt2024_task2_gold,
     model_init_args_from_config,
     predict_dataframe,
     print_validation_summary,
@@ -59,6 +60,20 @@ def main() -> None:
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
         print_validation_summary(metrics, classes, header=f"eval | {args.checkpoint_path}")
+
+    # Also score 2024 task1/all models on the task2 (gold) test set. make_single_view_eval_loader
+    # returns (loader, ids, labels_available); adapt it to the (loader, labels_available) shape.
+    maybe_evaluate_cxrlt2024_task2_gold(
+        model=model,
+        classes=classes,
+        device=select_device(args.accelerator),
+        args=args,
+        make_loader=lambda drop_report: make_single_view_eval_loader(cfg, args, args.view_position)[::2],
+        cfg=cfg,
+        predictions_path=Path(args.predictions_path),
+        metrics_path=Path(args.metrics_path),
+        header=f"eval | {args.checkpoint_path}",
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,169 @@
+# camchex_v3nano_cxrlt2024 on CXR-LT 2024 (task1, 40 labels).
+#
+# Auto-derived from training/camchex_v3nano/config.yaml: only the label space (40 task1
+# classes), num_classes/n_classes, the loss class frequencies, and the dataframe
+# paths differ. The 2024 images are identical to 2023, so the image-channel cache
+# (../cache/channels) and text-embedding cache (../cache/text_embeddings) are
+# reused verbatim.
+#
+# Build the data first (one command builds every variant incl. this one):
+#   python src/prepare/04_build_prior_aware_dataset.py
+# Train (reuse the base model's entry point, only --config changes):
+#   python training/camchex_v3nano/camchex_v3nano_train.py --config training/camchex_v3nano_cxrlt2024/config.yaml
+#
+# Loss weights are per-IMAGE positive counts over the 2024 task1 train label CSV.
+model:
+  arch: camchex_v3nano
+  lr: 3.0e-5
+  classes: &classes
+    - Adenopathy
+    - Atelectasis
+    - Azygos Lobe
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Clavicle Fracture
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fissure
+    - Fracture
+    - Granuloma
+    - Hernia
+    - Hydropneumothorax
+    - Infarction
+    - Infiltration
+    - Kyphosis
+    - Lobar Atelectasis
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - Nodule
+    - Normal
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Pulmonary Embolism
+    - Pulmonary Hypertension
+    - Rib Fracture
+    - Round(ed) Atelectasis
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+    - Tuberculosis
+  loss_init_args:
+    class_instance_nums:
+      - 3409
+      - 65376
+      - 199
+      - 4239
+      - 74738
+      - 168
+      - 15371
+      - 37256
+      - 3661
+      - 29628
+      - 1169
+      - 2803
+      - 11568
+      - 2965
+      - 3986
+      - 646
+      - 727
+      - 10087
+      - 778
+      - 129
+      - 2338
+      - 77482
+      - 5288
+      - 7531
+      - 34292
+      - 66401
+      - 616
+      - 3272
+      - 704
+      - 46660
+      - 516
+      - 13858
+      - 1631
+      - 903
+      - 8919
+      - 172
+      - 2046
+      - 86079
+      - 3336
+      - 2078
+    total_instance_num: 258871
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 40
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
+    pretrained: true
+    drop_path_rate: 0.0
+  model_init_args:
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    schedule: single_cosine  # one cosine decay over the whole run (no per-epoch warm restarts)
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/cxrlt2024_task1/train.csv
+    devel_df_path: data/data-camchex/cxrlt2024_task1/val.csv
+    pred_df_path: data/data-camchex/cxrlt2024_task1/test.csv
+    use_text_embedding_cache: false
+    # Shared on-disk cache for frozen text embeddings, like image_channel_cache_dir.
+    # Content-addressed (sha1 of model|max_length|text) under a per-model subdir, so
+    # it is reused across models/runs and never rebuilt for texts already present.
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
+    image_cache_dir: null
+    # Shared on-disk cache for built 3-channel images (uint8, keyed by
+    # path+mode+cfg). Reused across models/runs and prebuilt before training when
+    # channel_mode is set. null -> rebuild on the fly every epoch (no cache).
+    image_channel_cache_dir: ../cache/channels
+    # Full channel_mode name: ch0=raw, ch1=mild CLAHE (both pinned), ch2 here=histeq.
+    # Override ONLY ch2 per-run with --third-channel-mode (clahe|histeq|lbp) -- it maps
+    # the short name to the full mode (histeq -> raw_clahe_histeq). --third-channel-mode
+    # none reverts to legacy ImageNet RGB (channel_mode: null).
+    channel_mode: raw_clahe_histeq
+    size: 512
+    classes: *classes
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 1
+  grad_clip: 1.0
+  precision: 16-mixed
+  compile_model: false  # true -> torch.compile (automatic dynamic) the static-shape submodules in place (backbones, text encoder, transformer, head); fusion stays eager. See README "Optional torch.compile".
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  # Fraction-of-epoch validation schedule (batch-size independent): quick val mid-epoch, full val only at epoch end.
+  full_val_fracs: []  # no mid-epoch full validation (end-of-epoch full val always runs)
+  quick_val_fracs: [0.25, 0.5, 0.75]
+  quick_val_frac: 0.1
+  val_num_workers: 0  # 0 = run val in-process (no 2nd worker pool); raise to use val workers
+  seed: null
+  accelerator: null

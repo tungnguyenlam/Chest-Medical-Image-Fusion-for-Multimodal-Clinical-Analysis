@@ -17,13 +17,30 @@ encoder is frozen.
 Defaults to the `mimic` source (03_mimic_*.csv) to match training/camchex/config.yaml.
 Use --in-prefix 03_kaggle_ to build from the kaggle-hosted images instead.
 
-Label space is selectable. By default it builds the CXR-LT 2023 26-label set (the
-historic behavior). Pass ``--cxr-lt-version cxr-lt-2024 --cxr-lt-label-set task1``
-(and point ``--in-dir/--in-prefix/--splits`` at the relabeled 2024 CSVs produced by
-``scripts/relabel_prepared_cxrlt.py``) to build a 40-label prior-aware dataset. The
-images are identical to 2023, so the expensive image-channel and text-embedding
-caches are keyed by path/content and are reused verbatim -- only this lightweight
-parquet (labels + 2024 split-aware prior linkage) is rebuilt.
+Label space is selectable, and by default it builds *every* CXR-LT release/task
+variant in one pass. Invoked with no ``--cxr-lt-version`` flag, it reads the
+label-agnostic existence-filtered base CSVs once, then for each variant below it
+re-attaches that release's labels, re-splits train/val/test the way that release
+defines them (CXR-LT 2024 reassigns splits relative to 2023), and writes a parquet
+trio plus a ``*_label_metadata.json`` sidecar:
+
+  cxr-lt-2023 / standard (26) -> prior_aware_{train,development,test}.parquet
+  cxr-lt-2024 / all      (45) -> prior_aware_cxrlt2024_all_{train,val,test}.parquet
+  cxr-lt-2024 / task1    (40) -> prior_aware_cxrlt2024_task1_{train,val,test}.parquet
+  cxr-lt-2024 / task2    (26) -> prior_aware_cxrlt2024_task2_{train,val,test}.parquet
+  cxr-lt-2024 / task3     (5) -> prior_aware_cxrlt2024_task3_{train,val,test}.parquet
+
+Variants whose label files are absent under ``data/CXR-LT/.../<version>`` are
+skipped with a warning, so a checkout with only the 2023 release still works. The
+labeled/re-split CSVs are also written under ``<out-dir>/<variant>/`` (these are the
+same artifacts ``scripts/relabel_prepared_cxrlt.py`` used to produce by hand).
+
+To rebuild just one variant, pass ``--cxr-lt-version cxr-lt-2024 --cxr-lt-label-set
+task1`` (single-variant mode); it then reads the pre-split CSVs named by
+``--in-prefix``/``--splits`` instead of re-splitting the base. The 2024 images are
+identical to 2023, so the expensive image-channel and text-embedding caches are
+keyed by path/content and reused verbatim -- only these lightweight parquets are
+rebuilt.
 """
 
 from __future__ import annotations
@@ -43,8 +60,34 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.dataloader.cxr_lt import cxr_lt_classes, resolve_label_set
+from src.dataloader.cxr_lt import (
+    CXRLT_2023_LABELS,
+    CXRLT_2024_ALL_LABELS,
+    cxr_lt_classes,
+    load_cxr_lt_labels,
+    resolve_label_set,
+)
 from src.dataloader.utils import resolve_preferred_image_path
+
+# Union of every label column any CXR-LT release/task can carry. Used to strip
+# stale labels off the base CSVs before re-attaching a variant's own labels.
+KNOWN_LABEL_COLS = sorted(set(CXRLT_2023_LABELS) | set(CXRLT_2024_ALL_LABELS))
+
+# Every variant the no-flag default build emits. Each entry is
+# (version, label_set, out_prefix, labeled_subdir, {split_value: output_name}).
+# CXR-LT 2024 names its dev split "val"; 2023 keeps the historic "development".
+ALL_VARIANTS = [
+    ("cxr-lt-2023", "standard", "prior_aware_", "cxrlt2023",
+     {"train": "train", "validate": "development", "test": "test"}),
+    ("cxr-lt-2024", "all", "prior_aware_cxrlt2024_all_", "cxrlt2024_all",
+     {"train": "train", "validate": "val", "test": "test"}),
+    ("cxr-lt-2024", "task1", "prior_aware_cxrlt2024_task1_", "cxrlt2024_task1",
+     {"train": "train", "validate": "val", "test": "test"}),
+    ("cxr-lt-2024", "task2", "prior_aware_cxrlt2024_task2_", "cxrlt2024_task2",
+     {"train": "train", "validate": "val", "test": "test"}),
+    ("cxr-lt-2024", "task3", "prior_aware_cxrlt2024_task3_", "cxrlt2024_task3",
+     {"train": "train", "validate": "val", "test": "test"}),
+]
 
 OBS_FIELDS = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp", "gender"]
 MAX_VIEWS = 4
@@ -163,8 +206,8 @@ def build_split(
     out_path: Path,
     classes: list[str],
 ) -> dict:
-    """Build one split parquet. Returns a small stats dict (study count + per-class
-    positive counts) so the caller can record loss-weight metadata."""
+    """Build one split parquet from a CSV on disk. Thin wrapper over
+    :func:`build_split_df` for the single-variant (pre-split CSV) path."""
     print(f"[build] reading {csv_path}")
     df = pd.read_csv(csv_path, low_memory=False)
     missing = [c for c in classes if c not in df.columns]
@@ -174,6 +217,17 @@ def build_split(
             f"label set: {missing}. Did you point --in-dir/--cxr-lt-label-set at the "
             f"matching relabeled CSVs (see scripts/relabel_prepared_cxrlt.py)?"
         )
+    return build_split_df(df, out_path, classes)
+
+
+def build_split_df(
+    df: pd.DataFrame,
+    out_path: Path,
+    classes: list[str],
+) -> dict:
+    """Build one split parquet from an in-memory frame. Returns a small stats dict
+    (study count + per-class positive counts) so the caller can record loss-weight
+    metadata. ``df`` must already carry every column in ``classes``."""
     studies = collapse_to_study(df)
     print(f"[build] {len(df)} image rows -> {len(studies)} studies")
 
@@ -300,6 +354,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Pre-generate prior-aware parquet datasets.")
     p.add_argument("--in-dir", default="data/data-camchex")
     p.add_argument("--out-dir", default="data/data-camchex")
+    p.add_argument("--data-root", default="data",
+                   help="Root holding data/CXR-LT/... (used to find each release's label CSVs in build-all mode).")
     p.add_argument("--splits", nargs="+", default=["train", "development", "test"])
     p.add_argument(
         "--in-prefix",
@@ -309,23 +365,106 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-prefix", default="prior_aware_")
     p.add_argument(
         "--cxr-lt-version",
-        default="cxr-lt-2023",
+        default=None,
         choices=["cxr-lt-2023", "cxr-lt-2024"],
-        help="CXR-LT release whose label space to bake into the parquet (default 2023, the historic 26-label set).",
+        help="CXR-LT release to bake into the parquet. Omit (the default) to build "
+             "EVERY release/task variant in one pass from the label-agnostic base "
+             "CSVs (--in-prefix). Pass a version for single-variant mode, which "
+             "reads the pre-split CSVs named by --in-prefix/--splits.",
     )
     p.add_argument(
         "--cxr-lt-label-set",
         default="auto",
         choices=["auto", "all", "task1", "task2", "task3", "standard"],
-        help="Label set within the release. 'auto' = standard for 2023, task1 for 2024.",
+        help="Label set within the release (single-variant mode only). 'auto' = standard for 2023, task1 for 2024.",
     )
     return p.parse_args()
+
+
+def read_base_csvs(in_dir: Path, prefix: str, splits: list[str]) -> pd.DataFrame:
+    """Combine the label-agnostic existence-filtered base CSVs into one frame, drop
+    any stale label/split columns, and de-dup by dicom_id. Each variant re-attaches
+    its own labels + split onto this base."""
+    frames = []
+    for split in splits:
+        path = in_dir / f"{prefix}{split}.csv"
+        if not path.exists():
+            raise FileNotFoundError(f"missing base CSV: {path}")
+        frames.append(pd.read_csv(path, low_memory=False))
+    base = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["dicom_id"], keep="first")
+    drop_cols = [c for c in [*KNOWN_LABEL_COLS, "split"] if c in base.columns]
+    return base.drop(columns=drop_cols)
+
+
+def write_variant_metadata(meta_path: Path, version: str, label_set: str,
+                           classes: list[str], split_stats: dict) -> None:
+    metadata = {
+        "cxr_lt_version": version,
+        "cxr_lt_label_set": label_set,
+        "num_classes": len(classes),
+        "classes": classes,
+        "splits": {
+            split: {
+                "num_studies": stats["num_studies"],
+                "class_instance_nums": stats["positive_counts"],
+                "total_instance_num": int(sum(stats["positive_counts"])),
+            }
+            for split, stats in split_stats.items()
+        },
+    }
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"[build] metadata -> {meta_path}")
+
+
+def build_all_variants(in_dir: Path, out_dir: Path, args: argparse.Namespace) -> None:
+    """No-flag default: build every CXR-LT release/task variant from the base CSVs."""
+    base = read_base_csvs(in_dir, args.in_prefix, args.splits)
+    print(f"[build-all] base: {len(base)} unique images from {args.in_prefix}{{{','.join(args.splits)}}}.csv")
+
+    data_root = (ROOT / args.data_root).resolve()
+    for version, label_set, out_prefix, labeled_subdir, split_files in ALL_VARIANTS:
+        try:
+            labels, classes, resolved = load_cxr_lt_labels(
+                data_root, version=version, label_set=label_set
+            )
+        except FileNotFoundError as exc:
+            print(f"[build-all] skipping {version}/{label_set}: {exc}")
+            continue
+
+        print(f"[build-all] === {version}/{resolved} ({len(classes)} classes) ===")
+        # Re-attach this release's labels + split onto the base by dicom_id. Inner
+        # join drops base images this release does not label.
+        labels = labels.drop(
+            columns=["subject_id", "study_id", "ViewPosition",
+                     "ViewCodeSequence_CodeMeaning", "path", "fpath"],
+            errors="ignore",
+        )
+        relabeled = base.merge(labels, on="dicom_id", how="inner", validate="one_to_one")
+
+        labeled_dir = out_dir / labeled_subdir
+        labeled_dir.mkdir(parents=True, exist_ok=True)
+        split_stats: dict[str, dict] = {}
+        for split_value, out_name in split_files.items():
+            sub = relabeled[relabeled["split"] == split_value].drop(columns=["split"])
+            sub.to_csv(labeled_dir / f"{out_name}.csv", index=False)
+            parquet_path = out_dir / f"{out_prefix}{out_name}.parquet"
+            split_stats[out_name] = build_split_df(sub, parquet_path, classes)
+
+        write_variant_metadata(
+            out_dir / f"{out_prefix}label_metadata.json",
+            version, resolved, classes, split_stats,
+        )
 
 
 def main() -> None:
     args = parse_args()
     in_dir = (ROOT / args.in_dir).resolve()
     out_dir = (ROOT / args.out_dir).resolve()
+
+    if args.cxr_lt_version is None:
+        build_all_variants(in_dir, out_dir, args)
+        return
 
     resolved_label_set = resolve_label_set(args.cxr_lt_version, args.cxr_lt_label_set)
     classes = cxr_lt_classes(args.cxr_lt_version, args.cxr_lt_label_set)
@@ -343,24 +482,10 @@ def main() -> None:
     # Sidecar metadata: the resolved class order plus per-split positive counts, so
     # the loss's class_instance_nums (train positives) is copy-pasteable into any
     # model config for this label space.
-    meta_path = out_dir / f"{args.out_prefix}label_metadata.json"
-    metadata = {
-        "cxr_lt_version": args.cxr_lt_version,
-        "cxr_lt_label_set": resolved_label_set,
-        "num_classes": len(classes),
-        "classes": classes,
-        "splits": {
-            split: {
-                "num_studies": stats["num_studies"],
-                "class_instance_nums": stats["positive_counts"],
-                "total_instance_num": int(sum(stats["positive_counts"])),
-            }
-            for split, stats in split_stats.items()
-        },
-    }
-    with open(meta_path, "w") as f:
-        json.dump(metadata, f, indent=2)
-    print(f"[build] metadata -> {meta_path}")
+    write_variant_metadata(
+        out_dir / f"{args.out_prefix}label_metadata.json",
+        args.cxr_lt_version, resolved_label_set, classes, split_stats,
+    )
 
 
 if __name__ == "__main__":

@@ -10,8 +10,13 @@ from tqdm import tqdm
 if not os.path.isdir('data') or not os.path.isdir('src'):
     sys.exit("Run from project root: python src/prepare/01_make_dataset.py")
 
+# Running `python src/prepare/01_make_dataset.py` puts src/prepare on sys.path[0],
+# not the project root, so make `src.*` importable from the enforced CWD.
+sys.path.insert(0, os.getcwd())
 sys.path.append('mimic-cxr/txt')
 import section_parser as sp
+
+from src.dataloader.cxr_lt import load_cxr_lt_labels
 
 _parser = argparse.ArgumentParser(description="Build the camchex merged dataset.")
 _parser.add_argument(
@@ -38,10 +43,11 @@ mimic_iv_ed_edstays_fp    = f'{DATA_ROOT}/MIMIC-IV-ED-2-2/mimic-iv-ed-2.2/ed/eds
 mimic_iv_ed_vitalsigns_fp = f'{DATA_ROOT}/MIMIC-IV-ED-2-2/mimic-iv-ed-2.2/ed/vitalsign.csv.gz'
 reports_base_path         = f'{MIMIC_ROOT}/MIMIC-CXR/files'
 
-_CXRLT_2023        = f'{DATA_ROOT}/CXR-LT/cxr-lt-multi-label-long-tailed-classification-on-chest-x-rays-2.0.0/cxr-lt-2023'
-labels_train_fp    = f'{_CXRLT_2023}/train.csv'
-labels_validate_fp = f'{_CXRLT_2023}/development.csv'
-labels_test_fp     = f'{_CXRLT_2023}/test.csv'
+# CXR-LT labels are loaded via the shared helper (src/dataloader/cxr_lt.py), which
+# owns the release/schema details. Stage 01 bakes in the 2023 26-label set as the
+# label-agnostic baseline; stage 04 re-attaches any 2024 task label set on top of
+# the same prepared base, so 2023 here does not lock the pipeline to one release.
+CXRLT_VERSION = 'cxr-lt-2023'
 
 # --- Config ---
 CPU_FRACTION = 0.5  # Use 50% of CPU cores by default to avoid server termination
@@ -155,20 +161,14 @@ for vital in vital_signs:
 mimic_df = mimic_df.reset_index(drop=True)
 
 print("Loading CXR-LT labels...")
-label_cols = [
-    "study_id", "Atelectasis", "Calcification of the Aorta", "Cardiomegaly", "Consolidation", "Edema", "Emphysema",
-    "Enlarged Cardiomediastinum", "Fibrosis", "Fracture", "Hernia", "Infiltration", "Lung Lesion", "Lung Opacity",
-    "Mass", "No Finding", "Nodule", "Pleural Effusion", "Pleural Other", "Pleural Thickening", "Pneumomediastinum",
-    "Pneumonia", "Pneumoperitoneum", "Pneumothorax", "Subcutaneous Emphysema", "Support Devices", "Tortuous Aorta"
-]
-df_train = pd.read_csv(labels_train_fp, usecols=label_cols)
-df_val   = pd.read_csv(labels_validate_fp, usecols=label_cols)
-df_test  = pd.read_csv(labels_test_fp, usecols=label_cols)
-df_train['split'] = 'train'
-df_val['split']   = 'validate'
-df_test['split']  = 'test'
-labels_df = pd.concat([df_train, df_val, df_test]).drop_duplicates(subset="study_id")
-cxr_df = cxr_df.merge(labels_df, on="study_id", how="left")
+# One normalized frame (split column already train/validate/test) for the whole
+# release; both the study-level and the later dicom-level merge derive from it.
+cxrlt_labels_df, cxrlt_label_cols, _ = load_cxr_lt_labels(DATA_ROOT, version=CXRLT_VERSION)
+study_labels_df = (
+    cxrlt_labels_df[["study_id", *cxrlt_label_cols, "split"]]
+    .drop_duplicates(subset="study_id")
+)
+cxr_df = cxr_df.merge(study_labels_df, on="study_id", how="left")
 
 # --- Parse text reports (parallel) ---
 print("Parsing reports (missing reports are skipped)...")
@@ -260,17 +260,13 @@ merged_df = merged_df.dropna(subset=['report'])
 merged_df = merged_df.rename(columns={'ClinicalIndication': 'clinical_indication'})
 
 print("Merging dicom-level CXR-LT labels...")
-labels_train_df    = pd.read_csv(labels_train_fp)
-labels_validate_df = pd.read_csv(labels_validate_fp)
-labels_test_df     = pd.read_csv(labels_test_fp)
-labels_train_df['split']    = 'train'
-labels_validate_df['split'] = 'validate'
-labels_test_df['split']     = 'test'
-labels_df = pd.concat([labels_train_df, labels_validate_df, labels_test_df])
-labels_df.drop(columns=['subject_id', 'study_id', 'ViewPosition',
-                         'ViewCodeSequence_CodeMeaning', 'path'], inplace=True, errors='ignore')
+dicom_labels_df = cxrlt_labels_df.drop(
+    columns=['subject_id', 'study_id', 'ViewPosition',
+             'ViewCodeSequence_CodeMeaning', 'path', 'fpath'],
+    errors='ignore',
+)
 
-merged_df = merged_df.merge(labels_df, on='dicom_id', how='left')
+merged_df = merged_df.merge(dicom_labels_df, on='dicom_id', how='left')
 
 print(f"Saving {output_fp}...")
 merged_df.to_csv(output_fp, index=False)
