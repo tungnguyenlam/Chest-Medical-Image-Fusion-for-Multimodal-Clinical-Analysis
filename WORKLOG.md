@@ -2185,3 +2185,18 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 - Non-obvious alignment: the prior_aware task2 parquet bakes its `label` as a 26-vector in `CXRLT_2024_TASK2_LABELS` order; camchex builds 26-dim labels from the same 26 task2 columns; `output_indices = [task1.index(c) for c in task2]` makes the sliced predictions line up with both (verified: 26-dim labels, alignment, file mapping `task1`→`task2`).
 - Built the gold artifacts via stage 04 (no JPEGs needed): `cxrlt2024_task2/{train,val,test}.csv` (camchex gold, test=319 after has-report/image filter from the 406 raw) and `prior_aware_cxrlt2024_task2_test.parquet` (319 studies). Could not run a real forward eval here (no JPEGs/GPU) — verified by compile + path/slice/label-dim logic tests.
 - Docs: [training/FLAGS.md](training/FLAGS.md), [training/prior_aware_v5nano_cxrlt2024/README.md](training/prior_aware_v5nano_cxrlt2024/README.md).
+
+## 2026-06-20 — ThreadPool fallback for the channel precompute pool (last fork-only site)
+
+- [training/utils/data.py:145](training/utils/data.py#L145): `precompute_channels_for_paths` hardcoded `multiprocessing.get_context("fork")`, which raises `ValueError: cannot find context for 'fork'` on Windows (only `spawn` exists). It now does `try: pool_cls = get_context("fork").Pool / except ValueError: from multiprocessing.pool import ThreadPool as pool_cls`, matching the pattern already used in `01_make_dataset.py` and `prepare_subset_labels.py`. ThreadPool shares parent memory (no pickling of the `functools.partial` worker, no `__main__` guard) and the channel builds are I/O + cv2/numpy (GIL-releasing), so threads parallelize acceptably.
+- Surfaced when the user ran the v6nano train command on the native Windows `camchex` env (the precompute step runs before the DataLoader). On WSL (the normal training box) `fork` is available, so behavior is unchanged there.
+- Swept the repo for the same bug: this was the **last** unguarded `fork` site. All other parallelism either already has the fallback (`01_make_dataset.py`, `prepare_subset_labels.py`) or uses `ThreadPoolExecutor` (`03_filter_existing_images.py`, `download_subset.py`, `build_mimic_subset.py`, `audit_corrupt_jpegs.py`). Two other POSIX-isms are already defensively guarded and no-op on Windows: the DataLoader IPC sharing-strategy switch in [training/utils/system.py:113](training/utils/system.py#L113) (checks `get_all_sharing_strategies()`, swallows `RuntimeError`/`ImportError`) and `cap_malloc_arenas` (glibc-only).
+
+## 2026-06-22 — Parallelize text embedding cache preloading
+
+**Goal.** Accelerate loading text embeddings into RAM at startup, which is slow when reading ~270k individual `.npy` files sequentially.
+
+**Changes.**
+- `src/utils/text_embedding_cache.py:234` - Parallelized the loop that loads cached embedding `.npy` files into RAM using a `ThreadPoolExecutor` with 32 workers and `tqdm`.
+
+**Reasoning.** Reading and decoding small NumPy files is primarily I/O-bound. Since disk operations release the Python Global Interpreter Lock (GIL), using threads enables concurrent reading, dramatically speeding up the startup process on SSDs without the memory footprint or initialization overhead of multiprocessing.

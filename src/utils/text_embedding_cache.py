@@ -232,8 +232,21 @@ class TextEmbeddingCache:
         # (~3KB each) and this turns the per-sample disk read in __getitem__ into
         # a dict lookup -- essential on slow filesystems (WSL /mnt/<drive> drvfs).
         to_load = [key for key in dict.fromkeys(keys) if key not in self._mem]
-        for key in tqdm(to_load, desc=f"{desc} (load to RAM)", dynamic_ncols=True, disable=not to_load):
-            self._mem[key] = np.load(self._embedding_path(key)).astype(np.float32, copy=False)
+        if to_load:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def load_one(key):
+                return key, np.load(self._embedding_path(key)).astype(np.float32, copy=False)
+
+            with ThreadPoolExecutor(max_workers=32) as executor:
+                results = tqdm(
+                    executor.map(load_one, to_load),
+                    total=len(to_load),
+                    desc=f"{desc} (load to RAM)",
+                    dynamic_ncols=True,
+                )
+                for key, emb in results:
+                    self._mem[key] = emb
 
     def build_index_table(self, free_ram_cache: bool = True) -> np.ndarray:
         """Collapse the preloaded RAM embeddings into one contiguous ``[N, dim]``
