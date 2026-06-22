@@ -1,7 +1,12 @@
 \section{Introduction}
 \label{sec:introduction}
+Chest radiography is one of the most frequently used examinations in emergency and inpatient care. In the Emergency Department (ED), chest X-rays play an important role in evaluating patients with respiratory symptoms, chest pain, trauma, and diseases related to the heart and lungs. In clinical practice, however, chest X-rays are rarely interpreted in isolation. Instead, physicians often consider them alongside other sources of clinical information, such as patient history, vital signs, and clinical reports, in order to form a more comprehensive understanding of a patient's condition.
 
-This section introduces the research context, outlines the core problems in multimodal chest X-ray classification, and presents our proposed framework.
+Despite their widespread use, chest X-ray images can be difficult to interpret. Radiographic findings may be subtle, abnormalities may be obscured by overlapping anatomical structures, and image quality may vary due to differences in patient positioning or acquisition conditions. These challenges have motivated the use of deep learning methods for automated chest X-ray analysis. While such methods have shown promising results, many existing approaches rely primarily on image data alone. This limits their ability to reflect the broader clinical context that clinicians normally use during decision-making.
+
+This thesis is primarily based on the CaMCheX framework, which investigates multimodal chest X-ray interpretation by combining radiographic images with clinical text and structured patient information. Rather than proposing an entirely new clinical prediction task, this work builds on the motivation and general direction of CaMCheX and adapts it to a more resource-constrained experimental setting. In particular, this thesis focuses on implementing and evaluating a multimodal chest X-ray classification pipeline using image features, text embeddings, and numerical vital-sign features.
+
+The main contributions of this thesis are as follows. First, it provides an implementation and experimental study of a CaMCheX-inspired multimodal model for chest X-ray interpretation. Second, it explores practical design choices required under limited computational resources, including reduced image resolution, frozen or precomputed text embeddings, and lightweight visual backbones. Third, it investigates model interpretability through Grad-CAM analysis, allowing the visual attention patterns of the model to be examined in relation to clinically relevant image regions.
 
 \subsection{Background and Motivation}
 \label{subsec:intro_background}
