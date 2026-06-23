@@ -2200,3 +2200,58 @@ Successfully ran `make clean-all && make` followed by `pdflatex main.tex` to res
 - `src/utils/text_embedding_cache.py:234` - Parallelized the loop that loads cached embedding `.npy` files into RAM using a `ThreadPoolExecutor` with 32 workers and `tqdm`.
 
 **Reasoning.** Reading and decoding small NumPy files is primarily I/O-bound. Since disk operations release the Python Global Interpreter Lock (GIL), using threads enables concurrent reading, dramatically speeding up the startup process on SSDs without the memory footprint or initialization overhead of multiprocessing.
+
+## 2026-06-23 - Fix download_subset.py disk/Xet failures for both archive layouts
+
+**Goal.** A full-bundle download died with `No space left on device (os error 28)`
+inside HuggingFace's `xet_get`. Investigate whether `build_mimic_subset.py` /
+`download_subset.py` mishandle the two `--archive-layout` modes (`single`,
+`opaque-shards`) on download + HF push, then fix the real issues.
+
+**Investigation.** Round-trip naming/discovery is consistent in both layouts
+(verified by exercising `repo_archive_names` / `repo_opaque_shard_groups` against
+synthetic split + non-split repo file lists; the two regexes are mutually
+exclusive). 7-Zip 25.01 on kubuntu follows symlinks and stores real bytes
+(tested with a staged symlink -> archive -> extract), so the symlink-staged
+`opaque-shards` path is sound here. So the layouts themselves are fine; the
+failure was disk + transport.
+
+**Changes.**
+- `scripts/download_subset.py:75` - added `--stream` and `--hf-use-xet` flags.
+- `scripts/download_subset.py:319` - `main()` now disables Xet by default
+  (`HF_HUB_DISABLE_XET=1` via `setdefault`), mirroring the uploader. `--hf-use-xet`
+  re-enables it. Set before the `huggingface_hub` import path runs.
+- `scripts/download_subset.py:279` - added `stream_opaque_shards()`: for
+  opaque-shards, download one shard group -> extract its first volume -> delete
+  the group's parts before moving to the next shard. Caps peak disk at ~one shard
+  plus its extracted subtree instead of (full archive set + full extracted tree).
+- `scripts/download_subset.py:~303` - restructured `main()` download/extract block
+  to route opaque-shards+`--stream` through the streaming path, otherwise keep the
+  prior download-all-then-extract behavior. `--stream` warns and no-ops on
+  single/split layouts (one logical stream needs all volumes before extraction).
+
+**Reasoning.** Two distinct problems surfaced. (1) The downloader never disabled
+Xet, unlike `build_mimic_subset.py:585`, so it took the Xet reconstruction path,
+which needs extra scratch space and was where `os error 28` was thrown; matching
+the uploader's default removes that failure mode and the documented kill-mid-
+transfer risk. (2) Even with a working transport, downloading every shard/volume
+before extracting needs ~2x the dataset size on disk, impossible on the 20 GB
+container in the screenshot. Per-shard streaming is only correct for opaque-shards
+because each shard is an independent 7z archive; single/split volumes are one
+logical stream and cannot be extracted incrementally, so streaming is a no-op there.
+
+**Assumptions.** Each opaque shard plus its extracted `pXX` subtree fits on the
+target disk; if not, the real fix is a bigger `--data-dir` mount. `setdefault`
+respects a user-exported `HF_HUB_DISABLE_XET`.
+
+**Gotchas.** `--stream` is intentionally sequential, so it ignores
+`--extract-workers` (the whole point is to not hold many shards on disk at once).
+The 7z-follows-symlinks behavior that makes opaque-shards valid is environment
+/binary dependent (`resolve_7z_executable()` may pick a conda-base p7zip on other
+machines); verify on each build host before a 500 GB run. Default upload still
+deletes/recreates the HF repo unless `--preserve-hf-history`.
+
+**Follow-ups.** Not run end-to-end against the real bundle (the failing box is out
+of disk). Verify `python scripts/download_subset.py --stream` on a host with room
+for at least one shard. Consider mirroring `--stream` semantics into a per-shard
+upload retry if large pushes also hit scratch limits.

@@ -39,6 +39,9 @@ mimic-cxr/           Git submodule (section_parser.py).
 
 ## Current code conventions
 
+**Do not launch subagents (Task/explore/bugbot/etc.) unless the user explicitly
+asks.** Do the work directly in the main session.
+
 **Active work goes under root `src/`.** The existing component split is
 singular package names (`src/encoder`, `src/decoder`, `src/dataloader`,
 `src/model`, `src/loss`). Do not assume `src/modules/` exists or recreate it

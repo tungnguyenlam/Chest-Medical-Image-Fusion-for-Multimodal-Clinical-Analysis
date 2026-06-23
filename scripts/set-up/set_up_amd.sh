@@ -2,7 +2,7 @@ tmux
 
 curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
 bash Miniforge3-$(uname)-$(uname -m).sh -b
-source miniforge3/bin/activate
+source ~/miniforge3/bin/activate
 echo 'source ~/miniforge3/bin/activate' >> ~/.bashrc
 
 conda create -n camchex python=3.13 libjpeg-turbo -y

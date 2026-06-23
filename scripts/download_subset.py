@@ -74,6 +74,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-dir", default="data", help="Extraction target (default: data)")
     p.add_argument("--keep-archive", action="store_true",
                    help="Keep the downloaded .7z file or .7z.* parts after extraction")
+    p.add_argument("--stream", action="store_true",
+                   help="For opaque-shards: download, extract, then delete each shard before the next, "
+                        "to cap peak disk usage at roughly one shard plus its extracted subtree. "
+                        "Implies sequential processing (ignores --extract-workers). No effect on single/split "
+                        "layouts, which need every volume present before extraction.")
+    p.add_argument("--hf-use-xet", action="store_true",
+                   help="Allow HuggingFace's Xet transfer backend. Default disables it because Xet "
+                        "reconstruction needs extra scratch space and large server transfers have been "
+                        "observed failing mid-download (mirrors build_mimic_subset.py).")
     p.add_argument("--cpu-fraction", type=float, default=0.5,
                    help="Fraction of visible CPU cores used for default worker/thread counts "
                         "(default: 0.5)")
@@ -267,9 +276,55 @@ def extract_independent_archives(
             future.result()
 
 
+def stream_opaque_shards(
+    groups: list[list[str]],
+    *,
+    repo_id: str,
+    token: str,
+    local_dir: Path,
+    data_dir: Path,
+    password: str,
+    download_workers: int,
+    extract_threads: int,
+    keep_archive: bool,
+) -> None:
+    """Download, extract, then delete each independent shard before the next.
+
+    Caps peak disk at roughly one shard's volumes plus its extracted subtree,
+    instead of the full archive set plus the full extracted dataset.
+    """
+    total = len(groups)
+    print(f"Streaming {total} independent shard(s): download -> extract -> delete, one at a time ...")
+    for shard_index, group in enumerate(groups, start=1):
+        print(f"Shard {shard_index}/{total}: downloading {len(group)} file(s) ...", flush=True)
+        shard_paths = download_archives(
+            group,
+            repo_id=repo_id,
+            token=token,
+            local_dir=local_dir,
+            download_workers=download_workers,
+        )
+        extract_archive(
+            shard_paths[0],
+            data_dir=data_dir,
+            password=password,
+            extract_threads=extract_threads,
+        )
+        if not keep_archive:
+            for shard_path in shard_paths:
+                shard_path.unlink(missing_ok=True)
+            print(f"Shard {shard_index}/{total}: removed downloaded archive part(s).", flush=True)
+
+
 def main() -> int:
     args = parse_args()
     load_dotenv()
+
+    if args.hf_use_xet:
+        print("HuggingFace Xet transfer backend is allowed for this download.")
+    else:
+        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+        print("HuggingFace Xet transfer backend disabled for this download.")
 
     if not Path("camchex").is_dir():
         sys.exit("Run from project root.")
@@ -300,41 +355,57 @@ def main() -> int:
             f"or opaque shards {prefix}.0001.7z found"
         )
 
-    worker_count = min(args.download_workers, len(archive_names))
-    print(
-        f"Downloading {len(archive_names)} archive file(s) ({layout}) from {args.hf_repo} "
-        f"with {worker_count} worker(s) ..."
-    )
-    archive_paths = download_archives(
-        archive_names,
-        repo_id=args.hf_repo,
-        token=token,
-        local_dir=data_dir / "_bundles",
-        download_workers=args.download_workers,
-    )
+    if args.stream and layout != "opaque-shards":
+        print("--stream has no effect on single/split layouts; downloading all volumes first.")
 
-    if layout == "opaque-shards":
-        archive_paths_by_name = dict(zip(archive_names, archive_paths, strict=True))
-        shard_entry_paths = [archive_paths_by_name[group[0]] for group in opaque_shard_groups]
-        extract_independent_archives(
-            shard_entry_paths,
+    if layout == "opaque-shards" and args.stream:
+        stream_opaque_shards(
+            opaque_shard_groups,
+            repo_id=args.hf_repo,
+            token=token,
+            local_dir=data_dir / "_bundles",
             data_dir=data_dir,
             password=password,
+            download_workers=args.download_workers,
             extract_threads=args.extract_threads,
-            extract_workers=args.extract_workers,
+            keep_archive=args.keep_archive,
         )
     else:
-        extract_archive(
-            archive_paths[0],
-            data_dir=data_dir,
-            password=password,
-            extract_threads=args.extract_threads,
+        worker_count = min(args.download_workers, len(archive_names))
+        print(
+            f"Downloading {len(archive_names)} archive file(s) ({layout}) from {args.hf_repo} "
+            f"with {worker_count} worker(s) ..."
+        )
+        archive_paths = download_archives(
+            archive_names,
+            repo_id=args.hf_repo,
+            token=token,
+            local_dir=data_dir / "_bundles",
+            download_workers=args.download_workers,
         )
 
-    if not args.keep_archive:
-        for archive_path in archive_paths:
-            archive_path.unlink(missing_ok=True)
-        print("Removed downloaded archive file(s) (use --keep-archive to retain).")
+        if layout == "opaque-shards":
+            archive_paths_by_name = dict(zip(archive_names, archive_paths, strict=True))
+            shard_entry_paths = [archive_paths_by_name[group[0]] for group in opaque_shard_groups]
+            extract_independent_archives(
+                shard_entry_paths,
+                data_dir=data_dir,
+                password=password,
+                extract_threads=args.extract_threads,
+                extract_workers=args.extract_workers,
+            )
+        else:
+            extract_archive(
+                archive_paths[0],
+                data_dir=data_dir,
+                password=password,
+                extract_threads=args.extract_threads,
+            )
+
+        if not args.keep_archive:
+            for archive_path in archive_paths:
+                archive_path.unlink(missing_ok=True)
+            print("Removed downloaded archive file(s) (use --keep-archive to retain).")
 
     print("Done. Subset extracted at data/subset/, companion datasets at data/CXR-LT/ etc.")
     return 0
