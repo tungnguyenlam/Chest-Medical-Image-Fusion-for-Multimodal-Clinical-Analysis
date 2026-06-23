@@ -2255,3 +2255,58 @@ deletes/recreates the HF repo unless `--preserve-hf-history`.
 of disk). Verify `python scripts/download_subset.py --stream` on a host with room
 for at least one shard. Consider mirroring `--stream` semantics into a per-shard
 upload retry if large pushes also hit scratch limits.
+
+## 2026-06-24 - Fix stage-04 path-resolution bottleneck
+
+**Goal.** `src/prepare/04_build_prior_aware_dataset.py` hung for hours at
+`[build] resolving paths and assembling rows...` (~3.6 it/s, 10h+ ETA per
+split). Speed up the path-baking step, which was the actual bottleneck (not
+JPEG decode / channel preprocessing -- that happens later at train time).
+
+**Changes.**
+- `src/dataloader/utils.py:111,117` - `@functools.lru_cache(maxsize=None)` on
+  `resolve_image_path` and `resolve_preferred_image_path`. The same path string
+  recurs constantly (an image is both a current and a prior view, and the
+  no-flag build re-resolves every path across all 5 CXR-LT variants x 3 splits =
+  15 `build_split_df` calls). Memoizing turns repeats into dict hits instead of
+  repeated `exists()` stats.
+- `src/prepare/04_build_prior_aware_dataset.py` - new `_collect_unique_image_paths`
+  (dedupe, no I/O) and `_bulk_resolve_preferred` (ThreadPoolExecutor over the
+  unique paths, mirroring `classify_images` in stage 03). `build_split_df` now
+  resolves all unique paths once, in parallel, before the study loop, then
+  `_resolve_and_trim` does O(1) dict lookups. New CLI flags `--workers`
+  (default `min(16, cpu_count)`) and `--store-raw-paths` (skip resolution
+  entirely, write stage-03 CSV path strings as-is). Threaded through
+  `build_split`, `build_split_df`, `build_all_variants`, and `main`.
+
+**Reasoning.** The old loop called `resolve_preferred_image_path` per view, per
+study, sequentially. Each call probes up to 8 `exists()` candidates
+(`_resized_1024.jpg` then original, each x up to 4 cwd/repo prefixes). At ~160k
+studies x several views, that is millions of synchronous stats; on Docker bind
+mounts / WSL drvfs each stat is ~1-3 ms, hence the multi-hour wall time. Two
+orthogonal fixes: (a) resolve each *unique* path exactly once and do it in
+parallel (stats release the GIL, so threads are the right tool and match the
+existing stage-03 pattern); (b) `--store-raw-paths` removes the work entirely
+for users who do not need baked resolved paths, since training already resolves
+lazily on channel-cache miss and the cache key is the raw path string anyway.
+`lru_cache` is the cheapest cross-call/cross-variant win and needed no
+structural change.
+
+**Assumptions.** Prior views are a subset of `studies["img_paths_all"]` (the
+prior lookup indexes into the same `studies` frame), so collecting unique paths
+from current views alone covers prior views too -- verified against the parquet
+(`prior_img_paths` resolved correctly without separate collection).
+
+**Gotchas.** `--store-raw-paths` parquets store paths like
+`../data/MIMIC-CXR-JPG/files/...` (no baked `_resized_1024.jpg` preference, no
+repo-root canonicalization). This is safe because `PriorAwareDataset._decode`
+passes the raw string to `load_or_build_channels`, which resolves+decodes only
+on a cache miss, and the channel-cache key is string-keyed. Verified: a raw
+parquet path decoded through `load_or_build_channels` to a (512, 512, 3) float32
+array. The two modes produce identical schema + `has_prior` coverage, and
+`resolved == resolve_preferred(raw)` for every row on a 114-study slice.
+
+**Follow-ups.** If profiling still shows redundant work in the no-flag
+all-variants build, a module-level `resolved_map` shared across the 15
+`build_split_df` calls could replace reliance on `lru_cache`, but the cache
+already makes later variants near-free.

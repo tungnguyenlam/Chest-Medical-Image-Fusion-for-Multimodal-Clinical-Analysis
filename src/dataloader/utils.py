@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import os
 
@@ -108,11 +109,17 @@ def _first_existing(path):
     return None
 
 
+# Memoized: the same path string recurs constantly (an image is both a current and a
+# prior view, and stage 04 re-resolves the same paths across every CXR-LT variant). The
+# cache turns those repeats into pure dict lookups instead of repeated exists() stats,
+# which is the difference between minutes and hours on slow mounts (Docker/WSL drvfs).
+@functools.lru_cache(maxsize=None)
 def resolve_image_path(path):
     found = _first_existing(path)
     return found if found is not None else str(path)
 
 
+@functools.lru_cache(maxsize=None)
 def resolve_preferred_image_path(path):
     resized = _first_existing(str(path).replace(".jpg", "_resized_1024.jpg"))
     if resized is not None:

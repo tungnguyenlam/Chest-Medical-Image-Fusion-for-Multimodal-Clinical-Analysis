@@ -47,7 +47,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -91,6 +93,7 @@ ALL_VARIANTS = [
 
 OBS_FIELDS = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp", "gender"]
 MAX_VIEWS = 4
+DEFAULT_WORKERS = min(16, os.cpu_count() or 1)
 # The prior study's full radiology report (findings + impression) is fed only for
 # the PRIOR study: it was authored before the current exam, so it is legitimate
 # prior information rather than label leakage (unlike the current study's report,
@@ -192,12 +195,53 @@ def collapse_to_study(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _resolve_and_trim(paths: list, views: list, cap: int = MAX_VIEWS) -> tuple[list, list]:
-    """Resolve preferred image paths and trim to <=cap, keeping aligned order."""
+def _collect_unique_image_paths(studies: pd.DataFrame, cap: int = MAX_VIEWS) -> list[str]:
+    """Every distinct image path that the study loop will resolve, deduped, no I/O.
+
+    Prior views are a subset of these same studies' paths (the prior lookup indexes
+    into ``studies``), so collecting from ``img_paths_all`` covers current + prior."""
+    seen: dict[str, None] = {}
+    for paths in studies["img_paths_all"]:
+        for p in paths[:cap]:
+            seen.setdefault(str(p), None)
+    return list(seen)
+
+
+def _bulk_resolve_preferred(paths: list[str], workers: int) -> dict[str, str]:
+    """Resolve every unique path once, in parallel. Returns {raw_path: resolved_path}.
+
+    The per-path work is filesystem ``stat`` (Path.exists), which releases the GIL, so
+    threads parallelize it well -- mirroring classify_images in 03_filter_existing_images.
+    resolve_preferred_image_path is itself lru_cached, so a repeat (e.g. across CXR-LT
+    variants) is a dict hit, not a re-stat."""
+    if not paths:
+        return {}
+    if workers <= 1 or len(paths) <= 1:
+        return {p: resolve_preferred_image_path(p) for p in tqdm(paths, desc="resolve paths", dynamic_ncols=True)}
+    chunksize = max(1, min(256, len(paths) // (workers * 4) or 1))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        resolved = list(tqdm(
+            ex.map(resolve_preferred_image_path, paths, chunksize=chunksize),
+            total=len(paths), desc="resolve paths", dynamic_ncols=True,
+        ))
+    return dict(zip(paths, resolved))
+
+
+def _resolve_and_trim(
+    paths: list, views: list, resolved_map: dict[str, str] | None = None, cap: int = MAX_VIEWS,
+) -> tuple[list, list]:
+    """Trim to <=cap and map each path to its resolved form, keeping aligned order.
+
+    With ``resolved_map`` (the bulk-resolve path), lookups are O(1) and never touch the
+    filesystem. With ``None`` (the --store-raw-paths fast path) the raw path strings are
+    passed through unchanged -- training resolves them lazily on cache miss."""
     if len(paths) > cap:
         paths = paths[:cap]
         views = views[:cap]
-    resolved = [resolve_preferred_image_path(p) for p in paths]
+    if resolved_map is None:
+        resolved = [str(p) for p in paths]
+    else:
+        resolved = [resolved_map[str(p)] for p in paths]
     return resolved, list(map(int, views))
 
 
@@ -205,6 +249,8 @@ def build_split(
     csv_path: Path,
     out_path: Path,
     classes: list[str],
+    workers: int = DEFAULT_WORKERS,
+    store_raw_paths: bool = False,
 ) -> dict:
     """Build one split parquet from a CSV on disk. Thin wrapper over
     :func:`build_split_df` for the single-variant (pre-split CSV) path."""
@@ -217,13 +263,15 @@ def build_split(
             f"label set: {missing}. Did you point --in-dir/--cxr-lt-label-set at the "
             f"matching relabeled CSVs (see scripts/relabel_prepared_cxrlt.py)?"
         )
-    return build_split_df(df, out_path, classes)
+    return build_split_df(df, out_path, classes, workers=workers, store_raw_paths=store_raw_paths)
 
 
 def build_split_df(
     df: pd.DataFrame,
     out_path: Path,
     classes: list[str],
+    workers: int = DEFAULT_WORKERS,
+    store_raw_paths: bool = False,
 ) -> dict:
     """Build one split parquet from an in-memory frame. Returns a small stats dict
     (study count + per-class positive counts) so the caller can record loss-weight
@@ -266,7 +314,14 @@ def build_split_df(
             prior_has_text.append(False)
 
     # Per-row resolved paths + views (current + prior), label vectors, time delta.
-    print("[build] resolving paths and assembling rows...")
+    if store_raw_paths:
+        resolved_map: dict[str, str] | None = None
+        print("[build] storing raw image paths (--store-raw-paths; resolution deferred to training)...")
+    else:
+        unique_paths = _collect_unique_image_paths(studies)
+        print(f"[build] resolving {len(unique_paths)} unique image paths with {workers} workers...")
+        resolved_map = _bulk_resolve_preferred(unique_paths, workers)
+    print("[build] assembling rows...")
     studies["StudyDateTime"] = pd.to_datetime(studies["StudyDateTime"], errors="coerce")
 
     cur_paths, cur_views = [], []
@@ -278,7 +333,7 @@ def build_split_df(
 
     for i in tqdm(range(len(studies)), dynamic_ncols=True):
         row = studies.iloc[i]
-        p, v = _resolve_and_trim(row["img_paths_all"], row["view_codes_all"])
+        p, v = _resolve_and_trim(row["img_paths_all"], row["view_codes_all"], resolved_map)
         cur_paths.append(p)
         cur_views.append(v)
         cur_labels.append(_label_vector(row, classes))
@@ -289,7 +344,7 @@ def build_split_df(
             prow = lookup.loc[pid]
             if isinstance(prow, pd.DataFrame):
                 prow = prow.iloc[0]
-            pp, pv = _resolve_and_trim(prow["img_paths_all"], prow["view_codes_all"])
+            pp, pv = _resolve_and_trim(prow["img_paths_all"], prow["view_codes_all"], resolved_map)
             prv_paths.append(pp)
             prv_views.append(pv)
             prv_labels.append(_label_vector(prow, classes))
@@ -378,6 +433,21 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "all", "task1", "task2", "task3", "standard"],
         help="Label set within the release (single-variant mode only). 'auto' = standard for 2023, task1 for 2024.",
     )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help="Parallel workers for bulk image-path resolution (Path.exists stats release "
+             f"the GIL, so threads help on slow mounts). Default: min(16, cpu_count) = {DEFAULT_WORKERS}.",
+    )
+    p.add_argument(
+        "--store-raw-paths",
+        action="store_true",
+        help="Skip image-path resolution entirely and write the stage-03 CSV path strings "
+             "into the parquet as-is. Training resolves + decodes lazily on channel-cache "
+             "miss, so this is safe and turns the path step into pure pandas work. Trade-off: "
+             "no baked _resized_1024.jpg preference (usually absent on full-res MIMIC anyway).",
+    )
     return p.parse_args()
 
 
@@ -449,7 +519,10 @@ def build_all_variants(in_dir: Path, out_dir: Path, args: argparse.Namespace) ->
             sub = relabeled[relabeled["split"] == split_value].drop(columns=["split"])
             sub.to_csv(labeled_dir / f"{out_name}.csv", index=False)
             parquet_path = out_dir / f"{out_prefix}{out_name}.parquet"
-            split_stats[out_name] = build_split_df(sub, parquet_path, classes)
+            split_stats[out_name] = build_split_df(
+                sub, parquet_path, classes,
+                workers=args.workers, store_raw_paths=args.store_raw_paths,
+            )
 
         write_variant_metadata(
             out_dir / f"{out_prefix}label_metadata.json",
@@ -477,7 +550,10 @@ def main() -> None:
     for split in args.splits:
         csv_path = in_dir / f"{args.in_prefix}{split}.csv"
         out_path = out_dir / f"{args.out_prefix}{split}.parquet"
-        split_stats[split] = build_split(csv_path, out_path, classes)
+        split_stats[split] = build_split(
+            csv_path, out_path, classes,
+            workers=args.workers, store_raw_paths=args.store_raw_paths,
+        )
 
     # Sidecar metadata: the resolved class order plus per-split positive counts, so
     # the loss's class_instance_nums (train positives) is copy-pasteable into any
