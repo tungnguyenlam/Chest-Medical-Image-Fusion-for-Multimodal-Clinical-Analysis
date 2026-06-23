@@ -2310,3 +2310,69 @@ array. The two modes produce identical schema + `has_prior` coverage, and
 all-variants build, a module-level `resolved_map` shared across the 15
 `build_split_df` calls could replace reliance on `lru_cache`, but the cache
 already makes later variants near-free.
+
+## 2026-06-24 - benchmark pipeline timing script
+
+**Goal.** Add a small script under `test/` to measure how slow the training pipeline stages are (startup, dataloader, model forward/backward).
+
+**Changes.**
+- `test/benchmark_pipeline.py` — standalone benchmark that reuses `training.common` loader/model builders; times config load, dataloader construction (channel prebuild + text cache when enabled), batch fetch, model init, forward, and forward+backward; prints a summary table plus host RSS.
+
+**Reasoning.** Reusing the real `make_*_loaders` and model classes keeps timings representative of actual training startup rather than a synthetic micro-benchmark. `--data-only` and `--skip-precompute` flags isolate the expensive pieces when iterating on I/O vs GPU.
+
+**Gotchas.** First dataloader batches include lazy channel builds when `--skip-precompute` is set; channel prebuild without that flag can dominate startup on a cold cache. CPU forward/backward on prior-aware is very slow (~4s / ~24s per batch here) — use CUDA for meaningful GPU timings.
+
+**Follow-ups.** Compare runs with/without `--use-precomputed-text-embeddings`, different `num_workers`, and `--uint8-image-pipeline` when tuning throughput.
+
+## 2026-06-24 - Unified prepare + channel-cache script (decode-once)
+
+**Goal.** Add one CPU-bound script that runs everything `src/prepare/0{1,2,3,4}_*.py`
+does (defaulting to `--subset full`) AND precomputes the `raw_clahe_histeq`
+channel cache, using half the cores by default, fusing the work so each JPEG is
+decoded exactly once instead of once for stage-03 verification and again for the
+channel precompute.
+
+**Changes.**
+- `scripts/prepare_and_cache.py` - new orchestrator. Runs 01/02/03 as
+  subprocesses (`cwd=ROOT`), with `03 --no-verify-images` so stage 03 only
+  `stat`s (drops MISSING) and does NOT decode. The single expensive decode moves
+  into the fused pass (`precompute_channels`): collect unique `path` strings from
+  `03_mimic_*.csv`, parallel-resolve via `resolve_preferred_image_path`
+  (ThreadPool), scandir-skip already-cached digests, then a fork process pool
+  runs `load_or_build_channels` per image (decode -> build 3 channels -> atomic
+  uint8 `.npy`), recording decode failures as corrupt. `prune_corrupt_rows`
+  rewrites the 03 CSVs without corrupt rows (+ `03_mimic_<split>_corrupt.txt`)
+  before stage 04, so the parquets never contain them. Stage 04 runs in-process
+  via `importlib` (`build_all_variants`) to reuse the warmed resolve lru_cache.
+  `verify_cache_parity` confirms the first parquet `img_paths[0]` maps to an
+  existing cache file (i.e. a training cache HIT).
+
+**Reasoning.** Decode is the dominant CPU/IO cost and was duplicated across
+stage-03 verify and the training-time channel precompute. Keying the cache on
+`resolve_preferred_image_path(path)` is mandatory for parity: stage 04 stores
+the *resolved* string in the parquet and training passes that to
+`load_or_build_channels`, so the fused build must resolve first and key on the
+resolved string (not the raw CSV path) or training would miss and rebuild. I
+reused the existing tested helpers (`load_or_build_channels`,
+`channel_cache_path`, `make_preprocess_config`) and `build_all_variants` rather
+than reimplementing, so behaviour matches training byte-for-byte. Stages 01-03
+are subprocessed (not imported) because they run all logic at module top level
+with a CWD guard; subprocessing avoids drift and re-import side effects.
+
+**Assumptions.** Run from the repo root (cache `../cache/channels` and the
+config `size: 512`/`channel_mode: raw_clahe_histeq` are the parity contract).
+`--subset full`/`subset` both emit the `mimic` source tag at stage 03.
+
+**Gotchas.**
+- `01_make_dataset.py` hardcodes its own 0.5 CPU fraction and only reads
+  `--subset`; a custom `--cpu-fraction` here is NOT forwarded to stage 01 (it is
+  applied to 03, 04, and the fused pool). Left as-is to avoid editing shared code.
+- The 04 module filename starts with a digit, so it is loaded by file path via
+  `importlib.util`, not `import`.
+- Minor over-build: studies with >4 views cache channels for the extra images
+  that stage 04 trims at `MAX_VIEWS=4`; harmless extra files.
+
+**Follow-ups.** Text-embedding (BioBERT/CXR-BERT CLS) cache is the other heavy
+precompute and is intentionally out of scope; could add a `--with-text-embeddings`
+hook later. Not run end-to-end on full MIMIC here (no data on this machine);
+validated imports, CLI, and the in-process stage-04 load.
