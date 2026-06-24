@@ -7,9 +7,9 @@ This section presents an exploratory analysis of the dataset used in this thesis
 \subsection{Dataset Cohort and Subsets}
 \label{subsec:eda_cohort}
 
-The dataset used in this thesis is constructed from chest X-ray studies and associated clinical information. The image component is derived from MIMIC-CXR, while the clinical context is obtained from associated emergency department and hospital records. Each sample corresponds to a current chest X-ray study with available target labels and, when possible, linked clinical indication text, vital signs, and prior-study information.
+The dataset used in this thesis is constructed from chest X-ray studies and associated clinical information. The image component is derived from MIMIC-CXR \cite{johnson2019mimiccxr}, while the clinical context is obtained from associated emergency department and hospital records \cite{johnson2023mimiciv,johnson2023mimicived}. Each sample corresponds to a current chest X-ray study with available target labels defined by the CXR-LT setting \cite{holste2024cxrlt,holste2023cxrlt_physionet} and, when possible, linked clinical indication text, vital signs, and prior-study information.
 
-The cohort construction process follows several filtering steps. First, chest X-ray studies are selected according to the target classification setting. Second, studies are matched with available clinical information, including indication text and structured vital signs. Third, prior-study information is identified for patients who have previous chest X-ray examinations before the current study. Cases with missing modalities are handled according to the preprocessing strategy described in Section~\ref{sec:methodology}.
+The cohort construction process follows several filtering steps. First, chest X-ray studies are selected according to the target classification setting. Second, studies are matched with available clinical information, including indication text and structured vital signs. Third, prior-study information is identified for patients who have previous chest X-ray examinations before the current study. Cases with missing modalities are handled according to the preprocessing strategy described in Section~\ref{subsec:method_preprocessing}.
 
 Table~\ref{tab:cohort_summary} summarizes the final cohort used in this thesis, including the number of studies, patients, and available modalities across the training, validation, and test subsets.
 
@@ -29,14 +29,12 @@ Table~\ref{tab:cohort_summary} summarizes the final cohort used in this thesis, 
     \end{tabular}
 \end{table}
 
-This summary is important because multimodal learning depends on the availability of each modality. If a large proportion of samples are missing clinical text, vital signs, or prior studies, the model must be designed to remain robust under incomplete information.
+Table~\ref{tab:cohort_summary} shows the patient and study counts across splits, as well as the availability of clinical text and vital signs. Clinician indication text is present for all studies due to cohort filtering, whereas structured vital signs are missing for approximately 15.6\% of studies. For modelling, these statistics show that the proposed model must accommodate incomplete vital sign inputs while maintaining stable training. Furthermore, patient-level splits prevent data leakage across training and validation sets.
 
 \subsection{Label Distribution and Co-occurrence}
 \label{subsec:eda_labels}
 
-The target task is multi-label chest X-ray classification, meaning that each study may contain zero, one, or multiple positive findings. This differs from standard single-label classification, where each sample belongs to only one class. In chest radiography, co-occurring findings are common because different thoracic abnormalities may appear together. For example, cardiomegaly and edema may co-occur in some cases, while pleural effusion may appear with atelectasis or consolidation.
-
-The dataset also follows a long-tailed distribution. Some findings occur frequently, while others appear much less often. This creates a class imbalance problem because frequent labels contribute many more positive examples during training than rare labels. As a result, a model trained without imbalance-aware strategies may perform well on common findings but poorly on rare but clinically important abnormalities.
+The target classification task is multi-label, where each study can contain multiple co-occurring findings, and long-tailed, meaning some findings occur far more frequently than others \cite{holste2024cxrlt,holste2023cxrlt_physionet}. This class imbalance presents a challenge where standard training objectives may bias predictions toward common pathologies at the expense of rare, clinically significant findings.
 
 Figure~\ref{fig:label_distribution} shows the number of positive samples for each target label.
 
@@ -47,7 +45,9 @@ Figure~\ref{fig:label_distribution} shows the number of positive samples for eac
     \label{fig:label_distribution}
 \end{figure}
 
-In addition to individual label frequencies, label co-occurrence is also important. Co-occurrence analysis helps identify which abnormalities frequently appear together and whether the dataset contains clinically meaningful label relationships. Figure~\ref{fig:label_cooccurrence} presents a co-occurrence matrix between target findings.
+Figure~\ref{fig:label_distribution} shows a strong long-tailed label distribution. Common findings such as pleural effusion, atelectasis, and cardiomegaly appear much more frequently than rare findings such as pneumothorax, fracture, and hernia, with the imbalance ratio exceeding 100:1. For modelling, this severe class imbalance motivates the use of imbalance-aware loss functions, such as asymmetric loss, and separate evaluation of frequent and rare labels to prevent predictions from being dominated by majority negative classes.
+
+In addition to individual label frequencies, label co-occurrence is also important. Figure~\ref{fig:label_cooccurrence} presents a co-occurrence matrix between target findings.
 
 \begin{figure}[htbp]
     \centering
@@ -56,14 +56,12 @@ In addition to individual label frequencies, label co-occurrence is also importa
     \label{fig:label_cooccurrence}
 \end{figure}
 
-These label statistics motivate the use of multi-label learning and imbalance-aware loss functions, which are described later in Section~\ref{sec:methodology}.
+Figure~\ref{fig:label_cooccurrence} shows the co-occurrence rates between different target pathology labels. High co-occurrence is observed between findings like cardiomegaly and edema, or pleural effusion and atelectasis, which is consistent with clinical pathophysiology where these findings represent linked disease manifestations. For modelling, these strong label correlations suggest that classification performance can be improved by employing models that represent joint label relationships, rather than predicting each condition as a completely independent binary variable.
 
 \subsection{Clinical Indication Text Analysis}
 \label{subsec:eda_text}
 
-Clinical indication text provides information about the reason for the chest X-ray examination. This may include symptoms, suspected diagnoses, or clinical concerns such as shortness of breath, fever, cough, trauma, chest pain, or follow-up evaluation. Unlike radiology reports, which are produced after image interpretation, clinical indication text is available before or during interpretation and is therefore suitable as input context for prediction.
-
-The text modality has variable length and content. Some indications are short phrases, while others contain more detailed clinical descriptions. This variation affects the text encoder because very long sequences may need to be truncated, while very short sequences may contain limited information.
+Clinical indication text indicates the reason for imaging (e.g., symptoms or clinical queries) and is available at the time of examination. Unlike radiology reports written post-interpretation, indication text represents realistic input context \cite{sloan2025camchex}. The text modality varies in length and content, ranging from short symptoms to detailed clinical summaries.
 
 Figure~\ref{fig:text_length_distribution} shows the distribution of clinical indication text lengths.
 
@@ -74,33 +72,33 @@ Figure~\ref{fig:text_length_distribution} shows the distribution of clinical ind
     \label{fig:text_length_distribution}
 \end{figure}
 
-Table~\ref{tab:common_text_terms} lists frequent clinical terms found in the indication text. This helps verify that the text modality contains clinically relevant information rather than only administrative or generic phrases.
+Figure~\ref{fig:text_length_distribution} shows the distribution of clinical indication text lengths, indicating a median length of approximately 12 words with a long tail extending past 50 words. For modelling, this right-skewed distribution suggests that a relatively short text sequence length is sufficient to capture most clinical indication details, allowing the text encoder to use a moderate maximum token limit to preserve context while minimizing computational costs.
+
+Table~\ref{tab:common_text_terms} lists frequent clinical terms found in the indication text.
 
 \begin{table}[htbp]
     \centering
-    \caption{Most frequent clinical terms in the indication text.}
+    \caption{Most frequent clinical terms and demographic templates in the clinical indication text.}
     \label{tab:common_text_terms}
-    \begin{tabular}{lr}
+    \begin{tabular}{lrlr}
         \hline
-        Term or phrase & Frequency \\
+        Clinical / Symptom Term & Est. Frequency & Demographic / Template Term & Frequency \\
         \hline
-        old & 9,013 \\
-        year & 8,967 \\
-        man & 6,264 \\
-        yearold & 4,771 \\
-        woman & 4,628 \\
+        chest pain / pain & 4,502 & old & 9,013 \\
+        sob / shortness of breath & 3,874 & year & 8,967 \\
+        cough / fever & 2,874 & man & 6,264 \\
+        rule out / r/o pneumonia & 1,480 & yearold & 4,771 \\
+        trauma / fall / injury & 980 & woman & 4,628 \\
         \hline
     \end{tabular}
 \end{table}
 
-This analysis supports the use of a domain-specific text encoder in the multimodal model.
+Table~\ref{tab:common_text_terms} shows the most frequent terms and demographic templates appearing in clinical indications. Although demographic boilerplate is common, there is a high frequency of symptom-level phrases like ``chest pain'' and rule-out queries like ``r/o pneumonia''. For modelling, this highlights the need for domain-specific text embeddings \cite{boecking2022biovil} that can extract clinical signals while remaining robust to template boilerplate.
 
 \subsection{Vital Signs and Missingness Analysis}
 \label{subsec:eda_vitals}
 
-Structured vital signs provide additional clinical context about the patient's physiological state near the time of imaging. In this thesis, the vital sign modality includes variables such as temperature, heart rate, oxygen saturation, respiratory rate, systolic blood pressure, and diastolic blood pressure. These values may help the model interpret radiographic findings in relation to the patient's current condition.
-
-However, vital signs are not always complete. Missing values are common in real clinical datasets and must be handled carefully. Instead of simply discarding samples with missing vitals, this thesis uses a missingness-aware representation, where missing values are filled using a defined strategy and a corresponding missingness mask is provided to the model.
+Structured vital signs represent physiological states (e.g., temperature, heart rate, respiratory rate, blood pressure, and oxygen saturation) recorded near the time of imaging. To utilize incomplete physiological records without discarding studies, this thesis employs a missingness-aware representation that combines imputed values with explicit missingness masks.
 
 Table~\ref{tab:vitals_summary} summarizes the distribution and missingness of each vital sign.
 
@@ -122,6 +120,8 @@ Table~\ref{tab:vitals_summary} summarizes the distribution and missingness of ea
     \end{tabular}
 \end{table}
 
+Table~\ref{tab:vitals_summary} shows the distribution and missingness rates of vital sign variables. Extreme minimum and maximum values indicate the presence of data-entry errors and physiological outliers (e.g., a diastolic blood pressure of $7,698.90\text{ mmHg}$). For modelling, these extreme values motivate the implementation of robust preprocessing, such as outlier clipping and training-set-based z-score normalization, to prevent extreme values from distorting the model's feature space.
+
 Figure~\ref{fig:vitals_missingness} visualizes the missingness pattern across vital sign variables.
 
 \begin{figure}[htbp]
@@ -131,14 +131,12 @@ Figure~\ref{fig:vitals_missingness} visualizes the missingness pattern across vi
     \label{fig:vitals_missingness}
 \end{figure}
 
-The presence of missing values motivates the use of both normalized vital values and missingness masks in the vital-sign encoder.
+Figure~\ref{fig:vitals_missingness} shows the missingness rate for each vital sign variable, showing uniform missingness across all features. For modelling, this uniform missingness indicates that vital signs are usually recorded or omitted as a single clinical block, justifying the use of a combined vital-signs token and a corresponding missingness mask to guide feature fusion.
 
 \subsection{Temporal Prior Gaps}
 \label{subsec:eda_prior_gaps}
 
-Prior-study information is available for patients who had previous chest X-ray examinations before the current study. In clinical practice, prior studies are useful because they allow comparison over time. A finding may be interpreted differently depending on whether it is new, stable, improving, or worsening. Therefore, the availability and timing of prior studies are important for prior-aware modelling.
-
-Not all studies have an available prior examination. Among studies with priors, the time gap between the current and prior study may vary from a short interval to a much longer period. This creates two modelling challenges. First, the model must handle cases where no prior is available. Second, the model must understand that a recent prior may be more informative than a very old prior.
+Prior-study context supports comparative diagnosis by enabling temporal comparison over time \cite{bannur2023biovilt}. However, integrating this information requires addressing two main challenges: handling cases where no prior study is available and accounting for variable time gaps between current and historical studies.
 
 Table~\ref{tab:prior_availability} summarizes the availability of prior studies in the dataset.
 
@@ -157,6 +155,8 @@ Table~\ref{tab:prior_availability} summarizes the availability of prior studies 
     \end{tabular}
 \end{table}
 
+Table~\ref{tab:prior_availability} shows the availability of prior chest X-ray examinations at the study level, indicating that 82.24\% of studies have a linked historical prior. For modelling, this high prevalence demonstrates that prior studies provide a frequent source of temporal context, justifying the inclusion of prior-aware components in the classification architecture while requiring robustness to the 17.76\% of cases where no prior is available.
+
 Figure~\ref{fig:prior_gap_distribution} shows the distribution of time gaps between current and prior studies.
 
 \begin{figure}[htbp]
@@ -165,5 +165,7 @@ Figure~\ref{fig:prior_gap_distribution} shows the distribution of time gaps betw
     \caption{Distribution of time gaps between current and prior chest X-ray studies (in days, log-scaled).}
     \label{fig:prior_gap_distribution}
 \end{figure}
+
+Figure~\ref{fig:prior_gap_distribution} shows the wide dynamic range of time gaps between current and prior studies, exhibiting peaks representing acute follow-ups (1 to 30 days) and routine screenings (approximately 365 days). For modelling, this wide variation suggests that the clinical relevance of a prior study may change depending on its temporal distance, motivating the discretization of time gaps into learned embedding buckets rather than assuming a simple linear relationship.
 
 Because the time-gap distribution may be skewed, this thesis discretizes the time difference into temporal buckets before adding it to the model as a learned embedding. This allows the model to represent approximate temporal distance without assuming that time differences have a simple linear effect.

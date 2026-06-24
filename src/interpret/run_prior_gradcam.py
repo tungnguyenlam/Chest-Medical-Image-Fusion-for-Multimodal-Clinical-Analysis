@@ -54,6 +54,7 @@ from src.interpret.visualize import render_prior_attribution_split
 from src.model.PriorAwareV4NanoModel import PriorAwareV4NanoModel
 from src.model.PriorAwareV5NanoModel import PriorAwareV5NanoModel
 from src.model.PriorAwareV6NanoModel import PriorAwareV6NanoModel
+from src.model.PriorAwareV7NanoModel import PriorAwareV7NanoModel
 from src.model.PriorAwareCaMCheXModel import PriorAwareCaMCheXModel
 from src.model.PriorAwareV2NanoModel import PriorAwareV2NanoModel
 from src.model.PriorAwareV3NanoModel import PriorAwareV3NanoModel
@@ -81,6 +82,7 @@ _MODEL_CLASSES = {
     # stripped for attribution in build_model, so the forward stays logits-only).
     "prior_aware_v5nano_bgpenalty": PriorAwareV5NanoModel,
     "prior_aware_v6nano": PriorAwareV6NanoModel,
+    "prior_aware_v7nano": PriorAwareV7NanoModel,
 }
 _DEFAULT_TEXT_MODEL = {
     "prior_aware": "dmis-lab/biobert-v1.1",
@@ -90,6 +92,7 @@ _DEFAULT_TEXT_MODEL = {
     "prior_aware_v5nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
     "prior_aware_v5nano_bgpenalty": "microsoft/BiomedVLP-CXR-BERT-specialized",
     "prior_aware_v6nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
+    "prior_aware_v7nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
 }
 
 

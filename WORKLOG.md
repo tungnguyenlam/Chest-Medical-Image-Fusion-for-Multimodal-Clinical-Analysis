@@ -2601,3 +2601,290 @@ previous turn, so this turn only needs the YAML sweep.
 **Assumptions.** The visual panels from the baseline `prior_aware_v5nano` epoch 3 validation set represent normal model performance and attention focus.
 
 **Gotchas.** The inclusion of the image panels increases the compiled PDF size to approximately 8.5 MB, which is typical for reports with rich medical figures.
+
+## 2026-06-24 - Thesis draft updates for experimental completeness
+
+**Goal.** Address ChatGPT/advisor comments to transition the thesis report from a skeleton draft to an experimentally complete draft. This includes expanding EDA interpretations, detailing preprocessing, modeling the proposed prior-aware architecture, adding ablation/long-tail results, and fully drafting the Discussion and Conclusion sections.
+
+**Changes.**
+- `report/eda/eda.tex` - Added detailed interpretation paragraphs for all tables and figures; described vital-sign outliers (such as temperature `1.04`, O2 sat `921`, and diastolic BP `7698.90`) and added forward references to preprocessing; updated the clinical indication terms table to supplement raw demographics with clinical/symptom terms.
+- `report/methodology/methodology.tex` - Added an architecture diagram box/placeholder after model overview; added a comprehensive `Data Preprocessing` subsection (`\subsection{Data Preprocessing}`) detailing image resizing/RGB modes, view position mapping, text tokenization (CXR-BERT), vital-sign normalization/clipping, missing-value imputation, prior-study chronological selection, and label construction.
+- `report/results/results.tex` - Expanded the results section by adding `Experimental Setup` (detailing split statistics, hyperparameters, AdamW learning rates, epochs, early stopping, ASL parameters, and hardware), `Ablation Study` (adding table `tab:ablation_components` and analysis), `Per-Class or Long-Tail Analysis` (interpreting performance on minority findings), and renamed the qualitative analysis subsection to `Grad-CAM Qualitative Analysis`.
+- `report/discussion/discussion.tex` - Replaced the stub with a comprehensive discussion section covering quantitative/qualitative results interpretation, clinical relevance, detailed limitations (computational resources, image resolution, frozen text encoders, label noise, single dataset validation, shortcut learning risks, and qualitative CAM limitations), and future directions.
+- `report/conclusion/conclusion.tex` - Expanded the conclusion stub into a concise summary of the clinical problem, our proposed prior-aware multimodal framework, quantitative and qualitative findings, limitations, and future directions.
+
+**Reasoning.** We systematically addressed all advisor feedback to make the report sound like a robust research thesis. We maintained conservative phrasing (adaptation of CaMCheX under limited compute) and avoided any version naming (V2/V3/V4) in the main text, describing earlier iterations only as ablation variants.
+
+**Assumptions.** The details regarding data preprocessing (e.g. 512 image resolution, max 4 views, 384 text max length, training statistics for z-scores, and chronological chronological prior shifts) align with the actual data-loading configurations defined in `PriorAwareDataset.py`.
+
+**Gotchas.** Text fields with long model names in `\texttt{...}` (like `BiomedVLP-CXR-BERT-specialized`) cause bad box/overflow warnings in LaTeX. We broke them up (`\texttt{BiomedVLP-CXR-BERT-}\-\texttt{specialized}`) to compile cleanly.
+
+**Follow-ups.** The report compiled successfully via `make` into `main.pdf` (33 pages, 8.6 MB).
+
+## 2026-06-24 - Added CXR-LT 2023 challenge solutions to Related Work
+
+**Goal.** Add a new Related Work subsection (Section 2.5) summarizing representative CXR-LT 2023 participant solutions, insert a summary table, update the Related Work introductory paragraph, and add corresponding BibTeX references.
+
+**Changes.**
+- `report/related_work/related_work.tex` - Updated the opening paragraph to mention the new challenge solutions subsection. Added Section 2.5 `\subsection{CXR-LT 2023 Challenge Solutions}` detailing common design motifs (ConvNeXt/EfficientNet backbones, high resolutions, ensembling, loss reweighting, label-text representations) and added `Table 2.1` mapping out CheXFusion, Advanced Augmentations, Robust Asymmetric Loss, and Bag of Tricks.
+- `report/references.bib` - Appended four BibTeX entries for the cited challenge papers (`kim2023chexfusion`, `nguyenmau2023advanced`, `park2023robust`, `hong2023bagoftricks`).
+
+**Reasoning.** Integrating CXR-LT challenge solutions connects this thesis directly to the literature surrounding its primary target benchmark, motivating our choice of ConvNeXt encoder, asymmetric loss, and multi-view representation learning while highlighting how our prior-aware focus differs from leaderboard ensembles.
+
+**Assumptions.** The BibTeX entries provided match standard workshop proceedings formats.
+
+**Gotchas.** Short column widths in `\tabular` with specialized clinical words occasionally cause Underfull `\hbox` warnings as LaTeX stretches line spaces, but they compile correctly.
+
+## 2026-06-24 - Updated CXR-LT 2023 Challenge Solutions with quantitative results
+
+**Goal.** Update the CXR-LT 2023 challenge subsection with actual dataset sizes, participation numbers, and two quantitative tables (overall performance and frequency-group breakdown), resolving any layout overflows.
+
+**Changes.**
+- `report/related_work/related_work.tex` - Overwrote Section 2.5 `\subsection{CXR-LT 2023 Challenge Solutions}` with the updated text describing the 377,110 image scale, 70/10/20 splits, and the 209/59/23/17/11/9 participation funnel. Replaced the single overview table with `Table 2.1` (top 9 teams mAP and mAUROC, wrapped in `adjustbox`) and `Table 2.2` (mAP breakdown across head, medium, and tail findings).
+
+**Reasoning.** Including these numbers makes the background context concrete and establishes a direct baseline reference. Using `adjustbox` for the wide multi-column leaderboard table prevents margin overflows.
+
+**Assumptions.** The team strategy details and scores are faithful representations of the challenge overview.
+
+## 2026-06-24 - Separated CaMCheX results from implemented experimental results
+
+**Goal.** Put CaMCheX's own results in Related Work (Section 2.6) as prior-work context, and restructure Section 5 (Experimental Results) to contain only our own numbers with a reference comparison section and an overclaiming disclaimer.
+
+**Changes.**
+- `report/related_work/related_work.tex` - Restored a small missing table closing block in Section 2.5. Appended Section 2.6 `\subsection{CaMCheX Results and Relevance to This Thesis}` containing CaMCheX's benchmark results (Table 2.3) and frequency group performance (Table 2.4).
+- `report/results/results.tex` - Restructured Section 5. Updated `\subsection{Main Performance of the Proposed Model}` to use `Table 5.1` (`tab:ours_main_results`) containing our z-score numbers. Added `\subsection{Comparison with Reference Methods}` containing `Table 5.2` (`tab:contextual_comparison`) comparing CheXFusion, CaMCheX, and our model, plus the disclaimer explaining the non-apples-to-apples setting (compute, resolution, frozen encoders, selected cohort). Renamed the tail classes analysis to `Long-Tail and Per-Class Analysis`.
+
+**Reasoning.** This change isolates published reference metrics from our local experiments to avoid misleading comparisons, protecting the thesis from overclaiming since the published CaMCheX baseline utilizes a 1024-pixel resolution, noisy student training, and vast pretraining resources.
+
+## 2026-06-24 - Vertically stacked Grad-CAM subfigures for readability
+
+**Goal.** Modify the subfigure layouts for the Cardiomegaly and Pneumothorax case studies in Section 5.6 to stack vertically rather than side-by-side, increasing their visual size and legibility.
+
+**Changes.**
+- `report/results/results.tex` - Changed the width of the `subfigure` blocks for both visual case studies from `0.48\textwidth` to `0.85\textwidth`, and replaced the horizontal `\hfill` separators with vertical spacing (`\vspace{0.3cm}`) to force them to stack vertically.
+
+**Reasoning.** Medical image attribution panels with Grad-CAM overlays contain dense details that are difficult to inspect when squeezed into side-by-side columns. Stacking them vertically allows each image to occupy $85\%$ of the text width, significantly improving legibility.
+
+## 2026-06-24 - Convert bulleted list in introduction to plain paragraphs
+
+**Goal.** Remove the final numbered/bulleted list inside `report/introduction/introduction.tex` (the Contributions section) and convert it into plain text paragraphs to adhere to the paragraph-only styling rule.
+
+**Changes.**
+- `report/introduction/introduction.tex:65-83` - Replaced the `enumerate` environment list containing thesis contributions with five structured paragraphs starting with ordinal transition words ("First", "Second", etc.).
+- `report/results/results.tex:94-105` - Wrapped the ablation study components table in an `adjustbox` environment to prevent LaTeX `Overfull \hbox` compilation warnings.
+
+**Reasoning.** Reorganizing lists into plain narrative paragraphs maintains the requested style consistency across the entire document while keeping the original semantic contributions intact. Using `adjustbox` for the results table fixes layout overflow without needing to drop detail from the model variant labels.
+
+**Follow-ups.** None. All lists within the thesis source files are now fully converted to plain text paragraphs and compilation is completely clean.
+
+## 2026-06-24 - Revise CXR-LT 2023 solutions subsection with targeted citations
+
+**Goal.** Revise the CXR-LT 2023 challenge-solutions subsection to include targeted citations for dataset size, challenge overview, and representative team methods, focusing on four specific top-performing solutions.
+
+**Changes.**
+- `report/references.bib:171-180` - Appended the bibtex entry for `holste2023cxrlt_physionet`.
+- `report/related_work/related_work.tex:50-108` - Revised the CXR-LT 2023 Challenge Solutions subsection to cite the overview (`holste2024cxrlt`) and PhysioNet dataset (`holste2023cxrlt_physionet`). Described and cited the four representative teams (CheXFusion, Nguyen-Mau et al., Park et al., and Hong et al.) in the paragraphs and tables. Modified both tables to show only these four representative teams with their corresponding citations and strategies.
+
+**Reasoning.** Showing only the four representative teams and citing their individual papers keeps the subsection highly relevant, precise, and readable compared to listing all nine teams. Adding the PhysioNet dataset citation provides accurate credit for the resource.
+
+**Follow-ups.** Verified that the LaTeX document compiles cleanly with no warnings or errors.
+
+## 2026-06-24 - Add Macro mAP column to ablation study table
+
+**Goal.** Add the `Macro mAP` metric column to the ablation study table (Table 5) in `report/results/results.tex`.
+
+**Changes.**
+- `report/results/results.tex:92-106` - Modified Table 5 to include the `Macro mAP` column with values corresponding to each model variant.
+
+**Reasoning.** Including both mAP and AUROC in the ablation study table provides a complete comparative picture of the classification performance and mirrors the metrics reported in the main results table.
+
+**Follow-ups.** Recompiled the document with `make` to verify formatting and correct compilation.
+
+## 2026-06-24 - Highlight resolution settings in contextual comparison table
+
+**Goal.** Explicitly highlight the image resolutions of different models (e.g. $512 \times 512$ for our settings and $1024 \times 1024$ for published CaMCheX results) in the contextual comparison table (Table 4) and its discussion.
+
+**Changes.**
+- `report/results/results.tex:59-82` - Updated Table 4's "Setting" column header to "Setting (Resolution)" and explicitly added the resolution sizes ($224 \times 224$ for CheXFusion, $1024 \times 1024$ for CaMCheX, and $512 \times 512$ for our proposed model). Updated the description paragraph to make the comparison and resolution differences explicit.
+
+**Reasoning.** Clearly noting the image resolution provides essential context for the reader to understand why our model is computationally lightweight yet achieves competitive metrics compared to the original high-resolution benchmarks.
+
+**Follow-ups.** Ran a clean compile using `make` to produce the final `main.pdf` successfully.
+
+## 2026-06-24 - Revise and condense thesis draft sections for conciseness and style consistency
+
+**Goal.** Shorten the thesis draft's opening introduction, related work tables' prose, and EDA figure/table interpretations to reduce repetitiveness and clinical speculation, while enforcing a consistent "this thesis" voice throughout the document.
+
+**Changes.**
+- `report/introduction/introduction.tex` - Shortened the opening introduction to 3 paragraphs. Streamlined background and motivation (1.1), task and dataset context (1.2), challenges (1.3), approach overview (1.4), and contributions (1.5) to be concise and use "this thesis" consistently.
+- `report/related_work/related_work.tex` - Reduced prose surrounding the CXR-LT 2023 solutions (2.5) and CaMCheX results (2.6) tables into short, focused paragraphs, explicitly noting CaMCheX as a methodological reference under practical computational constraints.
+- `report/eda/eda.tex` - Shortened figure and table interpretations to follow the "what it shows" + "why it matters for modelling" format, removing speculative clinical claims.
+- `report/conclusion/conclusion.tex` - Replaced first-person pronouns ("we", "our") with passive constructions or "this thesis".
+- `report/discussion/discussion.tex` - Replaced first-person pronouns with passive constructions or "this section" / "this thesis".
+- `report/methodology/methodology.tex` - Aligned introductory statement to avoid first-person pronoun references.
+- `report/results/results.tex` - Replaced all occurrences of first-person pronouns ("we", "our") with passive phrasing or "the proposed model" / "this thesis".
+
+**Reasoning.** Condensing repetitive clinical context and model caveats ensures a cleaner flow. Enforcing the "what it shows -> why it matters" structure for EDA figures clarifies the connection between data analysis and model design decisions. Replacing "we/our" with "this thesis/the proposed model" establishes a formal academic tone consistent across all chapters.
+
+**Gotchas.** The file `report/conclusion/conclusion.tex` was briefly truncated during replacement but was fully restored and verified.
+
+**Follow-ups.** None. The report builds cleanly via `make` and outputs a 33-page `main.pdf`.
+
+## 2026-06-24 - Add mathematical formulations to Methodology and Results
+
+**Goal.** Increase the rigor of the thesis report by adding mathematical definitions and equations for the multimodal pipeline, encoders, fusion mechanism, classification head, training objectives, and evaluation metrics.
+
+**Changes.**
+- `report/methodology/methodology.tex` - Expanded notation in Section 4.1 (Problem Formulation). Added mathematical formulations for vital-sign normalization and missingness masking in Section 4.3. Defined image, text, and vital-sign encoders mathematically in Section 4.4. Defined target/memory token sequences and sequence lengths in Section 4.5 along with computational complexity scaling $\mathcal{O}(N^2 d)$. Added equations for scaled dot-product attention, self-attention, cross-attention, time-gap embeddings, and Bernoulli prior dropout in Section 4.6. Formulated label-query attention, logit projection, sigmoid activation, Binary Cross-Entropy loss, and Asymmetric Loss with negative probability clipping in Section 4.7.
+- `report/results/results.tex` - Formulated Average Precision (AP), macro Mean Average Precision (mAP), and macro F1 score in Section 5.1 (Evaluation Metrics).
+
+**Reasoning.** Formalizing the pipeline in LaTeX equations helps ground the prose explanations and provides mathematical definitions for the custom prior-aware attention routing, time-gap discretization, vital-sign missingness mask handling, and asymmetric classification loss.
+
+**Gotchas.** Shifting parameters and negative probability clipping are now explicitly detailed to align methodology equations directly with the experimental parameters (e.g. clipping threshold $m=0.05$).
+
+**Follow-ups.** None. The updated document compiles cleanly via `make` and produces a 36-page `main.pdf`.
+
+## 2026-06-24 - Strengthen citations and fix relative percentage terminology
+
+**Goal.** Strengthen the citation placement throughout the thesis chapters for datasets, benchmarks, model components, and optimization libraries, while correcting wording of performance increases to represent absolute changes.
+
+**Changes.**
+- `report/references.bib` - Appended new reference entries for `vaswani2017attention` (Transformer), `ridnik2023mldecoder` (ML-Decoder), `selvaraju2017gradcam` (Grad-CAM), `zuiderveld1994clahe` (CLAHE), `loshchilov2019adamw` (AdamW), `bustos2020padchest` (PadChest), and `gu2024mamba` (Mamba).
+- `report/introduction/introduction.tex` - Cited Vaswani et al. for quadratic attention complexity (1.3) and Selvaraju et al. for Grad-CAM contributions (1.5).
+- `report/eda/eda.tex` - Added dataset citations for MIMIC-CXR and MIMIC-IV/ED in Section 3.1, CXR-LT in Section 3.2, CaMCheX and BioViL in Section 3.3, and BioViL-T in Section 3.5.
+- `report/methodology/methodology.tex` - Cited Vaswani et al. (Transformer) in Section 4.2, 4.5, and 4.6. Cited Zuiderveld (CLAHE) in Section 4.3. Cited Boecking et al. (BioViL) in Section 4.3 and 4.4. Cited Woo et al. (ConvNeXt-V2) in Section 4.4. Cited Ridnik et al. (ML-Decoder) and Ridnik et al. (ASL) in Section 4.7.
+- `report/results/results.tex` - Cited Loshchilov & Hutter (AdamW) and Ridnik et al. (ASL) in Section 5.1. Cited Kim (CheXFusion), Sloan et al. (CaMCheX), and Selvaraju et al. (Grad-CAM) in Section 5.3 and 5.6. Corrected "+8.52% mAP", "+8.52% over standard baseline", and "+11.22%" relative improvements to absolute values (e.g. "+0.0852 absolute mAP" or "+0.1122 absolute mAP").
+- `report/discussion/discussion.tex` - Added workflow, label noise, Grad-CAM limitation, PadChest, and Mamba citations in Section 6.1, 6.2, and 6.3.
+
+**Reasoning.** Re-verifying and adding formal citations to newly referenced models (like Mamba or PadChest) and key backbone/encoder designs ensures academic compliance. Changing relative percentages to absolute differences (e.g., "+0.0852 absolute mAP") accurately presents the metrics reported in the evaluation tables.
+
+**Follow-ups.** None. Verified that the bibliography compiles cleanly and the PDF is generated successfully.
+
+## 2026-06-24 - Move label-graph work from v7 to v8; v7 reserved for Perceiver pooler
+
+**Goal.** User decided the label-correlation graph head (previously scoped as v7) should move to v8, and v7 should be reserved for a different contribution — specifically, the learned-query (Perceiver) current-image pooler originally parked in `docs/learned_query_image_pooling.md`. Make the rename, update all cross-references, and leave a clean v7 folder for the new work.
+
+**Changes.**
+- `git mv training/prior_aware_v7nano -> training/prior_aware_v8nano` — preserves history.
+- `git mv docs/prior_aware_v7_label_graph.md -> docs/prior_aware_v8_label_graph.md` — same.
+- `training/prior_aware_v8nano/PROPOSAL.md` — rewritten header, table, "what it is not" section, "files to add" section, and "modeling reason v7 isn't redundant" prose to refer to v8. Future-line deferred to v9 (it was already labeled v8 in this file, but now v8 = graph and v9 = multi-prior / temporal-decay).
+- `docs/prior_aware_v8_label_graph.md` — header, "what v7 is not" section title, the §4(A) mechanism label, the §2 table header, and the §9 build-order list all retargeted to v8. Future-line deferred to v9.
+- `docs/learned_query_image_pooling.md` — flipped from "parked idea, orthogonal to the v7 label-graph head" to "promoted to the v7 line; label-graph head is now v8" so the parked note correctly points at the new home.
+- `training/prior_aware_v7nano/PROPOSAL.md` — created as a stub (folder had only the old graph proposal; left an empty folder would have been confusing). Stub points at the parked design note and the new v8 sibling so the cross-references in v8 land on a real file.
+
+**Reasoning.** User explicitly asked for v7 to be the Perceiver pooler (option 1 in the menu), not the label graph. The graph head is more mature (full noise-aware design doc already written) and the Perceiver pooler is a parked but well-scoped idea — promoting the parked idea to v7 lets the user write the v7 proposal from the existing design note with a clear head start. Moving graph→v8 keeps the version numbers aligned with the contribution maturity. AGENTS.md was checked first and required no edit (it doesn't mention v7 or v8 by name). No `.py` / `.yaml` files needed changes — no code exists for either v7 or v8 yet, so this is a pure-docs-and-folder rename.
+
+**Assumptions.**
+- The user wants the Perceiver pooler as v7 and is OK with the v7 PROPOSAL.md starting as a stub. (Confirmed via the "Pick v7 direction" question — picked "Learned-query (Perceiver) image pooler".)
+- The v8 line's "what comes after v8" (multi-prior / temporal-decay) is now v9. The graph doc says v9; the v8 PROPOSAL.md says v9. If the user disagrees, it's a one-line edit each.
+- The script filename `src/prepare/05_build_label_graph.py` stays unchanged — it's descriptive of the artifact, not the version. If a v9 script ships later, the numbering still works (05→graph, 06→next).
+
+**Gotchas.**
+- I made one bad edit on `docs/prior_aware_v8_label_graph.md` (line ~137) by appending a parenthetical that didn't belong. Caught it on the next read and reverted to a clean "v7 → v8" label rename. Worth being more careful with chained edits.
+- The `git status` shows a bunch of `report/*.tex` and `WORKLOG.md` modifications that are NOT from this session — they're pre-existing in the working tree. I did not touch them. Don't be surprised by the noise on commit.
+
+**Follow-ups.**
+- Write the actual v7 PROPOSAL.md (the stub currently in `training/prior_aware_v7nano/PROPOSAL.md`).
+- The `docs/learned_query_image_pooling.md` "Status" line says "promoted to the v7 line" — once the v7 PROPOSAL lands, consider re-pointing the cross-reference at the new proposal instead of the parked note (or merge the parked note's design content into the v7 PROPOSAL and turn the parked note into a redirect).
+- The v8 design doc still calls itself "v8 — Noise-aware label-correlation graph head" — fine, but a future v9 (multi-prior) would need a parallel noise-aware treatment if label noise matters there too. Note for later.
+
+## 2026-06-24 - Implement v7 nano (per-view learned-query image pooler)
+
+**Goal.** Build the v7 line that was reserved for the learned-query (Perceiver) current-image pooler. The user picked `Perceiver K=64/view for current, K=32 for prior` and confirmed we should drop the 16x16->8x8 max-pool entirely. The v7 model is now trainable end-to-end with the same data path as v6.
+
+**Changes.**
+- `src/model/PriorAwareV7NanoModel.py` (new) - subclasses `PriorAwareV6NanoModel`, overrides `forward`, and adds:
+  - `cur_image_queries` (`nn.Parameter`, K=64 x d_model, std=0.02) and `cur_image_pooler` (`nn.TransformerDecoder`, 1 layer, 8 heads, FFN 1024, pre-LN, GELU, dropout 0.1) - the per-view Perceiver that runs independently on each of the 4 views' un-fused 16x16=256 spatial tokens.
+  - `_pool_current_image_per_view(cur_block, cur_slot_valid)` - reshapes (B,S,C,H,W) to (B*S, H*W, C), runs the shared Perceiver with B*S queries, re-arranges back to (B, S*K, C). Preserves view identity and is symmetric with v6's per-view 8x8 max-pool bookkeeping.
+  - Forward override that calls `_encode_image_block` (which now sees `image_pool_stride=1` -> identity pooler, so `cur_block` is the un-fused 16x16 grid), runs `_pool_current_image_per_view`, then proceeds with the rest of v6's forward. The bg-penalty and `highres_skip` paths are preserved (penalty consumes the un-fused `cur_block`; skip is opt-in via config).
+  - Defaults: `n_prior_latents=32` (was 16), `image_pool_stride=1` (was 2), `highres_skip=False` (was True), `n_cur_image_latents=64`, `cur_pooler_nhead=8`, `cur_pooler_dropout=dropout=0.1`, `cur_pooler_ffn_dim=fusion_ffn_dim=1024`.
+  - All v6 init args still valid; subclassing means new code only declares what's new.
+- `training/prior_aware_v7nano/config.yaml` (new) - mirror of v6 with the new model_init_args knobs. `arch: prior_aware_v7nano`, `size: 512` (real v6 config size, gives 16x16 grid).
+- `training/prior_aware_v7nano/prior_aware_train.py` (new) - mirror of v6 train, only the import line changes.
+- `training/prior_aware_v7nano/prior_aware_eval.py` (new) - mirror of v6 eval, only the import line changes.
+- `training/prior_aware_v7nano/README.md` (new) - design + knobs + ablation grid + Grad-CAM caveat.
+- `training/prior_aware_v7nano/PROPOSAL.md` (rewrote from stub to real) - one-line thesis, v6->v7 delta table, risks, ablation grid, open question (K sweep).
+- `test/benchmark_pipeline.py:171-174` and `test/benchmark_pipeline.py:221` - `prior_aware_v7nano` registered in `_build_prior_aware_model` and the `prior_arches` set.
+- `src/interpret/run_prior_gradcam.py:56, 84, 94` - `PriorAwareV7NanoModel` imported, registered in `_MODEL_CLASSES` and `_DEFAULT_TEXT_MODEL`.
+- `AGENTS.md` (current component map) - added v7 row pointing at `src/model/PriorAwareV7NanoModel.py`.
+
+**Reasoning.** Subclassing v6 (instead of copying) keeps the change reviewable: every new line of code is the v7 contribution, and any future v6 fix (e.g. a new regularization knob) lands in both models automatically. The per-view pooler is `nn.TransformerDecoder` with the exact same shape (d_model=640, 8 heads, FFN 1024, pre-LN, GELU) as the v6 prior pooler, so it's the same primitive the repo already trusts. K=64 was chosen to give 4x64=256 current image latents - same total count as v6's max-pooled 256, so fusion cost is unchanged; the win is content-adaptive selection vs fixed 2x2 windows. The `image_pool_stride=1` default keeps the v6 backbone untouched (the existing `_make_image_pool` returns `nn.Identity` for stride 1, `PriorAwareV6NanoModel.py:95-96`); the v6 max-pool is disabled by config, not by a parallel code path.
+
+**Assumptions.**
+- K=64 per view, K=32 prior, per-view (not global) pooling, all confirmed by the user via the "Pick v7 direction" question.
+- The `_pool_current_image_per_view` mask only zeros out whole padded views (`cur_img_valid` is False for the whole view's K=64 latents, not per-token). A fully-padded view contributes no current-image signal; the rest of v6's bookkeeping (text/vitals still emit tokens) is unchanged. This is the same trade v6 makes.
+- Grad-CAM support for the per-view pooler is a follow-up. v7's `prior_gradcam` registration is wired so the existing per-class attribution panels work, but the current-image Grad-CAM panel will need a cross-attention-rollout fallback. Flagged in both `training/prior_aware_v7nano/README.md` and `training/prior_aware_v7nano/PROPOSAL.md`.
+- `n_cur_image_latents=0` would disable the pooler (the model would have to fall back to a flat 16x16 rearrange, but that path isn't wired - users who want to disable should set `image_pool_stride=2` to recreate v6 behaviour, which is cleaner). I left the `if n_cur_image_latents > 0` guard but didn't implement the K=0 fallback; it's an unlikely config.
+
+**Gotchas.**
+- The forward smoke test at 384x384 fails - the ConvNeXtV2-Nano backbone produces `h//32 x w//32`, so 384 -> 12x12, not 16x16. The v6 config uses `size: 512` (16x16), which I match. Don't change `size: 512` to 384 without also adjusting the spatial pooler math.
+- `test/benchmark_pipeline.py --arch prior_aware_v6nano` (and `--arch prior_aware_v7nano` for that matter) fails on the *real* data because the test loads pretrained checkpoints with 768-channel backbones (Stage-1 width) and tries to scatter into 640-channel buffers. This is a **pre-existing v6 issue**, not introduced by v7. I confirmed it by running the same command on v6. The forward smoke test I built from scratch (no pretrained weights) passes at 512x512.
+- `import torch.nn.functional as F` was an unused import in the first draft of the v7 model; I removed it. Also dropped `PositionalEncoding2D`, `Summer`, and the static `_bucket_days` workaround - `bucket_days` is a free function in `src/dataloader/PriorAwareDataset.py:434` and v6 imports it the same way.
+- The highres_skip block in v7's forward had wrong variable names in the first draft (used `b_s, c` from a 5-tuple unpack that didn't match the actual `cur_block.shape`); I fixed it to use `cur_block.shape[-2], cur_block.shape[-1]` for H, W, which is the same idiom v6 uses.
+- Per-token layout in the v6 PROPOSAL comment block (the `tgt` line) said `256 image + 2 clinical + 1 vitals = 259`; the v7 line says `256 image (4*64) + 2 clinical + 1 vitals = 259`. Same count - this was the design intent.
+- `image_pool_type=max` is still set in the v7 config even though `image_pool_stride=1` makes it a no-op (`_make_image_pool` returns `nn.Identity` for stride 1, see `PriorAwareV6NanoModel.py:95-96`). Left it explicit so users who flip stride back to 2 get the same `max` behaviour as v6.
+
+**Follow-ups.**
+- Smoke test: forward + backward + gradient flow on the v7 model with fresh weights at 512x512 (no pretrained) PASSES. Real-data smoke test (benchmark pipeline) needs the same pretrained-768-vs-640 fix that v6 needs; not addressed here.
+- The first experiment should be a K sweep at 512px: n_cur_image_latents in {16, 32, 64, 96} on the small-finding-subset mAP. Default K=64 is a hypothesis (matches v6's 4x64=256 max-pooled count).
+- Grad-CAM for the per-view pooler: attribute through `cur_image_pooler.layers[0].multihead_attn` cross-attention weights (query -> 16x16 grid cell). The model has the weights; the attributor needs a new code path.
+- A 768px or 1024px input experiment is the natural v7.1 follow-up. The v7 pooler is what makes that affordable at constant fusion cost; the design doc parked note explicitly ties the two together.
+- Consider exposing a v7 eval script that reports small-finding-subset mAP separately (nodule, mass, pneumothorax, etc.), since that's the v7 thesis's primary readout.
+
+## 2026-06-24 - v7nano: add learned-query pooler on the prior image path
+
+**Goal.** While verifying `prior_aware_v7nano`, we found the prior image path
+exploded to 4*16*16=1024 tokens. v7 set `image_pool_stride=1` to feed the full
+16x16 grid into the *current*-image per-view Perceiver pooler, but `image_pool`
+is shared by both branches, so the prior image also lost v6's fixed 8x8 max-pool
+with no replacement. User asked to "bring pooling back" on the prior path:
+K=64/view for current (unchanged), K=32/view for the prior image.
+
+**Changes.**
+- `src/model/PriorAwareV7NanoModel.py`:
+  - `__init__` - new args `n_prior_image_latents=32`, `prv_pooler_nhead=8`,
+    `prv_pooler_dropout=None(->dropout)`, `prv_pooler_ffn_dim=None(->fusion_ffn_dim)`;
+    builds `prv_image_queries` (K,640) + `prv_image_pooler` (one pre-LN
+    TransformerDecoder, same primitive as the current/prior poolers).
+  - Refactored `_pool_current_image_per_view` into a generic
+    `_perceiver_pool_per_view(block, slot_valid, queries, pooler, k)` with thin
+    current/prior wrappers, so both branches share one code path.
+  - `forward` - prior image now goes through `_pool_prior_image_per_view`
+    (4*32=128 latents) instead of the flat 1024-token reshape; `mem_valid` uses
+    the pooled per-view validity `prv_img_valid & has_prior` instead of
+    `_valid_image_tokens(..., 16, 16)`.
+  - Docstrings/layout comments updated (prior memory is now 135 tokens, not 263).
+- `training/prior_aware_v7nano/config.yaml` - added `n_prior_image_latents: 32`
+  and `prv_pooler_{nhead,dropout,ffn_dim}` under `model_init_args`.
+- `training/prior_aware_v7nano/{PROPOSAL.md,README.md}` - delta tables, per-token
+  layout, and knob tables updated to reflect the prior-image pooler and the
+  corrected prior memory token count.
+
+**Reasoning.** A second per-view Perceiver mirrors the current path exactly and
+reuses the primitive the repo already trusts, so the prior reduction is
+content-adaptive (not a fixed max-pool) and symmetric with the current image.
+K=32/view (vs 64 for current) reflects that the prior is context, not the
+prediction target, and keeps the prior Perceiver's key count small (memory ~135
+vs the 1031 it was ingesting). Chose a *separate* pooler module (not shared
+weights with the current pooler) so each branch's K and capacity stay
+independently tunable; the extra ~3M params are negligible vs the backbone.
+The whole-memory prior Perceiver (`n_prior_latents=32`) is intentionally kept -
+it selects across all prior modalities (image+clin+report+vitals+label), which
+is a different job from the per-view image reduction.
+
+**Assumptions.** "32 token from each image" = 32 per *view* (each of the 4 views
+is one image), symmetric with the current path's "64 per view". If the intent
+was 32 total across all prior views, set `n_prior_image_latents=8`.
+
+**Gotchas.** `image_pool_stride` still gates v6's fixed max-pool for *both*
+branches; the two learned poolers now do the real reduction. Flipping
+`image_pool_stride` back to 2 would stack a fixed 8x8 max-pool *under* both
+learned poolers (the documented sanity ablation). Per-view poolers pass no
+key-padding mask because every view's 256 spatial tokens are present (padding is
+at the view level, masked downstream via `*_img_valid`), so no all-masked
+softmax row. Verified a forward smoke test (no pretrained weights, 512px, one
+padded view, one no-prior sample): logits (2,26) finite, prior pooled tokens
+(2,128,640).
+
+**Follow-ups.** K sweep still open (current 16/32/64/96; could add a prior-image
+K sweep too). Grad-CAM for the per-view poolers remains a follow-up.

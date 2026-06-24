@@ -1,4 +1,43 @@
 \section{Discussion}
 \label{sec:discussion}
 
-This is the discussion.
+This section discusses the clinical and technical implications of the findings, interprets the performance gains of the proposed prior-aware multimodal framework, and outlines the limitations of this work along with avenues for future research.
+
+\subsection{Interpretation of Results and Clinical Relevance}
+\label{subsec:discussion_interpretation}
+
+Quantitative evaluations demonstrate that integrating non-visual clinical modalities (indication text and vital signs) with radiographic images yields a substantial improvement in chest X-ray classification performance. More importantly, incorporating patient history via prior-study cross-attention and time-gap bucketing leads to an additional performance leap, especially for rare pathologies (tail classes).
+
+From a clinical standpoint, these findings reflect actual diagnostic workflows. Physicians rarely interpret radiographs in isolation; they evaluate findings in light of the patient's presenting symptoms, physiological state, and past imaging history \cite{sloan2025camchex,bannur2023biovilt}. For instance, when diagnosing pulmonary edema or pleural effusion, knowing that the patient has a history of congestive heart failure and has recently developed worsening shortness of breath provides a strong prior probability that guides the interpretation of subtle radiographic opacities. By modeling this process as an asymmetric target-memory fusion architecture, the neural network learns to leverage these contextual anchors, yielding more stable and accurate pathology predictions.
+
+For tail classes, which suffer from a lack of visual training examples, the text and historical modalities act as crucial regularizers. A rare condition like a hiatal hernia might be visually misclassified as a lung mass by an image-only model due to the scarcity of hernia examples in the dataset. However, when the model is provided with clinical text explicitly stating ``evaluate for hiatal hernia'' or prior studies showing a stable hernia, it can make a confident and correct prediction. This demonstrates that multi-modal fusion and prior awareness are highly effective strategies for mitigating the impact of class imbalance in medical image analysis.
+
+\subsection{Limitations}
+\label{subsec:discussion_limitations}
+
+Despite the positive results, this study has several limitations that should be noted:
+\textbf{Limited Computational Resources}: The experiments in this thesis were conducted under resource-constrained settings, restricting the size of the image backbones (using lightweight backbones like ConvNeXt-V2-Nano) and preventing end-to-end training of the text encoder.
+
+\textbf{Reduced Image Resolution}: Images were resized to $512 \times 512$ pixels. While sufficient for larger findings like cardiomegaly or pleural effusion, this downsampling may lead to the loss of fine-grained visual details, such as subtle pneumothorax lines, micro-nodules, or early interstitial markings.
+
+\textbf{Frozen Text Encoder}: The language model (\texttt{BiomedVLP-CXR-BERT}) was kept frozen, or its embeddings were precomputed, to save compute. Consequently, the text representation was not fine-tuned end-to-end for the classification objective, potentially limiting its alignment with the multimodal fusion layers.
+
+\textbf{Label Noise}: The CXR-LT labels are derived automatically from free-text radiology reports using natural language processing toolkits \cite{holste2024cxrlt}. These automated labels contain inherent noise and occasional misclassifications, which can introduce bias into model training and evaluation.
+
+\textbf{Single-Dataset Validation}: Models were trained and evaluated on splits derived from the MIMIC-CXR dataset. While patient-level splits prevent data leakage, the lack of external validation on datasets from other hospital systems limits the ability to evaluate the generalizability of the framework to different patient populations and imaging protocols.
+
+\textbf{Shortcut Learning Risk}: While prior-study information improves classification performance, it carries a risk of shortcut learning. The model might learn to rely excessively on historical labels or reports rather than analyzing the current radiograph, which could lead to errors if an acute, new pathology develops that was not present in the past. This was mitigated using prior dropout, but the risk remains.
+
+\textbf{Qualitative Interpretability}: Grad-CAM \cite{selvaraju2017gradcam} attribution maps provide qualitative visualizations of where the model is looking, but they do not constitute mathematical proof of clinical reasoning or causal decision-making.
+
+\subsection{Future Work}
+\label{subsec:discussion_future}
+
+Future research should focus on addressing these limitations:
+\textbf{End-to-End Multimodal Fine-Tuning}: With more compute, fine-tuning the text and image encoders jointly would allow for tighter semantic alignment between the modalities.
+
+\textbf{High-Resolution and Localized Attention}: Implementing localized attention or patch-based processing would allow the model to process high-resolution radiographs without memory overflow, preserving tiny pathological details.
+
+\textbf{Multi-Center Validation}: Evaluating the prior-aware model on external datasets (such as CheXpert or PadChest \cite{bustos2020padchest}) is crucial to verify its generalizability across different clinical settings.
+
+\textbf{Advanced Temporal Architectures}: Replacing simple cross-attention with recurrent or state-space models (like Mamba \cite{gu2024mamba}) could allow the network to fuse sequences of multiple prior studies rather than a single previous check.

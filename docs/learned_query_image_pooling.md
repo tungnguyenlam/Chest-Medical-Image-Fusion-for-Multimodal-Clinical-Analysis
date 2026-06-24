@@ -1,9 +1,11 @@
 # Learned-Query Current-Image Pooling (design note, not built)
 
-**Status:** parked idea, to revisit. Orthogonal to the v7 label-graph head
-([`docs/prior_aware_v7_label_graph.md`](prior_aware_v7_label_graph.md)) — that touches
-the classifier; this touches the image/fusion path. They could coexist in one model or
-ship as separate variants.
+**Status:** promoted to the v7 line. Originally parked as a follow-up to the
+label-graph head; both ideas are now independent successor variants. See
+[`docs/prior_aware_v8_label_graph.md`](prior_aware_v8_label_graph.md) for the
+label-graph head and
+[`training/prior_aware_v7nano/PROPOSAL.md`](../training/prior_aware_v7nano/PROPOSAL.md)
+(to be written) for the v7 plan that picks this up.
 
 ## The idea
 

@@ -1,62 +1,54 @@
-# Prior-Aware v7 Nano — Label-Graph-Aware Head (proposal)
+# Prior-Aware v7 Nano — proposal
 
 Successor to [`prior_aware_v6nano`](../prior_aware_v6nano/). v7 keeps the entire v6
-encoder + asymmetric fusion stack **unchanged** and adds one thing: a **directed
-label-correlation graph** that conditions the classifier head, in the spirit of
-ML-GCN / CheXGCN (Chen et al., CVPR 2019) and the GAT-margin-ranking idea from Duy Anh's
-EHR thesis.
+encoder + asymmetric fusion stack **unchanged** and replaces the 16×16→8×8 max-pool
+on the current image with a per-view **learned-query (Perceiver) pooler**. The
+prior Perceiver pooler (already in v6) is kept and its budget doubled from
+K=16 to K=32.
 
-This is a *head-only* contribution. It does **not** touch the image/text/prior modality
-balance and does **not** add multi-prior/temporal-decay modeling — those are deliberately
-deferred to a separate v8 line so the two thesis contributions get clean attribution.
-One such deferred modality-path idea — a learned-query (Perceiver) pooler on the
-**current** image that decouples fusion token count from input resolution — is parked in
-[`docs/learned_query_image_pooling.md`](../../docs/learned_query_image_pooling.md).
-
-> **The labels are noisy.** This short proposal assumes clean co-occurrence; the real design
-> must defend against report-derived label noise (spurious co-mention edges, high-variance
-> rare-class estimates). The full noise-aware design — Bayesian shrinkage, significance-tested
-> edges, labeler-vs-clinical edge separation, and the graph-as-denoiser framing — lives in
-> [`docs/prior_aware_v7_label_graph.md`](../../docs/prior_aware_v7_label_graph.md), which
-> supersedes this file. Read that before implementing.
+This is a **modality-path / image-resolution contribution**. It does **not** touch
+the classifier head and does **not** add a label graph — those are deliberately
+deferred. The label-correlation graph is the **v8 line** (see its
+[PROPOSAL.md](../prior_aware_v8nano/PROPOSAL.md) and
+[`docs/prior_aware_v8_label_graph.md`](../../docs/prior_aware_v8_label_graph.md)).
+v7 and v8 are independent contributions kept separate so each thesis claim has
+clean attribution; they can later compose into one model.
 
 ## One-line thesis
 
-> The 26 CXR-LT classes are not independent. A directed graph built from train-split
-> conditional co-occurrence `P(j|i)` lets each class's classifier vector borrow strength
-> from its clinical neighbours — and because the structure is **asymmetric and reaches the
-> long tail**, this is exactly the regime where a label graph helps and an independent-class
-> head cannot.
+> v6's 2×2 max-pool on the current image keeps focal lesions but throws away
+> information destructively (only the strongest activation in each window
+> survives). A per-view Perceiver pooler replaces it with a learned,
+> content-adaptive selection that can carry **more** localized signal at the
+> same fusion cost — and as a bonus, it decouples fusion token count from
+> input resolution, which is the only way to afford 768/1024 input on the
+> current GPU.
 
-## Why now: the evidence (notebook §8 / §8b)
+## Why now
 
-The Pearson/phi correlation matrix (§8) looked thin — most off-diagonal cells near zero,
-structure confined to the cardiogenic and air-leak clusters. **That was the wrong
-statistic.** Correlation is symmetric and mean-centered, so it is dominated by the huge
-*No Finding* negative mass and collapses the rare-class signal.
-
-The conditional matrix `P(j|i)` (§8b) tells the real story:
-
-- **The tail is not isolated.** Pneumomediastinum → Enlarged Cardiomediastinum ≈ 1.0;
-  Subcutaneous Emphysema → {Support Devices, Pneumothorax}; Pneumoperitoneum →
-  {Support Devices, Pleural Effusion}; Nodule → Lung Opacity; Tortuous Aorta →
-  Cardiomegaly; Fibrosis → Lung Opacity. The rare classes a graph is meant to rescue
-  have sharp conditional profiles.
-- **The structure is directed.** `P(j|i) ≠ P(i|j)` for the strongest edges (e.g.
-  Pneumomediastinum→Enlarged Cardiomediastinum is ~1.0 but the reverse is faint). A
-  symmetric correlation/co-occurrence adjacency literally cannot represent this; a
-  **directed** graph can. This is the modeling reason v7 isn't redundant with a plain head.
+The motivation and the risks are in
+[`docs/learned_query_image_pooling.md`](../../docs/learned_query_image_pooling.md).
+The v5/v6 line overfit; the v6 response was a geometry-level capacity cut
+(native-640 bus, no image channel projection, FFN 1024 instead of 2048, max-pool
+instead of strided conv). v7 is the *next* geometry move: the 16×16 backbone
+grid has 256 spatial tokens/view, but v6 collapses them to 64 with a 2×2 max
+before they reach the fusion cross-attention. A learned-query pooler with K=64
+latents can carry strictly more signal at the same count, because each query
+learns where to attend.
 
 Two honest caveats this proposal has to respect:
 
-1. **Base-rate edges.** Much of the warm left block in the `P(j|i)` heatmap (Support
-   Devices, Lung Opacity, …) is just "these classes are common," not real association.
-   The graph must be built on **lift `P(j|i)/P(j)`**, not raw `P(j|i)`, or it learns
-   nothing but prevalence. (See the lift cell in §8b.)
-2. **Ontology-artifact edges.** `P(Enlarged Cardiomediastinum | Pneumomediastinum) ≈ 1.0`
-   is suspiciously deterministic — likely a labeling-hierarchy overlap (both mediastinal
-   terms) rather than independent clinical co-occurrence. Such edges inflate apparent graph
-   value without teaching the model anything new. Flag and optionally prune them.
+1. **Fights the small-finding thesis** if queries collapse. The v-series exists
+   to catch focal lesions, and the current image's spatial detail was
+   protected precisely for that reason. The pooler replaces fixed windows
+   with learned selection; if it doesn't learn to focus, focal evidence is
+   lost. The primary readout is the small-finding-subset mAP, not overall
+   mAP.
+2. **Loses clean spatial grounding for Grad-CAM** unless we attribute through
+   the pooler's cross-attention weights. The pre-pool `cur_block` is still
+   available, but the dominant current signal in fusion is now the latents.
+   Grad-CAM support is a follow-up; this commit makes the model trainable
+   first.
 
 ## What changes vs v6 (and what does not)
 
@@ -64,112 +56,98 @@ Two honest caveats this proposal has to respect:
 |---|---|---|
 | image / text / prior encoders | — | **unchanged** |
 | asymmetric cross-attention fusion (current=tgt, prior=memory) | — | **unchanged** |
-| prior latents, high-res skip, context bottleneck, per-modality LayerNorms, sentinel | — | **unchanged** |
-| classifier head | `MLDecoder`, 26 **frozen-random** query vectors | `MLDecoder`, 26 query vectors **produced by a label-graph module** |
-| `prior_label_proj` (`Linear(n_classes→d_model)`) | bare independent-class projection | optional: `prior_label_vec @ Z` (graph-aware prior-label embedding) |
+| `context_bottleneck_dim`, `n_text_tokens`, `fusion_ffn_dim`, `drop_path_rate` | — | **unchanged** |
+| current image: 16×16→8×8 max-pool | `image_pool_stride=2` (`max`) | **removed** (`image_pool_stride=1`) |
+| current image: per-view Perceiver pooler | — | **added** — K=64/view (4×64=256 latents) |
+| prior image: per-view Perceiver pooler | — (8×8 max-pool → 4×64=256 tokens) | **added** — K=32/view (4×32=128 latents) |
+| prior memory Perceiver pooler | K=16 latents | **K=32 latents** (same primitive) |
+| `highres_skip` (max-pool un-fused current) | ON by default | **OFF by default** (pooler supersedes) |
+| `n_cur_image_latents`, `cur_pooler_*`, `n_prior_image_latents`, `prv_pooler_*` | n/a | **new** |
 
-Everything that made v6 the regularized, lower-capacity geometry stays. v7 is strictly
-additive at the head.
+Per-token layout (defaults: d_model=640, n_cur_image_latents=64, n_prior_image_latents=32, 4 views, n_text_tokens=2):
 
-## The label graph
+```
+current (tgt):   256 image (4*64) + 2 clinical + 1 vitals            = 259
+prior  (memory): 1 sentinel + 128 image (4*32) + 2 clin + 2 report + 1 vitals + 1 label = 135
+prior latents:   K=32 (was 16) after selective pooling of the full prior memory
+```
 
-**Construction (offline, train split only — leakage-safe):**
+Both image branches keep `image_pool_stride=1` (v6's fixed 8×8 max-pool is off);
+the learned per-view poolers do the reduction instead. The prior gets a smaller
+per-view budget (K=32 vs the current's K=64) because the prior image is context,
+not the prediction target — and a 1024-token un-pooled prior is the expensive case
+this avoids.
 
-1. From `prior_aware_train.parquet`, compute `N(i)`, `N(i,j)`, and `P(j|i)=N(i,j)/N(i)`
-   (the §8b matrix). Dev/test never enter the graph.
-2. Convert to **lift** `L(i,j)=P(j|i)/P(j)` and binarize at a lift threshold (not a raw-prob
-   threshold) so base-rate-only edges are dropped. Keep the edge *direction*.
-3. **ML-GCN re-weighting** to fight over-smoothing: each node keeps mass `1−p` on itself and
-   spreads `p` over its neighbours (`p≈0.25`, per the paper). Yields the directed adjacency
-   `A ∈ R^{26×26}` the graph module consumes.
-4. (optional) **clinical-hierarchy edges**: add hand-curated parent/child edges for the
-   ontology pairs (e.g. Enlarged Cardiomediastinum ⊃ Cardiomegaly) instead of letting the
-   ≈1.0 co-occurrence stand as a learned edge.
-5. Persist `A` and the node features as a `.pt` artifact built by a small prepare script,
-   so training is deterministic and the graph is inspectable.
+## The per-view Perceiver pooler
 
-**Node features:** the 26 class *names* encoded once by the frozen CXR-BERT
-(`microsoft/BiomedVLP-CXR-BERT-specialized`) → `Z0 ∈ R^{26×768}`. 768 matches MLDecoder's
-`decoder_embedding`, so the graph output drops straight into the query slot with no
-projection. (ML-GCN uses GloVe; CXR-BERT class-name embeddings are the domain-matched
-upgrade and we already have the encoder loaded.)
-
-**Graph module:** 2 layers. Because the structure is directed, use a **directed GCN** (apply
-`A` as-is, not symmetrized) or a lightweight **GAT** (Duy Anh's angle — attention over
-neighbours, no fixed edge weights). Output `Z ∈ R^{26×768}`, one vector per class.
-
-## Injection points
-
-- **Primary — MLDecoder query embeddings.** Today `query_embed` is `nn.Embedding(26, 768)`
-  with `requires_grad_(False)` — 26 *frozen random* per-class queries. v7 replaces these with
-  the graph output `Z`. This is the exact ML-GCN injection slot, dimension-matched.
-- **Secondary (bonus) — prior-label projection.** Replace the bare `prior_label_proj` with
-  `prior_label_vec @ Z`, so the prior study's labels enter fusion through graph-aware
-  embeddings too. Cheap, and it composes the graph with the existing prior path.
-
-## Two training modes (config switch)
-
-| mode | how | provenance |
-|---|---|---|
-| `joint` (recommended) | graph module trained end-to-end with the rest; `Z` recomputed each forward from fixed `Z0` + fixed `A` + learned GCN/GAT weights | ML-GCN / CheXGCN |
-| `pretrain_freeze` | pretrain `Z` with a **margin-ranking** objective on the graph (pull connected classes together, push unconnected apart), then freeze `Z` as the query init | Duy Anh's GAT-margin-ranking |
-
-Start with `joint` — it's the standard ML-GCN setup and lets the head adapt the graph output
-to the fusion features. `pretrain_freeze` is the cleaner ablation for "did the graph
-*structure* help, independent of extra trainable capacity."
+- **K=64** learned query tokens per view, total **4×64=256** current image
+  latents (same count as v6's max-pooled 256).
+- One `TransformerDecoder` block, `d_model=640`, 8 heads, FFN 1024, GELU,
+  pre-LN, dropout 0.1 — same recipe v6's prior Perceiver uses.
+- Runs **per view** (independent Perceiver on each view's 16×16=256 spatial
+  tokens) rather than over the concatenated 4×16×16=1024 grid, to preserve
+  view identity and keep the query budget explicitly per view. Symmetric with
+  v6's per-view 8×8 max-pool.
+- The pooler consumes the **un-fused 16×16 grid** (post-pos-encoding). The
+  v6 8×8 max-pool is replaced by `image_pool_stride=1` (an identity), so the
+  pooler sees the full spatial tokens the backbone produced.
 
 ## What it should help (and what it won't)
 
-- **Should help:** the long tail and the directed clusters — Pneumomediastinum,
-  Pneumoperitoneum, Subcutaneous Emphysema, Pleural Other, Nodule, Fibrosis, Tortuous Aorta.
-  These have neighbours to borrow from.
-- **Won't move much:** isolated classes (whatever the §8b isolated-classes line reports at
-  the chosen threshold) and the already-easy common classes.
-- **Not addressed by v7 at all:** image-over-text modality dominance, and multi-prior /
-  recency-decay. Those are v8. Saying so up front keeps the thesis claims honest.
+- **Should help (small findings):** nodule, mass, pneumothorax, focal
+  classes. The pooler is asked to learn where to look; if it succeeds, focal
+  evidence is preserved *and* the lesion-vs-background discrimination is
+  better than a fixed max-pool window.
+- **Shouldn't hurt much (common classes):** Support Devices, Lung Opacity,
+  Cardiomegaly — large diffuse findings that a 2×2 max already captures.
+- **Won't move much (already-pooled text):** clinical and report text are
+  unchanged; the pooler doesn't touch them.
+- **Not addressed by v7 at all:** label-graph head, multi-prior / temporal-
+  decay. Those are v8/v9. Saying so up front keeps the thesis claims honest.
 
-## Risks
+## Risks (with mitigations)
 
 | risk | mitigation |
 |---|---|
-| over-smoothing (all classes collapse to one vector) | 2 layers max; ML-GCN re-weight with self-mass `1−p`; residual `Z = Z0 + GCN(Z0)` |
-| base-rate edges teach nothing | build on **lift**, not raw `P(j|i)` |
-| ontology-artifact edges (≈1.0 deterministic) | flag, prune, or replace with curated hierarchy edges |
-| leakage (graph sees labels) | graph built **train-split only**, frozen before training; report it explicitly |
-| modest / tail-concentrated gains | pre-register tail-mAP and small-finding-subset mAP as the primary readouts, not overall mAP |
+| Queries collapse / pooler loses focal detail | primary readout is small-finding-subset mAP, not overall mAP |
+| Higher resolution needed to win (v6 already overfits at 512) | track 512 vs 768 (requires memory headroom) |
+| Grad-CAM loses spatial-token → pixel mapping | attribute through pooler cross-attention weights (follow-up) |
+| Background-attention penalty breaks on permutation-free latents | penalty consumes the un-fused `cur_block`, which v7 keeps available |
+| Doubled prior K adds parameters | K=32 prior latents is ~3.4M extra params (negligible vs ~50M backbone) |
+| Loses checkpoint compatibility with v6 | train fresh; warm-start only the shared backbone / text encoder by name |
 
 ## Ablation grid (config-only where possible)
 
 | variant | isolates |
 |---|---|
-| `head: independent` (v6 frozen-random queries) | the whole graph contribution (baseline) |
-| `graph_source: correlation` vs `lift` | whether base-rate correction matters |
-| `graph_dir: directed` vs `symmetrized` | whether edge direction carries signal |
-| `gnn: gcn` vs `gat` | fixed vs learned edge weights (Duy Anh's GAT angle) |
-| `mode: joint` vs `pretrain_freeze` | structure vs extra trainable capacity |
-| `+ prior_label_proj graph` on/off | the secondary injection point |
-| `+ hierarchy_edges` on/off | curated ontology edges vs pure co-occurrence |
+| `n_cur_image_latents: 16 / 32 / 96` | how much latent budget the current image needs |
+| `n_prior_latents: 16` (match v6) | whether the doubled prior budget helps |
+| `highres_skip: true` (re-enable v6's path) | whether the per-view pooler alone is enough |
+| `image_pool_stride: 2` (re-enable v6's max-pool) | pooler *on top of* max-pool (sanity) |
+| `cur_pooler_ffn_dim: 2048` (match v6) | whether the pooler FFN shrink hurts |
 
-As with v5/v6, **track tail-mAP and a small-finding-subset mAP separately** — that's where
-this lives or dies.
+The headline comparison for the thesis is **`v6` (max-pool, K_prior=16) vs
+`v7` (per-view pooler K=64, K_prior=32)** on the small-finding-subset mAP.
+If v7 doesn't move the small-finding needle, the per-view pooler isn't
+learning to look — fall back to a smaller K or pair with a resolution bump.
 
-## Files to add / edit (when we build it)
+## Files added / edited
 
-- `src/model/PriorAwareV7NanoModel.py` — subclass/fork of v6; adds the graph module and the
-  two injection points; keeps `delta_embedding`, encoder, and fusion names intact so
-  Grad-CAM hooks survive.
-- `src/prepare/05_build_label_graph.py` — offline graph builder (train-split `P(j|i)`→lift→
-  re-weight→`A`; CXR-BERT class-name node features; saves a `.pt` artifact).
+- `src/model/PriorAwareV7NanoModel.py` — fork of v6; adds `cur_image_pooler`
+  (per-view Perceiver, K=64) and overrides `forward` to use it. Background
+  penalty and `highres_skip` paths preserved.
 - `training/prior_aware_v7nano/{config.yaml, prior_aware_train.py, prior_aware_eval.py, README.md}`
-  — mirror the v6 dir; new knobs: `graph_path`, `gnn` (gcn|gat), `graph_layers`,
-  `graph_mode` (joint|pretrain_freeze), `lift_threshold`, `reweight_p`, `use_hierarchy_edges`,
-  `graph_prior_label` (bool).
-- `src/interpret/run_prior_gradcam.py` — register `prior_aware_v7nano` in `_MODEL_CLASSES`.
+  — mirror of v6; new knobs above.
+- `test/benchmark_pipeline.py` — `prior_aware_v7nano` registered in
+  `_build_prior_aware_model` and `resolve_pipeline`.
+- `src/interpret/run_prior_gradcam.py` — `prior_aware_v7nano` registered in
+  `_MODEL_CLASSES` and `_DEFAULT_TEXT_MODEL`.
 
-## Open question to settle before coding
+## Open question to settle before training
 
-Confirm `lift_threshold` and `reweight_p` from the §8b output: read the **tail-class lift
-table** and the **isolated-classes line**. If too many tail classes go isolated at the
-chosen threshold, lower it (more edges) or switch to a top-k-neighbours-per-node graph
-instead of a global threshold. That single decision sets how much of the tail the graph can
-actually reach.
+The K=64 default is a hypothesis (matches v6's max-pooled count of 256 across
+4 views, so fusion cost is unchanged). The first experiment should be a **K
+sweep at 512px** (16 / 32 / 64 / 96) on the small-finding-subset mAP to
+confirm the default. If K=32 is best, the v7 model is *cheaper* than v6 in
+fusion cost; if K=96 is best, the extra fusion cost needs to be justified
+by the small-finding gain.

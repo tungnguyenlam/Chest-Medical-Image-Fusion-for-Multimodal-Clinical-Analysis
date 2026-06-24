@@ -1,0 +1,157 @@
+model:
+  arch: prior_aware_v7nano
+  lr: 3.0e-5
+  classes: &classes
+    - Atelectasis
+    - Calcification of the Aorta
+    - Cardiomegaly
+    - Consolidation
+    - Edema
+    - Emphysema
+    - Enlarged Cardiomediastinum
+    - Fibrosis
+    - Fracture
+    - Hernia
+    - Infiltration
+    - Lung Lesion
+    - Lung Opacity
+    - Mass
+    - No Finding
+    - Nodule
+    - Pleural Effusion
+    - Pleural Other
+    - Pleural Thickening
+    - Pneumomediastinum
+    - Pneumonia
+    - Pneumoperitoneum
+    - Pneumothorax
+    - Subcutaneous Emphysema
+    - Support Devices
+    - Tortuous Aorta
+  loss_init_args:
+    class_instance_nums:
+      - 67597
+      - 4361
+      - 76900
+      - 16038
+      - 38574
+      - 4255
+      - 30119
+      - 1158
+      - 11883
+      - 4049
+      - 10218
+      - 2533
+      - 79931
+      - 5529
+      - 41869
+      - 7663
+      - 69240
+      - 675
+      - 3369
+      - 788
+      - 48093
+      - 543
+      - 14983
+      - 2453
+      - 89140
+      - 3499
+    total_instance_num: 264849
+  text_model: microsoft/BiomedVLP-CXR-BERT-specialized
+  timm_init_args:
+    num_classes: 26
+    model_name: convnextv2_nano.fcmae_ft_in22k_in1k_384
+    pretrained: true
+    # Stochastic depth on the shared backbone. v6 set this to 0.15; v7 keeps it
+    # and adds the per-view image pooler as the second regularizer.
+    drop_path_rate: 0.15
+  model_init_args:
+    # ---- v6 baseline geometry (unchanged) ----
+    d_model: 640
+    transformer_layers: 2
+    nhead: 8
+    dropout: 0.1
+    freeze_text_encoder: false
+    use_precomputed_text_embeddings: false
+    vital_dropout_p: 0.1
+    vitals_dropout: 0.1
+    vitals_hidden_dim: 256
+    # ---- v6 knobs (carried over) ----
+    pooler_nhead: 8
+    prior_latent_dropout: 0.1
+    context_bottleneck_dim: 64
+    text_embed_dim: 768
+    n_text_tokens: 2
+    fusion_ffn_dim: 1024
+    # ---- v7 changes vs v6 ----
+    # n_prior_latents: bumped 16 -> 32. The prior Perceiver is the same primitive
+    #   v6 already uses; doubled budget for the same primitive.
+    n_prior_latents: 32
+    # image_pool_stride: 1 keeps the un-fused 16x16 grid (the per-view pooler
+    #   consumes it; v6 used stride=2 to max-pool to 8x8 first).
+    image_pool_type: max
+    image_pool_stride: 1
+    # highres_skip: OFF by default in v7. The per-view pooler replaces it; re-enable
+    #   via config to recreate v6's "max-pool the un-fused 16x16 grid" skip path.
+    highres_skip: false
+    # n_cur_image_latents: K per view for the current-image per-view Perceiver pooler.
+    #   K=64 gives 4*64=256 current image latents (same total count as v6's max-pooled
+    #   256, but learned and content-adaptive).
+    n_cur_image_latents: 64
+    cur_pooler_nhead: 8
+    cur_pooler_dropout: 0.1
+    cur_pooler_ffn_dim: 1024
+    # n_prior_image_latents: K per view for the PRIOR-image per-view Perceiver pooler.
+    #   image_pool_stride=1 disabled v6's 8x8 max-pool for both branches, so without
+    #   this the prior image would arrive as 4*16*16=1024 raw tokens. K=32 gives
+    #   4*32=128 prior image latents (cheaper than current; the prior is context).
+    n_prior_image_latents: 32
+    prv_pooler_nhead: 8
+    prv_pooler_dropout: 0.1
+    prv_pooler_ffn_dim: 1024
+  optimizer_init_args:
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler_init_args:
+    schedule: single_cosine
+    warmup_ratio: 0.05
+    warmup_start_factor: 1.0e-3
+    eta_min_factor: 0.1
+data:
+  dataloader_init_args:
+    batch_size: 4
+    num_workers: 0
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  datamodule_cfg:
+    tokenizer: microsoft/BiomedVLP-CXR-BERT-specialized
+    train_df_path: data/data-camchex/prior_aware_train.parquet
+    devel_df_path: data/data-camchex/prior_aware_development.parquet
+    pred_df_path: data/data-camchex/prior_aware_test.parquet
+    use_text_embedding_cache: false
+    text_embedding_streams: [clin_text, prior_clin_text, prior_report_text]
+    text_embedding_cache_dir: ../cache/text_embeddings
+    text_embedding_batch_size: 32
+    text_embedding_device: auto
+    image_channel_cache_dir: ../cache/channels
+    channel_mode: raw_clahe_histeq
+    size: 512
+    classes: *classes
+    label_dropout_p: 0.3
+trainer:
+  max_epochs: 30
+  accumulate_grad_batches: 2
+  grad_clip: 1.0
+  precision: 16-mixed
+  compile_model: false
+  log_every_n_steps: 1
+  val_check_interval: null
+  quick_val_every_steps: null
+  full_val_fracs: []
+  quick_val_fracs: [0.33, 0.66]
+  quick_val_frac: 0.1
+  val_num_workers: 0
+  seed: null
+  accelerator: null

@@ -1,9 +1,9 @@
-# v7 — Noise-aware label-correlation graph head
+# v8 — Noise-aware label-correlation graph head
 
-This note refines the [v7 proposal](../training/prior_aware_v7nano/PROPOSAL.md) for the
+This note refines the [v8 proposal](../training/prior_aware_v8nano/PROPOSAL.md) for the
 single fact that reshapes the whole design: **the CXR-LT labels are noisy.** It explains
 where the noise comes from, how it touches every part of a label-graph head, and how to
-build v7 so the graph *survives* the noise instead of amplifying it. The shorter PROPOSAL.md
+build v8 so the graph *survives* the noise instead of amplifying it. The shorter PROPOSAL.md
 is the elevator pitch; this is the design rationale and the thesis-chapter source.
 
 ---
@@ -17,7 +17,7 @@ is the elevator pitch; this is the design rationale and the thesis-chapter sourc
 > explicitly: confidence-weighted edges, shrinkage for rare classes, and a hard separation
 > between *clinical* co-occurrence and *labeler* co-occurrence.
 
-This makes v7 a **noise-robustness contribution**, not just a long-tail trick. That is a
+This makes v8 a **noise-robustness contribution**, not just a long-tail trick. That is a
 stronger and more defensible thesis claim.
 
 ---
@@ -63,7 +63,7 @@ The takeaways that drive the design:
 
 ## 2. How noise hits a label-graph head, part by part
 
-| stage | what noise does | why it matters for v7 |
+| stage | what noise does | why it matters for v8 |
 |---|---|---|
 | **graph construction** | `P(j|i)` is a noisy estimate; for rare `i` (small `N(i)`) it is *high-variance*; co-mention artifacts inflate specific edges | the graph can encode labeler behavior instead of disease structure |
 | **graph propagation** | a GCN/GAT spreads a class's signal to neighbours; if the source label is wrong, the error propagates to correlated classes | noise can be *amplified*, not averaged out, if edges are over-trusted |
@@ -79,7 +79,7 @@ staying on the right side of that line.
 
 ## 3. Noise-aware graph construction
 
-The §8b pipeline (train-split-only `P(j|i)` → lift → ML-GCN reweight) is the skeleton. v7
+The §8b pipeline (train-split-only `P(j|i)` → lift → ML-GCN reweight) is the skeleton. v8
 adds three noise defenses **before** the adjacency is frozen.
 
 ### 3.1 Shrink rare-class estimates toward base rate
@@ -134,7 +134,7 @@ so even a confident neighbourhood can't wash out a node's own identity.
 
 Three composable mechanisms, in increasing ambition. Start with (A); (B)/(C) are ablations.
 
-**(A) Structural prior on the head (baseline v7).** Replace MLDecoder's 26 frozen-random
+**(A) Structural prior on the head (baseline v8).** Replace MLDecoder's 26 frozen-random
 `query_embed` vectors with graph-produced per-class vectors `Z ∈ R^{26×768}` (CXR-BERT
 class-name node features `Z0`, 2-layer directed GCN/GAT, residual `Z = Z0 + GNN(Z0)`). The
 head can no longer treat classes as independent; correlated classes share representation, so
@@ -214,12 +214,12 @@ noise-aware > both, that's the contribution.
 
 ---
 
-## 8. What v7 is *not*
+## 8. What v8 is *not*
 
-v7 is a head-only, noise-aware label-graph contribution. It does **not** address
+v8 is a head-only, noise-aware label-graph contribution. It does **not** address
 image-over-text modality dominance, and it does **not** add multi-prior / temporal-decay
-modeling. Those are the **v8** line, kept separate so the two thesis contributions get clean
-attribution. The graph composes with v8 later via `prior_label_proj` (graph-aware
+modeling. Those are the **v9** line, kept separate so the two thesis contributions get clean
+attribution. The graph composes with v9 later via `prior_label_proj` (graph-aware
 prior-label embedding).
 
 ---
@@ -233,9 +233,9 @@ prior-label embedding).
    we can eyeball how many edges (and which tail classes) survive the noise defenses.
 3. `src/model/PriorAwareV7NanoModel.py` — fork v6; add GNN module + the two injection points;
    preserve encoder/fusion/`delta_embedding` names so Grad-CAM hooks survive.
-4. `training/prior_aware_v7nano/{config.yaml, prior_aware_train.py, prior_aware_eval.py,
+4. `training/prior_aware_v8nano/{config.yaml, prior_aware_train.py, prior_aware_eval.py,
    README.md}` — mirror v6; new knobs per §7.
-5. Register `prior_aware_v7nano` in `src/interpret/run_prior_gradcam.py`.
+5. Register `prior_aware_v8nano` in `src/interpret/run_prior_gradcam.py`.
 
 **Decision gate before step 3:** read the surviving-edge count and the isolated-tail-class
 list from step 2. That sets `α`, the significance threshold, and whether to use a global

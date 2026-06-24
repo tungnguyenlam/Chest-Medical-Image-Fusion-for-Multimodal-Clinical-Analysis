@@ -1,7 +1,7 @@
 \section{Related Work}
 \label{sec:related_work}
 
-This section reviews research areas that are directly relevant to this thesis. First, it discusses single-modal chest X-ray classification, which forms the foundation for automated radiographic interpretation. Second, it reviews multimodal clinical fusion, especially methods that combine radiographs with clinical text or structured patient information. Third, it discusses temporal and prior-aware modelling, which is important because radiologists often compare current studies with previous examinations. Finally, it reviews methods for mitigating class imbalance in long-tailed multi-label medical datasets.
+This section reviews research areas that are directly relevant to this thesis. First, it discusses single-modal chest X-ray classification, which forms the foundation for automated radiographic interpretation. Second, it reviews multimodal clinical fusion, especially methods that combine radiographs with clinical text or structured patient information. Third, it discusses temporal and prior-aware modelling, which is important because radiologists often compare current studies with previous examinations. Finally, it reviews methods for mitigating class imbalance in long-tailed multi-label medical datasets and summarizes representative CXR-LT 2023 challenge solutions.
 
 \subsection{Single-Modal Chest X-Ray Classification}
 \label{subsec:related_single_modal}
@@ -47,5 +47,87 @@ Focal Loss addresses class imbalance by reducing the contribution of easy exampl
 
 Asymmetric Loss (ASL) was proposed specifically for multi-label classification and is therefore highly relevant to this thesis \cite{ridnik2021asymmetric}. ASL applies different focusing behaviour to positive and negative samples, allowing easy negatives to be down-weighted more aggressively while preserving learning from positive labels. This makes it suitable for long-tailed multi-label chest X-ray classification, where the model must learn from rare positive cases without being overwhelmed by the large number of negative labels.
 
-Overall, the related work suggests that strong chest X-ray classification requires more than an image-only model. Large-scale datasets and modern visual backbones provide the foundation for radiographic feature learning, while multimodal fusion allows the model to incorporate clinical context. Prior-aware modelling reflects the temporal comparison used in clinical radiology, and imbalance-aware loss functions are necessary for long-tailed multi-label prediction. This thesis combines these directions in a practical CaMCheX-inspired framework designed for resource-constrained experimentation.
+\subsection{CXR-LT 2023 Challenge Solutions}
+\label{subsec:related_cxrlt_solutions}
 
+Because this thesis focuses on long-tailed, multi-label chest X-ray classification, reviewing the top methods from the CXR-LT 2023 challenge establishes baseline performance and design choices \cite{holste2024cxrlt}. Built on the MIMIC-CXR database, the challenge evaluated models on 26 findings—including 12 rare classes extracted from clinical reports—using patient-level splits to avoid leakage, with macro mean Average Precision (mAP) as the primary metric \cite{holste2024cxrlt,holste2023cxrlt_physionet}. This section highlights four representative submissions: the top-performing CheXFusion model \cite{kim2023chexfusion}, the second-ranked ensemble system \cite{nguyenmau2023advanced}, the robust asymmetric loss approach by Park et al. \cite{park2023robust}, and the text-aligned bag-of-tricks framework by Hong et al. \cite{hong2023bagoftricks}.
+
+Table~\ref{tab:cxrlt2023_results} summarizes the official test-phase performance of these representative CXR-LT 2023 solutions.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Representative CXR-LT 2023 challenge solutions. Official rankings and aggregate results are summarized from the challenge overview \cite{holste2024cxrlt}; individual method descriptions are cited in each row.}
+    \label{tab:cxrlt2023_results}
+    \begin{adjustbox}{width=\textwidth}
+    \begin{tabular}{clcc}
+        \hline
+        Rank & Team / Strategy & mAP & mAUROC \\
+        \hline
+        1 & CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer, ML-Decoder, weighted ASL) & 0.372 & 0.850 \\
+        2 & Advanced augmentation and ensemble \cite{nguyenmau2023advanced} (EfficientNetV2/ConvNeXt, TTA) & 0.354 & 0.836 \\
+        4 & Robust Asymmetric Loss \cite{park2023robust} (ConvNeXt-B, Robust Asymmetric Loss) & 0.351 & 0.838 \\
+        5 & Bag of Tricks \cite{hong2023bagoftricks} (ResNet50, text encoder, external data, TTA/ensemble) & 0.349 & 0.836 \\
+        \hline
+    \end{tabular}
+    \end{adjustbox}
+\end{table}
+
+The challenge results also showed a clear gap between common and rare findings. Table~\ref{tab:cxrlt2023_longtail} reports mAP grouped by label frequency for the representative teams. The top-performing model achieved 0.499 mAP on head classes but only 0.242 mAP on tail classes. This large performance gap across all methods confirms that rare-label recognition remains extremely challenging even for the strongest systems.
+
+\begin{table}[htbp]
+    \centering
+    \caption{CXR-LT 2023 performance by label-frequency group for representative teams. Head classes have prevalence above 10\%, medium classes have prevalence between 1\% and 10\%, and tail classes have prevalence below 1\% \cite{holste2024cxrlt}.}
+    \label{tab:cxrlt2023_longtail}
+    \begin{tabular}{lcccc}
+        \hline
+        Team & Overall mAP & Head mAP & Medium mAP & Tail mAP \\
+        \hline
+        CheXFusion \cite{kim2023chexfusion} (Rank 1) & 0.372 & 0.499 & 0.246 & 0.242 \\
+        Nguyen-Mau et al. \cite{nguyenmau2023advanced} (Rank 2) & 0.354 & 0.482 & 0.226 & 0.227 \\
+        Park et al. \cite{park2023robust} (Rank 4) & 0.351 & 0.480 & 0.221 & 0.220 \\
+        Hong et al. \cite{hong2023bagoftricks} (Rank 5) & 0.349 & 0.474 & 0.218 & 0.243 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+Several lessons can be drawn from these challenge systems. Most top-performing models utilized ConvNeXt or CNN-family backbones, and their performance was heavily boosted by high image resolutions, test-time augmentations, and model ensembling \cite{holste2024cxrlt}. However, even the highest-ranked models showed weak performance on rare classes, confirming that tail-class classification remains an unresolved challenge. Rather than relying on leaderboard-style ensembling or high-resolution images, this thesis instead studies a resource-constrained multimodal approach, investigating if clinical indications, vital signs, and prior-study context can improve prediction accuracy.
+
+\subsection{CaMCheX Results and Relevance to This Thesis}
+\label{subsec:related_camchex_results}
+
+CaMCheX serves as the primary reference for this thesis as it combines multi-view chest radiographs with clinical indications and vital signs \cite{sloan2025camchex}. As summarized in Table~\ref{tab:camchex_reference_results}, CaMCheX reported 0.576 mAP on CXR-LT 2023 and 0.725 mAP on CXR-LT 2024, demonstrating that multimodal context can substantially improve classification accuracy. These benchmark results are included as reference context, but they are not directly comparable to the experiments in this thesis due to differences in dataset scale and training resources.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Reference results reported by CaMCheX on chest X-ray classification benchmarks. These numbers are included as prior-work context and are not directly comparable to the resource-constrained experiments in this thesis.}
+    \label{tab:camchex_reference_results}
+    \begin{tabular}{lccc}
+        \hline
+        Benchmark & Model & mAP & AUROC \\
+        \hline
+        CXR-LT 2023 & CheXFusion & 0.372 & 0.850 \\
+        CXR-LT 2023 & CaMCheX & 0.576 & 0.916 \\
+        CXR-LT 2024 Task 2 & Best CXR-LT 2024 competitor & 0.526 & 0.833 \\
+        CXR-LT 2024 Task 2 & CaMCheX & 0.725 & 0.904 \\
+        MIMIC-CXR labels & CaMCheX & 0.669 & 0.934 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+As shown in Table~\ref{tab:camchex_longtail_results}, the performance of CaMCheX varies across frequency groups, achieving high mAP on head classes but lower mAP on body and tail classes. This pattern confirms that long-tailed classification remains difficult even for strong multimodal models.
+
+\begin{table}[htbp]
+    \centering
+    \caption{CXR-LT 2023 frequency-group mAP reported by CaMCheX.}
+    \label{tab:camchex_longtail_results}
+    \begin{tabular}{lcccc}
+        \hline
+        Model & Overall mAP & Head mAP & Body mAP & Tail mAP \\
+        \hline
+        CheXFusion & 0.372 & 0.499 & 0.246 & 0.242 \\
+        CaMCheX & 0.576 & 0.786 & 0.550 & 0.408 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+While these results motivate the design choices adopted in this thesis---including multi-view encoders, transformer-based fusion, and asymmetric loss---this work does not attempt an exact reproduction. The original CaMCheX framework relies on large-scale training with high-resolution inputs and external pretraining. This thesis instead implements and evaluates a resource-constrained adaptation, extending the architecture with prior-study temporal context.
