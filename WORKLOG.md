@@ -2376,3 +2376,213 @@ config `size: 512`/`channel_mode: raw_clahe_histeq` are the parity contract).
 precompute and is intentionally out of scope; could add a `--with-text-embeddings`
 hook later. Not run end-to-end on full MIMIC here (no data on this machine);
 validated imports, CLI, and the in-process stage-04 load.
+
+## 2026-06-24 - Remove paragraph indentation from LaTeX report
+
+**Goal.** Remove paragraph indentation from the report's compiled document.
+
+**Changes.**
+- `report/main.tex:16-17` - Commented out the `indentfirst` package and added the `parskip` package.
+
+**Reasoning.** Setting paragraph indentation to zero using `parskip` is the standard way in LaTeX to disable paragraph indents while cleanly inserting appropriate spacing between paragraphs.
+
+**Gotchas.** If you want to customize the spacing between paragraphs, you can configure options of the `parskip` package or adjust `\parskip` length.
+
+## 2026-06-24 - Explicitly disable indentation in CJK environment
+
+**Goal.** Ensure paragraph indentation is fully disabled inside the `CJK*` environment in the LaTeX report.
+
+**Changes.**
+- `report/main.tex:55-56` - Added `\setlength{\parindent}{0pt}` and `\setlength{\parskip}{6pt plus 2pt minus 1pt}` inside the `CJK*` environment.
+
+**Reasoning.** The `CJK` package environment can sometimes override or reset paragraph dimension settings defined in the preamble. Setting them immediately after starting the CJK environment forces them to take effect.
+
+## 2026-06-24 - Fix Makefile bibtex compilation check
+
+**Goal.** Fix citation rendering and compile bibtex bibliography properly in report.
+
+**Changes.**
+- `report/Makefile:27` - Changed `grep -q "\\citation" main.aux` to `grep -q "citation" main.aux`.
+
+**Reasoning.** The double backslash escape in the Make rule was preventing grep from finding the citation markers in `main.aux`, meaning `bibtex` was never triggered and citation lists/references were omitted. Changing to a direct string match on `"citation"` resolves this and properly triggers `bibtex`.
+
+## 2026-06-24 - Auto-save figures and tables from EDA notebooks
+
+**Goal.** Edit all EDA notebooks under `data/00-examine-data` to automatically output generated figures and text/dataframe outputs to `./output/eda/<notebook_name>/`.
+
+**Changes.**
+- [data/00-examine-data/utils.py](file:///home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/00-examine-data/utils.py#L898-L1032) - Added a `setup_auto_save()` function at the bottom. This registers callbacks and monkeypatches to auto-save matplotlib figures, redirected stdout text, and IPython DataFrame/Series displays.
+- [data/00-examine-data/*.ipynb](file:///home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/00-examine-data/) - Patched the first code cell of all 9 notebooks in the folder to set the `CURRENT_NOTEBOOK_NAME` environment variable.
+
+**Reasoning.** Rather than manually editing every single cell in all 9 notebooks to add `plt.savefig()` and `.to_csv()`, we injected a monkeypatching/callback system into the shared [utils.py](file:///home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/00-examine-data/utils.py). This is less intrusive, preserves the original notebook flow, and guarantees consistent naming conventions based on the figure titles/dataframe variables.
+
+**Assumptions.** Assumed the notebooks will be run in an environment with IPython and standard libraries installed (such as Jupyter or VS Code Jupyter extension).
+
+## 2026-06-24 - Fix "File name too long" in auto-saved plots
+
+**Goal.** Resolve `OSError: [Errno 36] File name too long` during notebook execution due to long concatenated subplot titles.
+
+**Changes.**
+- [data/00-examine-data/utils.py](file:///home/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/data/00-examine-data/utils.py#L967-L970) - Truncated `clean_title` to a maximum of 100 characters in `setup_auto_save()`.
+
+**Reasoning.** Subplots with many axes had their titles joined, exceeding the filesystem path limit (255 chars). Truncating the clean filename component to 100 characters keeps names descriptive while strictly respecting operating system limits.
+
+## 2026-06-24 - quick_val_fracs default: 0.25/0.5/0.75 -> 0.33/0.66
+
+**Goal.** Make every entry point that derives a default `quick_val_fracs` schedule
+produce [0.33, 0.66] (two mid-epoch points) instead of [0.25, 0.5, 0.75] (three).
+
+**Changes.**
+- `training/common.py:177` - CLI default for `--quick-val-fracs` in
+  `_config_default_by_dest` switched to `[0.33, 0.66]`.
+- `training/common.py:447` - help text for `--quick-val-fracs` updated to
+  "Default 0.33 0.66" so `--help` matches the new default.
+- `training/utils/train.py:502` - runtime fallback
+  `resolve_trainer_arg(args, cfg, "quick_val_fracs", ...)` switched to
+  `[0.33, 0.66]`.
+
+**Reasoning.** Only the three code defaults (CLI argparse default, runtime
+fallback, and the help string that documents them) were edited. The 33
+per-experiment YAMLs under `training/<model>/config.yaml` *explicitly* set
+`quick_val_fracs: [0.25, 0.5, 0.75]`. The user asked for the change to apply
+"across all models and pipeline" but approved the safer "defaults + help text
+only" scope, which leaves past experiment configs reproducible (a checkpoint
+that was selected using the old three-point schedule still has that schedule
+in its YAML, so resume + selection stay consistent). New runs that *omit* the
+field, or future models that don't pin it, will pick up the new two-point
+schedule.
+
+**Assumptions.**
+- The per-experiment YAML override is authoritative when present. Verified by
+  reading `resolve_trainer_arg` (and the precedence chain in
+  `_config_default_by_dest` -> CLI argparse default -> config -> runtime
+  fallback): a YAML that sets `trainer.quick_val_fracs` wins over the new
+  defaults. So existing experiments that explicitly pin `[0.25, 0.5, 0.75]`
+  will not silently change.
+- "Common config" was interpreted as the shared code defaults
+  (`training/common.py` + `training/utils/train.py`), not the union of the
+  33 per-experiment YAMLs. There is no single `common.yaml`.
+
+**Gotchas.**
+- `quick_val_fracs` and `full_val_fracs` share the same epoch-fraction
+  semantics and both pass through `_epoch_fracs_to_batches` in
+  `training/utils/train.py`. A quick-val at 0.33 and 0.66 will now produce
+  two mid-epoch quick validations per epoch instead of three, halving
+  quick-val CSV row volume and time cost. End-of-epoch full validation is
+  unaffected (it is not part of `quick_val_fracs`).
+- The default list lives in two code sites (argparse default + runtime
+  fallback) plus the help string; missing any one of the three would leave
+  `--help`, the resolved argparse default, and the runtime default out of
+  sync. All three were updated together.
+- A `quick_val_fracs: [0.33, 0.66]` config will sometimes map to the same
+  batch index as `[0.25, 0.5, 0.75]` once the float rounds to the nearest
+  batch (`_epoch_fracs_to_batches` clamps with `max(1, min(n_train_batches-1, round(f * n_train_batches)))`).
+  For short epochs the de-duplication of "nearby" fractions will collapse
+  both 0.33 and 0.5 to the same batch. This is a behavior change vs. the
+  prior three-point schedule only when n_train_batches is small.
+
+**Follow-ups.**
+- If the user later wants the new schedule to *also* apply to the 33 explicit
+  experiment configs, a separate sweep + decision is needed (and ideally a
+  branch or per-run note, since changing it invalidates the quick-val CSV
+  history of any in-progress run).
+- The renamed schedule should be re-stated in `training/FLAGS.md` if that
+  doc lists the default; spot-check on the next pass.
+
+## 2026-06-24 - quick_val_fracs: extended sweep to all 32 per-experiment YAMLs
+
+**Goal.** User revised the previous decision: change `quick_val_fracs` to
+`[0.33, 0.66]` across every config, not just the three code defaults.
+
+**Changes.**
+- 32 files updated by `sed -i` (uniform pattern, one line each):
+  `training/{camchex,camchex_cxrbert,camchex_cxrbert_cxrlt2024,
+  camchex_cxrlt2024,camchex_v2nano_vitals,camchex_v2nano_vitals_cxrlt2024,
+  camchex_v2nano_vitals_stable,camchex_v2nano_vitals_stable_cxrlt2024,
+  camchex_v3nano,camchex_v3nano_cxrlt2024,prior_aware,prior_aware_cxrbert,
+  prior_aware_cxrbert_cxrlt2024,prior_aware_cxrlt2024,prior_aware_v2nano,
+  prior_aware_v2nano_cxrlt2024,prior_aware_v3nano,prior_aware_v3nano_cxrlt2024,
+  prior_aware_v4nano,prior_aware_v4nano_cxrlt2024,prior_aware_v5nano,
+  prior_aware_v5nano_bgpenalty,prior_aware_v5nano_bgpenalty_cxrlt2024,
+  prior_aware_v5nano_cxrlt2024,prior_aware_v5nano_explore_exploit,
+  prior_aware_v5nano_explore_exploit_cxrlt2024,
+  prior_aware_v5nano_explore_exploit_lsmooth,
+  prior_aware_v5nano_explore_exploit_lsmooth_cxrlt2024,prior_aware_v6nano,
+  prior_aware_v6nano_cxrlt2024,singleview,singleview_cxrlt2024}/config.yaml` -
+  `quick_val_fracs: [0.25, 0.5, 0.75]` -> `quick_val_fracs: [0.33, 0.66]`.
+- Combined with the earlier turn's edits, all three code default sites
+  (`training/common.py:177`, `training/common.py:447`,
+  `training/utils/train.py:502`) and all 32 per-experiment YAMLs now
+  consistently produce [0.33, 0.66] regardless of which entry point or
+  config is used.
+
+**Reasoning.** `grep -rh 'quick_val_fracs' training/*/config.yaml | sort -u`
+returned a single unique line, so a one-shot `sed -i` was safe (no risk of
+touching a line with a different intent). The previous turn intentionally
+left these alone for reproducibility; the user revised that call, so this
+sweep supersedes it. The CLI/runtime defaults were already updated in the
+previous turn, so this turn only needs the YAML sweep.
+
+**Assumptions.**
+- Every `quick_val_fracs: [0.25, 0.5, 0.75]` line in the tree was intended
+  as the schedule for that experiment and is safe to retarget. Verified by
+  the unique-pattern grep; no variants exist.
+- A repo-wide grep for `0.25, 0.5, 0.75` (`.py` and `.yaml` only, excluding
+  `.git/`) returns zero matches after the sweep, so nothing related to the
+  old three-point schedule remains in source.
+
+**Gotchas.**
+- Stale `.pyc` files in `training/__pycache__/common.cpython-313.pyc` and
+  `training/utils/__pycache__/train.cpython-313.pyc` still contain the old
+  literal. They are bytecode caches; the source files are correct and will
+  regenerate on next import. Safe to ignore unless a script loads with
+  `PYTHONDONTWRITEBYTECODE=1` from a frozen env, which is not the case here.
+- Any in-progress training run that already started under the three-point
+  schedule will continue producing `val_quick.csv` rows at the old fractions
+  for that run. The YAML change only affects new runs and `--quick-continue`
+  resumes will pick up the new schedule at the next config read (resumes
+  re-read the config but checkpoint-derived scheduler state stays intact,
+  so the divergence is confined to which quick-val batches get logged).
+- For experiments with very small `steps_per_epoch`, the float-to-batch
+  rounding in `_epoch_fracs_to_batches` may collapse 0.33 and 0.66 to the
+  same batch index. The new schedule guarantees at most two quick
+  mid-epoch validations per epoch (often just one in practice for short
+  epochs), down from the old three.
+
+**Follow-ups.**
+- If `training/FLAGS.md` mentions the default schedule, update it on the
+  next pass (not searched in this turn).
+- Confirm with the user whether in-flight runs should be left to log the
+  old schedule or restarted under the new one. Not blocking for new runs.
+
+## 2026-06-24 - report EDA notebook for thesis figures
+
+**Goal.** Create a notebook under `data/00-examine-data` that produces the plots and summary statistics still marked TODO in `report/eda/eda.tex`.
+
+**Changes.**
+- `data/00-examine-data/report-eda.ipynb` — new notebook loading study-level `prior_aware_cxrlt2024_task1_{train,val,test}.parquet`, expanding label/vital vectors, and writing report artifacts.
+- `report/img/figures/*.png` and companion CSV tables — generated by executing the notebook (cohort, labels, text, vitals, prior-gap outputs).
+
+**Reasoning.** The thesis EDA section lists five figure placeholders and four tables; the training config already points at the CXR-LT 2024 task1 prior-aware parquets, so the notebook uses that variant by default and saves files with the exact names referenced in `eda.tex` (`label_distribution.png`, etc.) for drop-in `\includegraphics`. Reused `get_notebook_paths` / `setup_auto_save` from `utils.py` for consistency with other examine-data notebooks; kept variant-specific logic in the notebook rather than bloating `utils.py`.
+
+**Assumptions.**
+- Study-level counts (one row per study) match the thesis cohort table intent.
+- Positive labels use `== 1.0` (CheXpert uncertain 0.5 excluded), consistent with `class_instance_nums` in the label metadata sidecar.
+- Vital-sign EDA covers the six numeric ED fields (gender in the 7-vector is omitted from the report table).
+
+**Gotchas.** `report/img/figures/` did not exist before this run; the notebook creates it. Auto-save also mirrors figures under `output/eda/report-eda/`. Change `VARIANT_PREFIX` at the top of the notebook for other CXR-LT variants.
+
+**Follow-ups.** Wire the generated PNG/CSV values into `report/eda/eda.tex` (replace TODO `\fbox` placeholders and table cells). Consider adding a small LaTeX row printer if manual copy-paste becomes tedious.
+
+## 2026-06-24 - filled cohort, text, vitals, and prior study statistics into report
+
+**Goal.** Wire the generated dataset statistics and plots (label distribution, co-occurrence, indication text length, vitals missingness, prior gap) into the LaTeX document `report/eda/eda.tex` to replace the placeholders.
+
+**Changes.**
+- `report/eda/eda.tex:16-197` — Replaced placeholders in Table 1 (cohort summary counts), Table 3 (clinical text terms), Table 4 (vital sign stats and missingness rates), and Table 5 (prior study status counts/percentages). Also replaced all `TODO` figure `\fbox` placeholders with actual `\includegraphics` referencing the generated plots in `report/img/`.
+
+**Reasoning.** Used the exact statistics and missingness rates of the subset cohort from the generated `output/dataset_analysis/subset/` analysis outputs (matching the 28,245 rows, 5,067 patients cohort). Linked the plots directly so they render natively in the compiled document.
+
+**Gotchas.** The diastolic BP max contains outlier entry errors in the source dataset (Max=7,698.90), which are kept exactly as recorded to preserve cohort authenticity.
+
+**Follow-ups.** None, the document compiles cleanly and successfully.

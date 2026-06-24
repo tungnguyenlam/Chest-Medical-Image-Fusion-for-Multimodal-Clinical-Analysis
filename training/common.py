@@ -174,7 +174,7 @@ def _config_default_by_dest(
                 "quick_val_every_steps": trainer.get("quick_val_every_steps"),
                 "quick_val_frac": trainer.get("quick_val_frac", 0.1),
                 "full_val_fracs": trainer.get("full_val_fracs", []),
-                "quick_val_fracs": trainer.get("quick_val_fracs", [0.25, 0.5, 0.75]),
+                "quick_val_fracs": trainer.get("quick_val_fracs", [0.33, 0.66]),
                 "compile_model": trainer.get("compile_model", False),
                 "channels_last": trainer.get("channels_last", False),
                 "gradcam_epochs": trainer.get("gradcam_epochs", "all"),
@@ -444,7 +444,7 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             nargs="*",
             help="Epoch fractions (each in (0,1)) at which to run a partial quick validation "
             "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
-            "batch size. Default 0.25 0.5 0.75. Pass with no values to disable.",
+            "batch size. Default 0.33 0.66. Pass with no values to disable.",
         )
 
     # --- Hardware, precision & compile -------------------------------------

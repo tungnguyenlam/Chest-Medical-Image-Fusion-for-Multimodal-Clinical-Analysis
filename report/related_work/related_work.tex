@@ -1,37 +1,51 @@
 \section{Related Work}
 \label{sec:related_work}
 
-This section reviews the existing literature and baseline approaches relevant to multimodal medical image classification, clinical text modeling, vital signs processing, and temporal patient history modeling.
+This section reviews research areas that are directly relevant to this thesis. First, it discusses single-modal chest X-ray classification, which forms the foundation for automated radiographic interpretation. Second, it reviews multimodal clinical fusion, especially methods that combine radiographs with clinical text or structured patient information. Third, it discusses temporal and prior-aware modelling, which is important because radiologists often compare current studies with previous examinations. Finally, it reviews methods for mitigating class imbalance in long-tailed multi-label medical datasets.
 
 \subsection{Single-Modal Chest X-Ray Classification}
 \label{subsec:related_single_modal}
 
-Review key architectures and benchmarks in automated chest radiograph analysis. Mention landmark datasets like ChestX-ray14, CheXpert, and MIMIC-CXR. Discuss standard CNN backbones (e.g., DenseNet, ResNet) and modern transformer-based/convolutional backbones (e.g., ViT, ConvNeXt-V2) used to classify pathologies from single or multiple image views (frontal and lateral).
+Deep learning has been widely studied for automated chest X-ray classification. Early large-scale work was enabled by public datasets such as ChestX-ray14, CheXpert, and MIMIC-CXR, which provide chest radiographs with labels extracted from radiology reports \cite{wang2017chestxray8,irvin2019chexpert,johnson2019mimiccxr}. These datasets made it possible to train convolutional neural networks for multi-label prediction of common thoracic findings such as atelectasis, cardiomegaly, consolidation, edema, pleural effusion, and pneumothorax.
+
+Many chest X-ray classification systems are based on convolutional neural networks. Architectures such as ResNet and DenseNet have been commonly used because they can learn hierarchical visual features from medical images while remaining practical to train \cite{he2016resnet,huang2017densenet}. For example, DenseNet-based models have often been used in chest X-ray classification because dense connections encourage feature reuse and improve gradient flow. These models usually take one or more radiographic views as input and produce independent probabilities for each disease label.
+
+More recently, modern visual backbones such as Vision Transformers, Swin Transformers, ConvNeXt, and ConvNeXt-V2 have been explored for medical image analysis. ConvNeXt-V2 is particularly relevant to this project because it combines convolutional design with modern architectural improvements and can provide a strong visual feature extractor while remaining more efficient than very large transformer-based models \cite{woo2023convnextv2}. In this thesis, a lightweight ConvNeXt-V2 variant is used as the image encoder in order to balance visual representation quality and computational feasibility.
+
+Although single-modal chest X-ray classifiers have achieved strong results, they have an important limitation: they treat the radiograph mainly as an isolated image. This does not fully reflect clinical practice, where image interpretation is influenced by clinical indication, symptoms, physiological state, and prior history. Therefore, image-only classification is useful as a baseline, but it may not capture the full diagnostic context available during real chest X-ray interpretation.
 
 \subsection{Multimodal Clinical Fusion}
 \label{subsec:related_multimodal}
 
-Discuss existing architectures that fuse chest X-rays with non-image clinical data:
-\begin{itemize}
-    \item \textbf{Early vs. Late Fusion}: Compare architectures that concatenate features at early stages versus late classifier stages.
-    \item \textbf{Text and Image Alignment}: Review models (e.g., ConVIRT, BioViL) that use contrastive learning to align radiographs with radiology reports.
-    \item \textbf{EHR and Vitals Integration}: Discuss how structured data (demographics, vital signs, lab values) are typically fused. Critique the practice of translating numeric variables into text prompts for pre-trained language models.
-\end{itemize}
+Multimodal learning aims to combine information from different sources in order to produce richer and more clinically meaningful representations. In radiology, the most common multimodal setting is image-text learning, where chest X-rays are paired with radiology reports. Since radiology reports describe visual findings and clinical impressions, they provide a natural source of supervision for learning image-text representations.
 
-\subsection{Temporal and Prior-Aware Medical Modeling}
+Several works have used contrastive learning to align medical images and text. ConVIRT learns medical visual representations by contrasting paired radiographs and reports, showing that naturally occurring image-report pairs can improve representation learning without requiring additional manual annotations \cite{zhang2022convirt}. GLoRIA extends this idea by learning both global and local image-text representations, aligning image regions with words or phrases from radiology reports \cite{huang2021gloria}. BioViL further improves biomedical vision-language pretraining by using stronger domain-specific text modelling through CXR-BERT and radiology-specific semantic learning \cite{boecking2022biovil}. MedCLIP relaxes the requirement for strictly paired image-text data by using unpaired medical images and text with a semantic matching objective \cite{wang2022medclip}.
+
+These vision-language approaches show that textual information can improve radiographic representation learning. However, many of them focus on pretraining, retrieval, phrase grounding, or report-based image-text alignment. They do not always directly model the full clinical context available at the time of diagnosis, such as clinical indication text, vital signs, or multi-view study structure. In addition, radiology reports may not always be available during inference because they are usually written after image interpretation. Therefore, using reports as direct input for current-study prediction can create an unrealistic setting if the goal is to support interpretation before the final report is produced.
+
+CaMCheX is the most directly related work to this thesis because it proposes a clinically aligned multimodal chest X-ray classification framework \cite{sloan2025camchex}. Instead of relying only on image-report contrastive learning, CaMCheX combines multi-view chest radiographs with structured clinical information, including clinical indications, patient history, and vital signs. This is closer to the information available in real clinical workflows. This thesis follows the same general motivation, but adapts the approach under limited computational resources by using lightweight image encoders, frozen or precomputed text embeddings, and compact transformer fusion layouts.
+
+\subsection{Temporal and Prior-Aware Medical Modelling}
 \label{subsec:related_temporal}
 
-Review studies that incorporate historical patient records (longitudinal studies) to improve current diagnostic accuracy:
-\begin{itemize}
-    \item Discuss models that compare a current image with a prior image using Siamese networks, image difference maps, or cross-attention.
-    \item Highlight the challenges of prior-aware modeling, such as variable time gaps, missing historical records, and the risk of "shortcut learning" where the model over-relies on prior labels or reports.
-\end{itemize}
+Temporal information is important in radiology because interpretation often depends on comparison with prior studies. A finding on a current chest X-ray may be clinically interpreted as new, stable, improved, or worsened depending on previous examinations. For example, a pleural effusion that is increasing over time may require different clinical attention from one that is unchanged from a prior study. Therefore, prior imaging and historical clinical information can provide useful context for current-study prediction.
+
+Recent biomedical vision-language work has started to incorporate temporal structure. BioViL-T explicitly models prior images and reports when they are available, showing that temporal context can improve downstream tasks such as progression classification, phrase grounding, and report generation \cite{bannur2023biovilt}. The associated MS-CXR-T benchmark further highlights the importance of evaluating whether models understand temporal disease progression, including whether findings are improving, stable, or worsening \cite{bannur2023biovilt}.
+
+Prior-aware modelling can be implemented in different ways. Some approaches compare current and prior images using Siamese encoders or feature-difference representations. Others use attention mechanisms so that current-study features can attend to prior-study features. Cross-attention is especially suitable for this setting because it allows the current examination to act as the target while prior examinations provide contextual memory. This matches the clinical idea that the current image remains the main object of interpretation, while the prior study provides supporting evidence.
+
+However, prior-aware modelling also introduces challenges. First, not every patient has a prior study, so the model must remain robust when historical information is missing. Second, the time gap between current and prior examinations can vary widely, so the model should distinguish between recent and old priors. Third, there is a risk of information leakage or shortcut learning if prior labels or reports are used carelessly. For this reason, this thesis treats prior information as auxiliary context and uses time-gap embeddings and stochastic prior dropout to reduce over-dependence on historical information.
 
 \subsection{Mitigating Class Imbalance in Medical Datasets}
-\label{subsec:related_imbalance}
+\label{subsec:related_class_imbalance}
 
-Review loss functions and techniques designed to handle the highly skewed class distributions common in clinical datasets:
-\begin{itemize}
-    \item Compare standard Binary Cross-Entropy (BCE) with Focal Loss.
-    \item Discuss the formulation and benefits of Asymmetric Loss (ASL), which targets negative and positive samples with different focusing parameters to prevent easy negatives from overwhelming the gradient.
-\end{itemize}
+Chest X-ray classification is naturally a multi-label problem because a single study may contain multiple findings. It is also long-tailed because some abnormalities are common, while others are rare. The CXR-LT challenge highlights this issue by evaluating models on long-tailed multi-label chest X-ray classification, where rare findings and label co-occurrence make the task more difficult than standard balanced classification \cite{holste2024cxrlt,holste2025cxrlt2024}.
+
+A common baseline loss for multi-label classification is binary cross-entropy (BCE), where each label is treated as an independent binary prediction. Although simple and widely used, BCE can be dominated by frequent negative labels. In chest X-ray datasets, most labels are negative for most studies, so the model may learn to focus on easy negatives rather than rare positive findings. This can reduce sensitivity for minority classes, which is problematic in medical settings where rare findings may still be clinically important.
+
+Focal Loss addresses class imbalance by reducing the contribution of easy examples and focusing training on harder examples \cite{lin2017focalloss}. However, standard focal loss was originally designed for dense object detection and does not fully address the asymmetric nature of multi-label classification, where the number of negative labels is usually much larger than the number of positive labels.
+
+Asymmetric Loss (ASL) was proposed specifically for multi-label classification and is therefore highly relevant to this thesis \cite{ridnik2021asymmetric}. ASL applies different focusing behaviour to positive and negative samples, allowing easy negatives to be down-weighted more aggressively while preserving learning from positive labels. This makes it suitable for long-tailed multi-label chest X-ray classification, where the model must learn from rare positive cases without being overwhelmed by the large number of negative labels.
+
+Overall, the related work suggests that strong chest X-ray classification requires more than an image-only model. Large-scale datasets and modern visual backbones provide the foundation for radiographic feature learning, while multimodal fusion allows the model to incorporate clinical context. Prior-aware modelling reflects the temporal comparison used in clinical radiology, and imbalance-aware loss functions are necessary for long-tailed multi-label prediction. This thesis combines these directions in a practical CaMCheX-inspired framework designed for resource-constrained experimentation.
+

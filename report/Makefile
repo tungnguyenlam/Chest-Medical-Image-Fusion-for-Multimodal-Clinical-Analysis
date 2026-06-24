@@ -24,7 +24,7 @@ $(TARGET): $(TEX_FILES) $(BIB_FILES) $(IMG_FILES)
 	@echo "Compiling LaTeX document (Pass 1)..."
 	@echo "=================================================="
 	pdflatex -interaction=nonstopmode $(ROOT_TEX)
-	@if [ -f main.aux ] && grep -q "\\citation" main.aux; then \
+	@if [ -f main.aux ] && grep -q "citation" main.aux; then \
 		echo "=================================================="; \
 		echo "Compiling Bibliography (BibTeX)..."; \
 		echo "=================================================="; \

@@ -1,0 +1,41 @@
+label,positive_studies
+Clavicle Fracture,106
+Round(ed) Atelectasis,110
+Azygos Lobe,115
+Lobar Atelectasis,123
+Kyphosis,396
+Pleural Other,420
+Pneumoperitoneum,474
+Hydropneumothorax,495
+Infarction,515
+Pneumomediastinum,589
+Pulmonary Hypertension,679
+Fibrosis,883
+Pulmonary Embolism,1233
+Tuberculosis,1420
+Lung Lesion,1695
+Granuloma,1760
+Fissure,1892
+Subcutaneous Emphysema,2052
+Tortuous Aorta,2132
+Pleural Thickening,2140
+Adenopathy,2236
+Hernia,2619
+Calcification of the Aorta,2652
+Emphysema,2691
+Mass,3850
+Nodule,4872
+Rib Fracture,5874
+Infiltration,7029
+Fracture,7878
+Pneumothorax,12066
+Consolidation,12655
+Enlarged Cardiomediastinum,20255
+Normal,21578
+Edema,31627
+Pneumonia,32040
+Atelectasis,52059
+Pleural Effusion,54603
+Cardiomegaly,55999
+Lung Opacity,58569
+Support Devices,74724

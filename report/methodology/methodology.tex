@@ -1,101 +1,89 @@
+
 \section{Methodology}
 \label{sec:methodology}
 
-In this section, we present the methodology for the clinically-aligned multi-modal chest X-ray classification framework, which we refer to as \textbf{CaMCheX}. We detail the formal problem definition, describe the individual modal encoders (image, text, and vitals), outline the token fusion strategies (comparing the spatially expanded V2 and the collapsed single-token V3 architectures), describe the prior-aware temporal modeling extensions (comparing the concatenated self-attention V3 configuration and the asymmetric cross-attention V4 architecture), and discuss the training objective.
-
-% TODO: Add system architecture diagram (Figure 1) showing the overview of current and prior modalities, modal encoders, segment embeddings, time-delta embeddings, fusion block (self-attention vs asymmetric cross-attention), and MLDecoder classification head.
+In this section, we describe the proposed prior-aware multimodal framework for long-tailed chest X-ray classification. The model is inspired by CaMCheX, but is adapted to a resource-constrained setting with lightweight image encoding, frozen or precomputed text embeddings, compact multimodal token construction, and prior-aware fusion. Instead of presenting each development stage as a separate model, this section focuses on the final architecture used in the main experiments. Earlier design choices are treated as ablation variants and are discussed in Section~\ref{sec:results}.
 
 \subsection{Problem Formulation}
-\label{subsec:problem_formulation}
+\label{subsec:method_problem}
 
-Formulate the multi-modal classification task by defining the dataset of patient admissions. List the mathematical notation for the inputs: the sequence of chest X-ray images (with view positions), the emergency department clinical indication text, the vital signs vector, and the corresponding missingness mask. Define the target 26-class multi-label pathology vector, and specify the mapping function $f_\theta$ that projects these inputs to predicted probabilities.
+This thesis considers multi-label chest X-ray classification with multimodal clinical context. For each current study, the input consists of one or more chest X-ray images, clinical indication text, structured vital signs, and, when available, information from a previous study. The goal is to predict a binary label vector representing the presence or absence of multiple thoracic findings.
+
+Let each sample be represented as
+\[
+    x_i = (I_i, T_i, V_i, M_i, P_i),
+\]
+where \(I_i\) denotes the current chest X-ray image views, \(T_i\) denotes the clinical indication text, \(V_i\) denotes the vital-sign vector, \(M_i\) denotes the missingness mask for structured variables, and \(P_i\) denotes optional prior-study information. The target label is a multi-hot vector
+\[
+    y_i \in \{0,1\}^{C},
+\]
+where \(C\) is the number of target findings. The model learns a function
+\[
+    f_\theta(x_i) = \hat{y}_i \in [0,1]^C,
+\]
+where each output dimension represents the predicted probability of one pathology label.
+
+\subsection{Overview of the Proposed Model}
+\label{subsec:method_overview}
+
+The proposed model follows a modality-specific encoding and transformer-based fusion design. First, each input modality is processed by a dedicated encoder. Chest X-ray images are encoded using a lightweight visual backbone. Clinical indication text is encoded using a radiology-domain language model. Vital signs are normalized and projected through a small multilayer perceptron together with their missingness mask. Prior-study information, when available, is encoded separately and used as temporal context.
+
+After encoding, all modality features are projected into a shared latent dimension. Current-study information forms the target stream, while prior-study information forms a memory stream. The fusion module first models interactions among current-study tokens and then allows the current study to attend to prior-study context through cross-attention. This design keeps the current examination as the main prediction target while allowing historical information to support interpretation.
+
+The final fused representation is passed to a multi-label classification head, which outputs one logit for each target finding. The model is trained using an imbalance-aware loss function suitable for long-tailed multi-label classification.
 
 \subsection{Modality-Specific Encoders}
-\label{subsec:modality_encoders}
-
-Describe the separate neural network architectures used to process each input modality. Explain how each encoder extracts features and projects them into a shared latent space of dimension $d_{model}$.
+\label{subsec:method_encoders}
 
 \subsubsection{Chest X-Ray Image Encoder}
-\label{subsubsec:image_encoder}
+\label{subsubsec:method_image_encoder}
 
-Describe the use of the ConvNeXt-V2-Nano backbone to extract visual features from chest X-ray views. Detail the view-routing mechanism that applies distinct backbones for frontal vs. lateral view positions. Explain the 2D projection layer (convolutional layer) used to project spatial features to the latent dimension, the addition of 2D spatial positional encodings, and the zero-padding/learnable padding token strategy for inactive view slots.
+The image encoder extracts visual features from the current chest X-ray study. Because chest X-ray studies may contain different view positions, the model handles frontal and lateral views separately. Each available view is passed through a lightweight ConvNeXt-V2 visual backbone to obtain spatial feature maps. These feature maps are then projected to the transformer latent dimension using a convolutional projection layer.
+
+To preserve spatial information, two-dimensional positional embeddings are added to the projected image features. If a study contains fewer views than the maximum expected number of views, missing view slots are represented using padding tokens and ignored by the attention mask. This allows the model to handle variable-view studies while maintaining a consistent tensor structure.
 
 \subsubsection{Clinical Indication Text Encoder}
-\label{subsubsec:text_encoder}
+\label{subsubsec:method_text_encoder}
 
-Describe how clinical history and indication text is processed using the BiomedVLP-CXR-BERT-specialized text encoder. Specify the maximum token length, and explain how the sequence is encoded to extract the CLS token representation representing the clinical context.
+Clinical indication text provides information about the reason for the examination and the patient's presenting condition. The text is encoded using a radiology-domain language model, BiomedVLP-CXR-BERT-specialized. The text sequence is tokenized and truncated or padded to a fixed maximum length. The resulting text representation is obtained from the encoder output and projected into the shared fusion dimension.
+
+To reduce computational cost, the text encoder is frozen during training. In some experiments, text embeddings are precomputed before training so that the multimodal model does not need to repeatedly run the language model. This design choice makes the experiments feasible under limited GPU resources, although it also means that the text encoder is not adapted end-to-end to the final classification objective.
 
 \subsubsection{Vital Signs Encoder}
-\label{subsubsec:vitals_encoder}
+\label{subsubsec:method_vitals_encoder}
 
-Explain the processing of numeric vital signs. Describe the normalization procedure using train set statistics (mean and standard deviation), the zero-filling strategy for missing values, and the MLP projector (VitalsTokenProjector) that projects the concatenated normalized vitals and missingness mask into the shared latent space.
+Structured vital signs provide numerical clinical context related to the patient's physiological state. The vital-sign vector includes variables such as temperature, heart rate, oxygen saturation, respiratory rate, systolic blood pressure, and diastolic blood pressure. Each variable is normalized using statistics computed from the training set.
 
-\subsection{Multimodal Fusion \& Token Grid Layouts}
-\label{subsec:multimodal_fusion}
+Because clinical data often contains missing values, the model also uses a missingness mask. Missing numerical values are filled with a neutral value after normalization, while the corresponding mask indicates whether each variable was observed or missing. The normalized vital-sign vector and missingness mask are concatenated and passed through a small multilayer perceptron to produce a vital-sign token in the shared latent space.
 
-Compare different ways of fusing the encoded features. Discuss the trade-offs between spatial details and computational efficiency across the different layouts.
+\subsection{Multimodal Token Construction}
+\label{subsec:method_token_construction}
 
-\subsubsection{Spatially Expanded Fusion (CaMCheX V2)}
-\label{subsubsec:fusion_v2}
+After modality-specific encoding, the model converts all inputs into tokens for transformer-based fusion. Current image features provide spatial visual tokens, while clinical text and vital signs are represented as compact context tokens. Each token is associated with a learnable segment embedding that indicates its modality, such as image, text, vital signs, or prior information.
 
-Describe the V2 fusion layout where clinical text and vitals features are duplicated/expanded across the 8x8 spatial grid of each active image view. Explain the resulting sequence length (e.g., 384 tokens) and discuss the quadratic self-attention cost associated with this design.
+The use of segment embeddings allows the transformer to distinguish between different sources of information even after all features have been projected into the same latent dimension. Positional embeddings are used for spatial image tokens, while temporal embeddings are used for prior-study tokens. Attention masks are applied to ignore padded views or unavailable modalities.
 
-\subsubsection{Slim Single-Token Fusion (CaMCheX V3)}
-\label{subsubsec:fusion_v3}
+\subsection{Prior-Aware Temporal Fusion}
+\label{subsec:method_prior_fusion}
 
-Describe the V3 slim layout where text and vitals are kept as a single token instead of being expanded. Compare the sequence length reduction (e.g., to 258 tokens) and the speedup in training and inference time.
+Prior-study information is incorporated to reflect the clinical practice of comparing current and previous examinations. When a previous study is available, its encoded features are used as memory tokens. The time gap between the current and prior study is computed and discretized into temporal buckets. A learned time-gap embedding is then added to the prior tokens so that the model can distinguish recent priors from older priors.
 
-\subsubsection{Segment Embeddings \& Transformer Fusion}
-\label{subsubsec:transformer_fusion}
+The fusion module uses an asymmetric target-memory design. Current-study tokens form the target stream, while prior-study tokens form the memory stream. The target stream first undergoes self-attention to model interactions among current image, text, and vital-sign tokens. It then attends to the memory stream through cross-attention, allowing current-study features to selectively use prior-study context.
 
-Explain the role of learnable segment embeddings in identifying the source modality of each token in the fused sequence. Describe the Transformer Encoder stack (2 layers, 8 heads) and the attention key padding mask used to ignore padded/missing features.
+When no prior study is available, the memory stream is replaced by a learned no-prior token. This allows the model to maintain the same architecture for both cases with and without historical information. During training, stochastic prior dropout is also applied by randomly removing prior information with a fixed probability. This discourages the model from relying too heavily on prior data and improves robustness when prior studies are missing.
 
-\subsection{Prior-Aware Temporal Modeling Extension}
-\label{subsec:prior_aware}
+\subsection{Classification Head and Training Objective}
+\label{subsec:method_head_loss}
 
-Extend the base model to leverage historical patient data. Describe the comparative diagnostic workflow of using prior patient studies.
+The fused token sequence is passed to a multi-label classification head. Instead of producing a single global pooled representation, the classifier uses learnable label-query embeddings to attend to the fused multimodal features. This allows each target finding to extract relevant information from the final token sequence.
 
-\subsubsection{Inputs \& Information Leakage Prevention}
-\label{subsubsec:prior_inputs}
+The output of the classification head is a vector of logits, with one logit for each pathology label. Since the task is multi-label, sigmoid activation is applied independently to each output dimension during evaluation.
 
-Identify the historical inputs: prior chest X-rays, prior clinical history, prior vitals, prior radiology reports, and prior labels. Address label leakage prevention by explaining why the current radiology report is excluded during inference while historical reports/labels are valid contexts.
+The model is trained with an imbalance-aware multi-label loss. In particular, Asymmetric Loss is used to reduce the dominance of easy negative examples and improve learning for rare positive labels. This is suitable for long-tailed chest X-ray classification, where most labels are negative for most studies and rare findings may otherwise contribute weak training signals.
 
-\subsubsection{Prior Token Layout and Embedding Projection}
-\label{subsubsec:prior_tokens}
+\subsection{Ablation Study Design}
+\label{subsec:method_ablation_design}
 
-Describe how prior labels are projected into the transformer latent space via a linear layer. Present the full sequence layout for the prior-aware model, concatenating current and prior tokens with extended segment embeddings.
+Although the main methodology focuses on the final proposed model, several ablation variants are used to understand the contribution of different architectural choices. These ablations are not presented as separate main models, but as controlled comparisons in the experimental analysis.
 
-\subsubsection{Time-Delta Bucketing}
-\label{subsubsec:time_delta}
-
-Describe how the time difference between the current and prior studies is calculated and discretized into 8 temporal buckets. Explain the learned time-delta embedding added to the prior study tokens to represent temporal decay.
-
-\subsubsection{Stochastic Prior Dropout}
-\label{subsubsec:prior_dropout}
-
-Explain stochastic prior dropout during training (dropping the prior sequence with probability $0.2$). Describe how this forces the model to remain robust and perform effectively when prior history is missing.
-
-\subsubsection{Asymmetric Prior Cross-Attention (CaMCheX V4)}
-\label{subsubsec:asymmetric_cross_attention}
-
-Introduce the CaMCheX V4 asymmetric cross-attention architecture. Define the Target Stream (current study tokens as queries) and the Memory Stream (prior study tokens as keys/values). Introduce the learned sentinel token (no-prior-token) used when prior history is absent. Explain the decoder-like layer formulation (target self-attention followed by target-to-memory cross-attention) and highlight the 50\% reduction in computational complexity.
-
-\subsubsection{Per-Modality Pre-Fusion Normalization}
-\label{subsubsec:pre_fusion_norm}
-
-Explain how features from highly heterogeneous modalities (images, text, vitals, labels) differ in numerical scale. Detail the modality-specific pre-fusion LayerNorm layers applied to align all token representations to a unified scale before cross-attention.
-
-\subsection{Classification Head \& Loss Functions}
-\label{subsec:head_and_loss}
-
-Describe the components that convert the fused transformer features into final predictions and the loss function used to optimize the network.
-
-\subsubsection{Multi-Label Decoder (MLDecoder)}
-\label{subsubsec:mldecoder}
-
-Detail the MLDecoder head. Explain how it uses a set of learnable query embeddings to cross-attend to the final transformer sequence, followed by a group fully-connected layer to predict the 26 target logits.
-
-\subsubsection{Asymmetric Loss (ASL)}
-\label{subsubsec:asymmetric_loss}
-
-Describe the Asymmetric Loss formulation used to address the severe positive-negative class imbalance in the 26 target pathologies. Detail the asymmetric focusing parameters, negative margin shift, and inverse frequency-based class weighting.
+The ablation studies examine the effect of image-only versus multimodal input, compact versus spatially expanded token layouts, the use of prior-study information, time-gap embeddings, prior dropout, and imbalance-aware loss functions. These comparisons help determine which components contribute most to performance and which design choices are most important under limited computational resources.

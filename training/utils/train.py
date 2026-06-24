@@ -499,7 +499,7 @@ def train_model(model, train_loader, val_loader, args: argparse.Namespace, run_d
         return targets
 
     full_val_fracs = resolve_trainer_arg(args, cfg, "full_val_fracs", []) or []
-    quick_val_fracs = resolve_trainer_arg(args, cfg, "quick_val_fracs", [0.25, 0.5, 0.75]) or []
+    quick_val_fracs = resolve_trainer_arg(args, cfg, "quick_val_fracs", [0.33, 0.66]) or []
     full_val_batches = _epoch_fracs_to_batches(full_val_fracs, "full_val_fracs")
     # Honor the legacy fixed-interval knob too (null by default): treat its mid-epoch points
     # as additional full-validation batches, excluding the final batch (covered by epoch val).

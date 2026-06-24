@@ -895,3 +895,139 @@ def plot_sample_images_view_position(meta, mimic_cxr_jpg_dir: Path | str):
 
     plt.tight_layout()
     plt.show()
+
+
+# --- AUTO-SAVE EDA OUTPUTS ---
+def setup_auto_save():
+    import os
+    import re
+    from pathlib import Path
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import sys
+    
+    nb_name = os.environ.get('CURRENT_NOTEBOOK_NAME')
+    if not nb_name:
+        return
+    
+    # Create output directory
+    cwd = Path.cwd()
+    root_dir = cwd
+    while not (root_dir / 'src').is_dir() and root_dir != root_dir.parent:
+        root_dir = root_dir.parent
+    
+    out_dir = root_dir / 'output' / 'eda' / nb_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    fig_counter = [0]
+    txt_counter = [0]
+    
+    # Redirect stdout
+    log_path = out_dir / f"{nb_name}_stdout.txt"
+    # Clean file if exists
+    if log_path.exists():
+        try:
+            log_path.unlink()
+        except:
+            pass
+            
+    class Tee:
+        def __init__(self, original_stdout, log_file_path):
+            self.stdout = original_stdout
+            self.log_file = open(log_file_path, 'a', encoding='utf-8')
+        def write(self, data):
+            if data:
+                self.stdout.write(data)
+                self.log_file.write(data)
+                self.log_file.flush()
+        def flush(self):
+            self.stdout.flush()
+            self.log_file.flush()
+            
+    sys.stdout = Tee(sys.stdout, log_path)
+    
+    # Hook plt.show
+    orig_show = plt.show
+    def custom_show(*args, **kwargs):
+        fig = plt.gcf()
+        title = ""
+        if fig.texts:
+            for text in fig.texts:
+                if text.get_text():
+                    title = text.get_text()
+                    break
+        if not title:
+            axes_titles = [ax.get_title() for ax in fig.axes if ax.get_title()]
+            if axes_titles:
+                title = "_".join(axes_titles)
+        if not title:
+            title = f"figure_{fig_counter[0]}"
+        
+        clean_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', title)
+        clean_title = re.sub(r'_+', '_', clean_title).strip('_')
+        if len(clean_title) > 100:
+            clean_title = clean_title[:100].strip('_')
+        fig_counter[0] += 1
+        
+        filename = f"{fig_counter[0]:02d}_{clean_title}.png"
+        filepath = out_dir / filename
+        fig.savefig(filepath, bbox_inches='tight', dpi=300)
+        print(f"[Auto-Save] Saved figure to {filepath}")
+        return orig_show(*args, **kwargs)
+        
+    plt.show = custom_show
+    
+    # Hook IPython display to save dataframes/series
+    try:
+        from IPython import get_ipython
+        ipy = get_ipython()
+        if ipy:
+            def post_run_cell_callback(result):
+                if result.error_in_exec or result.error_before_exec:
+                    return
+                res = result.result
+                if res is not None:
+                    txt_counter[0] += 1
+                    name = f"result_{txt_counter[0]:02d}"
+                    if isinstance(res, pd.DataFrame):
+                        name += f"_{res.index.name or 'df'}"
+                        txt_path = out_dir / f"{name}.txt"
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(res.to_string())
+                        print(f"[Auto-Save] Saved DataFrame result to {txt_path}")
+                    elif isinstance(res, (pd.Series, pd.Index)):
+                        txt_path = out_dir / f"{name}.txt"
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(res.to_string())
+                        print(f"[Auto-Save] Saved Series/Index result to {txt_path}")
+            
+            ipy.events.register('post_run_cell', post_run_cell_callback)
+            
+            import IPython.core.display
+            orig_display = IPython.core.display.display
+            
+            def custom_display(*args, **kwargs):
+                for arg in args:
+                    if isinstance(arg, pd.DataFrame):
+                        txt_counter[0] += 1
+                        name = f"display_{txt_counter[0]:02d}_{arg.index.name or 'df'}"
+                        txt_path = out_dir / f"{name}.txt"
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(arg.to_string())
+                        print(f"[Auto-Save] Saved DataFrame display to {txt_path}")
+                    elif isinstance(arg, (pd.Series, pd.Index)):
+                        txt_counter[0] += 1
+                        name = f"display_{txt_counter[0]:02d}"
+                        txt_path = out_dir / f"{name}.txt"
+                        with open(txt_path, 'w', encoding='utf-8') as f:
+                            f.write(arg.to_string())
+                        print(f"[Auto-Save] Saved Series/Index display to {txt_path}")
+                return orig_display(*args, **kwargs)
+                
+            IPython.core.display.display = custom_display
+            import IPython.display
+            IPython.display.display = custom_display
+    except Exception as e:
+        print(f"[Auto-Save] IPython hook setup failed: {e}")
+
+setup_auto_save()
