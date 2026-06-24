@@ -87,24 +87,29 @@ model:
     # n_prior_latents: bumped 16 -> 32. The prior Perceiver is the same primitive
     #   v6 already uses; doubled budget for the same primitive.
     n_prior_latents: 32
-    # image_pool_stride: 1 keeps the un-fused 16x16 grid (the per-view pooler
-    #   consumes it; v6 used stride=2 to max-pool to 8x8 first).
+    # image_pool_stride: 2 keeps v6's 2x2 max-pool (640x16x16 -> 640x8x8 at 512px).
+    #   The per-view current pooler runs on TOP of it, and only above 512px input.
     image_pool_type: max
-    image_pool_stride: 1
+    image_pool_stride: 2
     # highres_skip: OFF by default in v7. The per-view pooler replaces it; re-enable
-    #   via config to recreate v6's "max-pool the un-fused 16x16 grid" skip path.
+    #   via config to recreate v6's "max-pool the un-fused grid" skip path.
     highres_skip: false
     # n_cur_image_latents: K per view for the current-image per-view Perceiver pooler.
-    #   K=64 gives 4*64=256 current image latents (same total count as v6's max-pooled
-    #   256, but learned and content-adaptive).
+    #   K=64 gives 4*64=256 current image latents, matching v6's max-pooled 256, so
+    #   the fusion seq length is 256 current image tokens at every resolution.
+    #   IMPORTANT: the current pooler is SKIPPED at 512x512 input (post-max-pool grid
+    #   is already 8x8 = 64/view -> current path == v6). It only activates above 512
+    #   (e.g. 1024 -> post-max-pool 16x16 -> 64 latents/view). At size: 512 below,
+    #   these cur_pooler_* knobs build the module but it is bypassed at runtime.
     n_cur_image_latents: 64
     cur_pooler_nhead: 8
     cur_pooler_dropout: 0.1
     cur_pooler_ffn_dim: 1024
     # n_prior_image_latents: K per view for the PRIOR-image per-view Perceiver pooler.
-    #   image_pool_stride=1 disabled v6's 8x8 max-pool for both branches, so without
-    #   this the prior image would arrive as 4*16*16=1024 raw tokens. K=32 gives
-    #   4*32=128 prior image latents (cheaper than current; the prior is context).
+    #   Always on (not resolution-gated). At 1024px the post-max-pool prior grid is
+    #   16x16 -> 4*16*16=1024 raw tokens without it; K=32 gives 4*32=128 prior image
+    #   latents (cheaper than current; the prior is context). At 512px it pools the
+    #   8x8 grid 64 -> 32/view.
     n_prior_image_latents: 32
     prv_pooler_nhead: 8
     prv_pooler_dropout: 0.1

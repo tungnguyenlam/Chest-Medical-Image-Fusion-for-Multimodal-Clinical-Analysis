@@ -108,7 +108,7 @@ Subset name auto-resolves: defaults `(0.1, 42)` -> `subset`; otherwise
 | MLDecoder | `src/decoder/MLDecoder.py` |
 | CaMCheX assembly/fusion/head wiring | `src/model/CaMCheXModel.py` |
 | Prior-aware v6 (max-pool image path) | `src/model/PriorAwareV6NanoModel.py` |
-| Prior-aware v7 (per-view Perceiver image pooler; K=64 current, K=32 prior) | `src/model/PriorAwareV7NanoModel.py` |
+| Prior-aware v7 (keeps v6 2x2 max-pool; per-view Perceiver image pooler K=64 current/K=32 prior; current pooler skipped at 512px input, active above) | `src/model/PriorAwareV7NanoModel.py` |
 | Single-view assembly | `src/model/SingleViewModel.py` |
 | ASL loss | `src/loss/AsymetricLoss.py` |
 | CaMCheX dataset/datamodule | `src/dataloader/CaMCheXDataset.py`, `src/dataloader/CaMCheXDataLoader.py` |

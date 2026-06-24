@@ -26,7 +26,7 @@ where each output dimension \(\hat{y}_{ic}\) corresponds to the predicted probab
 \subsection{Overview of the Proposed Model}
 \label{subsec:method_overview}
 
-The proposed model follows a modality-specific encoding and transformer-based fusion \cite{vaswani2017attention} design. First, each input modality is processed by a dedicated encoder. Chest X-ray images are encoded using a lightweight visual backbone. Clinical indication text is encoded using a radiology-domain language model. Vital signs are normalized and projected through a small multilayer perceptron together with their missingness mask. Prior-study information, when available, is encoded separately and used as temporal context.
+The proposed model follows a modality-specific encoding and transformer-based fusion \cite{vaswani2017attention} design. First, each input modality is processed by a dedicated encoder. Chest X-ray images are encoded using a lightweight visual backbone. Clinical indication text is encoded using a radiology-domain language model. Vital signs are normalized and projected through a small multilayer perceptron (MLP) together with their missingness mask. Prior-study information, when available, is encoded separately and used as temporal context.
 
 After encoding, all modality features are projected into a shared latent dimension. Current-study information forms the target stream, while prior-study information forms a memory stream. The fusion module first models interactions among current-study tokens and then allows the current study to attend to prior-study context through cross-attention. This design keeps the current examination as the main prediction target while allowing historical information to support interpretation.
 
@@ -63,7 +63,7 @@ The final fused representation is passed to a multi-label classification head, w
         $\downarrow$ \\
         \textbf{Temporal Cross-Attention (Target Stream attends to Memory Stream Tokens)} \\
         $\downarrow$ \\
-        \textbf{Classification Head (MLDecoder with 26 Pathology Queries)} \\
+        \textbf{Classification Head (ML-Decoder-inspired Head with 26 Queries)} \\
         $\downarrow$ \\
         \textbf{26 Class Probabilities (ASL Loss Optimization)} \\
         \vspace{1cm}
@@ -130,7 +130,7 @@ Clinical indication text provides information about the reason for the examinati
 \end{equation}
 where \(E_{txt}\) represents the pre-trained text language model, \(T_i\) is the input indication text, and \(W_t\) is a learnable projection matrix that maps the language model's hidden representation into the shared latent space.
 
-To reduce computational cost, the text encoder is frozen during training. In some experiments, text embeddings are precomputed before training so that the multimodal model does not need to repeatedly run the language model. This design choice makes the experiments feasible under limited GPU resources, although it also means that the text encoder is not adapted end-to-end to the final classification objective.
+To reduce computational cost, the text encoder is frozen during training. In some experiments, text embeddings are precomputed before training so that the multimodal model does not need to repeatedly run the language model. This design choice makes the experiments feasible under limited Graphics Processing Unit (GPU) resources, although it also means that the text encoder is not adapted end-to-end to the final classification objective.
 
 \subsubsection{Vital Signs Encoder}
 \label{subsubsec:method_vitals_encoder}
@@ -207,7 +207,7 @@ This regularization technique reduces the risk of shortcut learning on historica
 \subsection{Classification Head and Training Objective}
 \label{subsec:method_head_loss}
 
-The fused token sequence is passed to a multi-label classification head. Instead of producing a single global pooled representation, the classifier uses learnable label-query embeddings to attend to the fused multimodal features, following the ML-Decoder design \cite{ridnik2023mldecoder}. Let the learnable label queries for the \(C\) target findings be:
+The fused token sequence is passed to a multi-label classification head. Instead of producing a single global pooled representation, the classifier uses learnable query embeddings to attend to the fused multimodal features, inspired by the query-based classification-head design of ML-Decoder \cite{ridnik2023mldecoder}. Let the learnable classification queries be:
 \begin{equation}
     Q^{label} = [q_1, q_2, \dots, q_C] \in \mathbb{R}^{C \times d}
 \end{equation}

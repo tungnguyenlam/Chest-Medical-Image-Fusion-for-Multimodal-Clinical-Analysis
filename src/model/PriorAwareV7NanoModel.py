@@ -1,49 +1,56 @@
-"""Prior-Aware v7 Nano: learned-query image pooler (current and prior).
+"""Prior-Aware v7 Nano: resolution-gated learned-query image pooler.
 
 Successor to ``PriorAwareV6NanoModel``. v7 keeps the v6 encoder, the asymmetric
-current/prior cross-attention fusion, every v6 regularization knob, and the prior
-Perceiver pooler; it changes the **image path**:
+current/prior cross-attention fusion, every v6 regularization knob, **the v6 2x2
+max-pool**, and the prior Perceiver pooler; it adds a per-view learned-query
+pooler that runs *on top of* the max-pool and only when it buys something:
 
-1. **Current image: per-view learned-query pooler, no 16x16->8x8 max-pool.**
-   The backbone's native 640x16x16 feature grid is kept (no max-pool — pass
-   ``image_pool_stride=1`` so the existing v6 pooler is an identity), then a
-   per-view Perceiver pooler with ``n_cur_image_latents`` (default 64) learned
-   query tokens cross-attends to the 16x16=256 spatial tokens of that view
-   through one ``TransformerDecoder`` block. With 4 views that yields
-   4 * 64 = 256 current image latents — same total count as v6's max-pooled
-   256, but learned and content-adaptive rather than fixed 2x2 windows.
+1. **v6's 2x2 max-pool is kept (``image_pool_stride=2``).** The backbone grid is
+   max-pooled exactly as in v6 (640x16x16 -> 640x8x8 at 512px input). v7 does NOT
+   drop it; the learned query consumes the post-max-pool grid.
 
-2. **Prior image: per-view learned-query pooler, K=32/view.** ``image_pool_stride=1``
-   removed v6's fixed 8x8 max-pool from the *shared* image path, which would
-   otherwise leave the prior image at the full 4*16*16=1024 tokens. A second
-   per-view Perceiver pooler (``n_prior_image_latents``, default 32) restores a
-   cheap, content-adaptive reduction symmetric with the current path:
-   4 * 32 = 128 prior image latents instead of 1024 raw tokens.
+2. **Current image: per-view learned-query pooler, gated on input resolution.**
+   A per-view Perceiver with ``n_cur_image_latents`` (default 64) learned query
+   tokens cross-attends to the post-max-pool grid of each view through one
+   ``TransformerDecoder`` block -> K latents/view. It is **skipped at 512x512
+   input**, where the post-max-pool grid is already 8x8 = 64 tokens/view: pooling
+   that further would only lose information for no resolution gain (the design-doc
+   risk #1), so at 512 the current path is byte-for-byte v6 (max-pooled flat
+   tokens, 4*64 = 256). Above 512 (e.g. 1024 -> 32x32 -> max-pool -> 16x16) the
+   pooler runs: K=64/view -> 4*64 = 256 latents, so the fusion sequence length is
+   256 current image tokens at *every* resolution. The query is what decouples
+   fusion cost from input resolution.
 
-3. **Prior memory pooler: K=32 (was 16).** Same Perceiver primitive v6 already
+3. **Prior image: per-view learned-query pooler, K=32/view (always on).** A second
+   per-view Perceiver (``n_prior_image_latents``, default 32) reduces the prior
+   image to 4*32 = 128 latents. It is NOT resolution-gated (the user's
+   "current-only" choice); at 1024px the un-pooled prior would be 4*16*16 = 1024
+   tokens, which this avoids.
+
+4. **Prior memory pooler: K=32 (was 16).** Same Perceiver primitive v6 already
    uses on the *full* prior memory; doubled budget. ``n_prior_latents=32`` passed
    up to ``PriorAwareV6NanoModel``. (This is distinct from the per-view prior
    *image* pooler above: this one selects across all prior modalities.)
 
-4. **High-res skip disabled by default.** v6's ``highres_skip`` is a max-pool
-   over the un-fused current image tokens; the per-view pooler supersedes it
-   (the pooler is the new "what to attend to" mechanism). Re-enable via config
-   to recreate the v6 behaviour.
+5. **High-res skip disabled by default.** v6's ``highres_skip`` is a max-pool
+   over the un-fused current image tokens; the per-view pooler supersedes it.
+   Re-enable via config to recreate the v6 behaviour.
 
 Per-token layout (defaults: d_model=640, n_cur_image_latents=64, n_prior_image_latents=32, 4 views, n_text_tokens=2):
-    current (tgt):   256 image (4*64) + 2 clinical + 1 vitals            = 259
+    current (tgt) @512:  256 image (4*8*8, pooler skipped) + 2 clinical + 1 vitals       = 259
+    current (tgt) @1024: 256 image (4*64 latents)          + 2 clinical + 1 vitals       = 259
     prior  (memory): 1 sentinel + 128 image (4*32) + 2 clin + 2 report + 1 vitals + 1 label = 135
     prior latents:   K=32 (was 16) after selective pooling of the full prior memory
 
-Not checkpoint-compatible with v6: the per-view poolers are new, the prior memory K
-doubled, and ``image_pool_stride=1`` keeps the un-fused 16x16 grid (v6 used stride 2).
+Not checkpoint-compatible with v6: the per-view poolers are new and the prior
+memory K doubled. The image path geometry (max-pool, stride 2) matches v6.
 
 Risks acknowledged in ``docs/learned_query_image_pooling.md``:
 - Per-view pooler fights the small-finding thesis if queries collapse; the primary
   readout is the small-finding-subset mAP, not overall mAP.
 - Spatial grounding: Grad-CAM will need to attribute through the pooler's
-  cross-attention weights (a follow-up; the 16x16 grid is still recoverable as
-  ``cur_block`` until after pooling).
+  cross-attention weights (a follow-up; the post-max-pool grid is still
+  recoverable as ``cur_block`` until after pooling).
 """
 
 from __future__ import annotations
@@ -66,6 +73,14 @@ from src.model.PriorAwareV6NanoModel import (
     PriorAwareV6NanoModel,
 )
 
+# Input edge length (px) at which the current-image learned-query pooler is
+# skipped. At 512 the backbone /32 grid is 16x16 and v6's 2x2 max-pool takes it
+# to 8x8 = 64 tokens/view; pooling that further loses information for no
+# resolution gain, so the current path falls back to v6 exactly. Hardcoded (the
+# user's explicit choice over a config knob); the equivalent condition is a
+# post-max-pool grid of 8x8.
+SKIP_CUR_POOLER_INPUT_SIZE = 512
+
 
 class PriorAwareV7NanoModel(PriorAwareV6NanoModel):
     """Prior-aware v7: per-view learned-query image pooler (current) + K=32 prior latents.
@@ -80,8 +95,13 @@ class PriorAwareV7NanoModel(PriorAwareV6NanoModel):
     - ``prv_pooler_nhead`` / ``prv_pooler_dropout`` / ``prv_pooler_ffn_dim`` — prior-image
       pooler decoder knobs (default to 8 / ``dropout`` / ``fusion_ffn_dim``).
     - ``n_prior_latents`` default raised to 32 (was 16 in v6) — the full-memory pooler.
-    - ``image_pool_stride`` default forced to 1 (no 16x16->8x8 max-pool) when not provided.
+    - ``image_pool_stride`` keeps v6's default of 2 (the 2x2 max-pool is retained;
+      the learned query runs on the post-max-pool grid).
     - ``highres_skip`` default forced to ``False`` (pooler supersedes it).
+
+    The current-image pooler is skipped when the input is
+    ``SKIP_CUR_POOLER_INPUT_SIZE`` x ``SKIP_CUR_POOLER_INPUT_SIZE`` (512x512),
+    where the post-max-pool grid is already 8x8 and the current path equals v6.
     """
 
     gradcam_runner_module = "src.interpret.run_prior_gradcam"
@@ -109,7 +129,7 @@ class PriorAwareV7NanoModel(PriorAwareV6NanoModel):
         highres_skip: bool = False,
         background_penalty_lambda: float = 0.0,
         image_pool_type: str = "max",
-        image_pool_stride: int = 1,
+        image_pool_stride: int = 2,
         text_embed_dim: int = 768,
         n_text_tokens: int = 2,
         fusion_ffn_dim: int = 1024,
@@ -162,10 +182,12 @@ class PriorAwareV7NanoModel(PriorAwareV6NanoModel):
         self.n_cur_image_latents = n_cur_image_latents
 
         # Per-view Perceiver pooler for the current image. K=64 by default, applied
-        # independently to each of the 4 views. K=64 was chosen so the post-pool
-        # token count (4*64=256) matches v6's max-pooled 256 and the fusion
-        # sequence length stays the same — the difference is content-adaptive
-        # selection vs. fixed 2x2 max-pool windows.
+        # independently to each of the 4 views, and only above 512px input (see
+        # SKIP_CUR_POOLER_INPUT_SIZE). K=64 was chosen so the post-pool token count
+        # (4*64=256) matches v6's max-pooled 256 -> the fusion sequence length is
+        # 256 current image tokens at every resolution. At 1024px the pooler turns
+        # the post-max-pool 16x16 grid into 64 content-adaptive latents/view; at
+        # 512px it is skipped and the 8x8 max-pooled grid is used directly (= v6).
         if n_cur_image_latents > 0:
             self.cur_image_queries = nn.Parameter(
                 torch.randn(n_cur_image_latents, d_model)
@@ -191,11 +213,12 @@ class PriorAwareV7NanoModel(PriorAwareV6NanoModel):
 
         # Per-view Perceiver pooler for the PRIOR image. Same primitive as the
         # current-image pooler but a smaller budget (K=32/view default -> 4*32=128
-        # prior image latents). v7's `image_pool_stride=1` removed the fixed 8x8
-        # max-pool from the shared image path, which would otherwise leave the prior
-        # image at the full 4*16*16=1024 tokens; this learned pooler restores a
-        # cheap, content-adaptive reduction symmetric with the current path instead
-        # of dumping 1024 keys into the prior Perceiver.
+        # prior image latents) and NOT resolution-gated (always on). At 1024px the
+        # post-max-pool prior grid is 16x16 -> 4*16*16=1024 tokens; this learned
+        # pooler keeps the prior cheap (128 latents) instead of dumping 1024 keys
+        # into the prior memory Perceiver. At 512px (post-max-pool 8x8 = 64/view)
+        # it still pools 64 -> 32/view, which is the user's "current-only" choice
+        # for the resolution gate.
         if n_prior_image_latents > 0:
             self.prv_image_queries = nn.Parameter(
                 torch.randn(n_prior_image_latents, d_model)
@@ -271,28 +294,37 @@ class PriorAwareV7NanoModel(PriorAwareV6NanoModel):
 
     def forward(self, data: dict):
         # ---- current branch (tgt) ----------------------------------------
-        # _encode_image_block runs the backbone + 2D pos encoding. With
-        # image_pool_stride=1 the spatial pooler is identity, so cur_block is
-        # (B, S, 640, 16, 16) and cur_slot_valid is (B, S).
+        # _encode_image_block runs the backbone + v6's 2x2 max-pool + 2D pos
+        # encoding. At 512px input cur_block is (B, S, 640, 8, 8); at 1024px it is
+        # (B, S, 640, 16, 16). cur_slot_valid is (B, S).
         cur_block, cur_slot_valid = self._encode_image_block(
             data["img"], data["view_positions"], SEG_CUR_VIEWS
         )
 
         # Confident-background attention penalty (opt-in; pre-norm energy on the
-        # un-fused 16x16 grid, exactly as in v6).
+        # post-max-pool grid, exactly as in v6).
         bg_penalty = None
         if self.background_penalty_lambda > 0.0 and "bg_mask" in data:
             bg_penalty = self.background_penalty_lambda * self._background_penalty(
                 cur_block, cur_slot_valid, data["bg_mask"]
             )
 
-        # Per-view learned-query pooler -> (B, S*K, C) image latents. Replaces
-        # v6's `einops.rearrange(cur_block, "b s c h w -> b (s h w) c")` flat
-        # reshape (which yielded 256 spatial tokens; now we yield 256 learned
-        # latents with the same count).
-        cur_img_tokens, cur_img_valid = self._pool_current_image_per_view(
-            cur_block, cur_slot_valid
-        )
+        # Resolution gate: skip the current-image pooler at 512x512 (post-max-pool
+        # grid already 8x8). At 512 the current path is byte-for-byte v6 -- the
+        # max-pooled grid flattened to (B, S*H*W, C) -- which is also the fallback
+        # when the pooler is disabled (n_cur_image_latents=0). Above 512 the
+        # per-view learned-query pooler runs -> (B, S*K, C), keeping the current
+        # image at 256 fusion tokens regardless of input resolution.
+        in_h, in_w = data["img"].shape[-2], data["img"].shape[-1]
+        skip_cur_pooler = in_h == SKIP_CUR_POOLER_INPUT_SIZE and in_w == SKIP_CUR_POOLER_INPUT_SIZE
+        if self.cur_image_pooler is not None and not skip_cur_pooler:
+            cur_img_tokens, cur_img_valid = self._pool_current_image_per_view(
+                cur_block, cur_slot_valid
+            )
+        else:
+            ch, cw = cur_block.shape[-2], cur_block.shape[-1]
+            cur_img_tokens = einops.rearrange(cur_block, "b s c h w -> b (s h w) c")
+            cur_img_valid = self._valid_image_tokens(cur_slot_valid, ch, cw)
 
         b, _, cdim = cur_img_tokens.shape
 
@@ -321,9 +353,10 @@ class PriorAwareV7NanoModel(PriorAwareV6NanoModel):
         prv_block, prv_slot_valid = self._encode_image_block(
             data["prior_img"], data["prior_view_positions"], SEG_PRV_VIEWS
         )
-        # Per-view learned-query pooler -> (B, S*K_prv, C). Mirrors the current
-        # image path; without it the un-pooled prior grid would be 4*16*16=1024
-        # tokens (image_pool_stride=1 disabled v6's 8x8 max-pool for both branches).
+        # Per-view learned-query pooler -> (B, S*K_prv, C). Always on (not
+        # resolution-gated). At 1024px the post-max-pool prior grid is 16x16, so
+        # without this the prior image would arrive as 4*16*16=1024 tokens; the
+        # pooler keeps it at 4*K_prv latents instead.
         prv_img_tokens, prv_img_valid = self._pool_prior_image_per_view(
             prv_block, prv_slot_valid
         )

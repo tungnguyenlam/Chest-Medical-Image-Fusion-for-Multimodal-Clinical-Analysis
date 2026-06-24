@@ -1,11 +1,15 @@
-# Learned-Query Current-Image Pooling (design note, not built)
+# Learned-Query Current-Image Pooling (design note, built in v7)
 
-**Status:** promoted to the v7 line. Originally parked as a follow-up to the
-label-graph head; both ideas are now independent successor variants. See
-[`docs/prior_aware_v8_label_graph.md`](prior_aware_v8_label_graph.md) for the
-label-graph head and
+**Status:** built in the v7 line, with the resolution caveat below baked in as a
+runtime gate. v7 keeps v6's 2×2 max-pool and **skips the current pooler at 512px**
+(post-max-pool grid already 8×8 → current path ≡ v6); the pooler only activates
+above 512, where it both carries more signal than a fixed pool and holds the fusion
+token count constant. This is the direct implementation of risk #1's conclusion
+("only nets positive if paired with a resolution bump"). See
 [`training/prior_aware_v7nano/PROPOSAL.md`](../training/prior_aware_v7nano/PROPOSAL.md)
-(to be written) for the v7 plan that picks this up.
+for the v7 plan and `src/model/PriorAwareV7NanoModel.py` (`SKIP_CUR_POOLER_INPUT_SIZE`)
+for the gate. The label-graph head is the separate v8 line
+([`docs/prior_aware_v8_label_graph.md`](prior_aware_v8_label_graph.md)).
 
 ## The idea
 

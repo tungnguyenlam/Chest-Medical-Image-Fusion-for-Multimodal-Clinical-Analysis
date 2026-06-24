@@ -18,13 +18,13 @@ This section details the experimental configuration, hyperparameters, and evalua
 
 \textbf{Epochs and Early Stopping}: Training is run for a maximum of 20 epochs. Early stopping is applied with a patience of 3 validation checks, monitoring the validation Area Under the Precision-Recall Curve (AUPRC) to determine the best model checkpoint.
 
-\textbf{Loss Function}: To address the multi-label long-tailed distribution, Asymmetric Loss (ASL) \cite{ridnik2021asymmetric} is employed. The negative focusing hyperparameter is set to $\gamma_- = 4$ and the positive focusing to $\gamma_+ = 0$, with an asymmetric clipping threshold of $m = 0.05$ to suppress the gradient contributions of easy negative samples.
+\textbf{Loss Function}: To address the multi-label long-tailed distribution, ASL \cite{ridnik2021asymmetric} is employed. The negative focusing hyperparameter is set to $\gamma_- = 4$ and the positive focusing to $\gamma_+ = 0$, with an asymmetric clipping threshold of $m = 0.05$ to suppress the gradient contributions of easy negative samples.
 
-\textbf{Evaluation Metrics}: Performance is measured using Mean Average Precision (mAP) as the primary metric for long-tailed classification, along with Mean Area Under the Receiver Operating Characteristic (mAUROC) and macro-averaged F1 score. For each pathology class \(c\), the Average Precision (AP) is computed over the precision-recall curve as:
+\textbf{Evaluation Metrics}: Performance is measured using mAP as the primary metric for long-tailed classification, along with mAUROC and macro-averaged F1 score. For each pathology class \(c\), the Average Precision (AP) is computed over the precision-recall curve as:
 \begin{equation}
     AP_c = \sum_n (R_n - R_{n-1}) P_n
 \end{equation}
-where \(P_n\) and \(R_n\) are the precision and recall at the \(n\)-th threshold. The overall performance is evaluated using macro Mean Average Precision (mAP):
+where \(P_n\) and \(R_n\) are the precision and recall at the \(n\)-th threshold. The overall performance is evaluated using mAP:
 \begin{equation}
     mAP = \frac{1}{C} \sum_{c=1}^{C} AP_c
 \end{equation}
@@ -37,7 +37,7 @@ where \(P_c\) and \(R_c\) represent the precision and recall for class \(c\) at 
 \subsection{Main Performance of the Proposed Model}
 \label{subsec:results_quantitative}
 
-The performance of all models is evaluated using two primary metrics: Mean Average Precision (mAP) and Mean Area Under the Receiver Operating Characteristic (mAUROC). Given the severe long-tailed distribution of the 26 pathology classes, the performance breakdown is reported across three frequency-based categories:
+The performance of all models is evaluated using two primary metrics: mAP and mAUROC. Given the severe long-tailed distribution of the 26 pathology classes, the performance breakdown is reported across three frequency-based categories:
 \textbf{Head classes} are highly frequent pathologies, e.g., Support Devices, Pleural Effusion, and Cardiomegaly.
 
 \textbf{Medium classes} are moderately frequent findings, e.g., Atelectasis, Pneumothorax, and Edema.
@@ -79,15 +79,17 @@ Table~\ref{tab:contextual_comparison} presents this comparison.
     \centering
     \caption{Contextual comparison with published reference results. Published results are not directly comparable because they use different training settings, data scale, resolution, and pretraining.}
     \label{tab:contextual_comparison}
+    \adjustbox{max width=\textwidth}{%
     \begin{tabular}{lccc}
         \hline
         Method & Setting (Resolution) & mAP & AUROC \\
         \hline
-        CheXFusion \cite{kim2023chexfusion} & Published CXR-LT 2023 ($224 \times 224$) & 0.372 & 0.850 \\
+        CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer fusion, ML-Decoder, weighted ASL, 1024 $\times$ 1024 input resolution) & Published CXR-LT 2023 & 0.372 & 0.850 \\
         CaMCheX \cite{sloan2025camchex} & Published CXR-LT 2023 ($1024 \times 1024$) & 0.576 & 0.916 \\
         Proposed model & This thesis setting ($512 \times 512$) & 0.495 & 0.898 \\
         \hline
-    \end{tabular}
+    \end{tabular}%
+    }
 \end{table}
 
 The published CaMCheX result ($1024 \times 1024$ resolution) is included only as a reference point. Direct comparison is limited because this thesis uses a smaller resource-constrained experimental setting, different preprocessing choices, and a prior-aware extension. While the full CaMCheX system benefits from $1024 \times 1024$ resolution, extensive pretraining, and noisy student training, the proposed model is trained at $512 \times 512$ resolution, yet demonstrates competitive performance of 0.495 mAP and 0.898 AUROC. This validates the effectiveness of the compact prior-aware design under resource limitations.
@@ -145,7 +147,7 @@ To investigate the decision-making process of the prior-aware model and verify w
 \subsubsection{Case Study 1: Cardiomegaly}
 \label{subsubsec:case_cardiomegaly}
 
-Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a cardio-thoracic ratio greater than $0.5$ on a posterior-anterior chest radiograph. In the baseline evaluation, the model achieved high detection performance for this pathology ($\text{AP} = 0.6710$, $\text{AUROC} = 0.8159$). Figure~\ref{fig:fig_cardiomegaly_gradcam} shows the modality attributions for a target patient diagnosed with cardiomegaly.
+Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a cardio-thoracic ratio greater than $0.5$ on a posterior-anterior chest radiograph \cite{danzer1919cardiothoracic}. In the baseline evaluation, the model achieved high detection performance for this pathology ($\text{AP} = 0.6710$, $\text{AUROC} = 0.8159$). Figure~\ref{fig:fig_cardiomegaly_gradcam} shows the modality attributions for a target patient diagnosed with cardiomegaly.
 
 \begin{figure}[H]
      \centering
@@ -179,7 +181,7 @@ As shown in Figure~\ref{fig:fig_cardiomegaly_gradcam}, the model's visual attent
 \subsubsection{Case Study 2: Pneumothorax}
 \label{subsubsec:case_pneumothorax}
 
-Pneumothorax represents a critical condition involving the presence of air in the pleural space, which can lead to lung collapse. Because pneumothorax requires rapid detection and intervention (e.g., chest tube placement), reliable interpretation is essential. The model achieves robust detection for this condition ($\text{AP} = 0.7757$, $\text{AUROC} = 0.9579$). Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
+Pneumothorax represents a critical condition involving the presence of air in the pleural space, which can lead to lung collapse \cite{macduff2010management}. Because pneumothorax requires rapid detection and intervention (e.g., chest tube placement), reliable interpretation is essential \cite{irmici2023cxr_emergency_ai}. The model achieves robust detection for this condition ($\text{AP} = 0.7757$, $\text{AUROC} = 0.9579$). Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
 
 \begin{figure}[H]
      \centering

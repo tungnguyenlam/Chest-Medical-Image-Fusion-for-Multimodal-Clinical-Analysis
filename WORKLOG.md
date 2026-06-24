@@ -2888,3 +2888,137 @@ padded view, one no-prior sample): logits (2,26) finite, prior pooled tokens
 
 **Follow-ups.** K sweep still open (current 16/32/64/96; could add a prior-image
 K sweep too). Grad-CAM for the per-view poolers remains a follow-up.
+
+## 2026-06-24 - Standardize abbreviations in LaTeX report
+
+**Goal.** Standardize all abbreviations in the report by defining them on their first occurrence, using abbreviated forms in all subsequent occurrences, and ensuring all defined abbreviations are included in the List of Abbreviations.
+
+**Changes.**
+- `report/main.tex:112` - Updated the List of Abbreviations to a comprehensive, alphabetized table containing all 29 standard terms used in the thesis.
+- `report/introduction/introduction.tex:5-61` - Defined first occurrences of `ED` (Emergency Departments), `CXR-LT` (Chest X-Ray Long-Tailed), `MIMIC-CXR` (Medical Information Mart for Intensive Care Chest X-Ray), `MIMIC-IV` (Medical Information Mart for Intensive Care IV), `Grad-CAM` (Gradient-weighted Class Activation Mapping), and `AI` (Artificial Intelligence).
+- `report/related_work/related_work.tex:22-102` - Defined first occurrences of `CXR-BERT` (Chest X-Ray Bidirectional Encoder Representations from Transformers), `mAUROC` (Mean Area Under the Receiver Operating Characteristic), `ML-Decoder` (Multi-Label Decoder), `TTA` (Test-Time Augmentation), `CNN` (Convolutional Neural Network), and `AUROC` (Area Under the Receiver Operating Characteristic).
+- `report/eda/eda.tex:101` - Defined first occurrences of `BP` (Blood Pressure) and `O2` (Oxygen).
+- `report/methodology/methodology.tex:29-133` - Defined first occurrences of `MLP` (Multilayer Perceptron), `AP` (Anteroposterior), `PA` (Posteroanterior), `LL` (Left Lateral), and `GPU` (Graphics Processing Unit).
+- `report/results/results.tex:15-40` - Defined first occurrence of `VRAM` (Video Random Access Memory) and switched subsequent occurrences of `mAP`, `mAUROC`, and `ASL` to their abbreviated forms.
+- `report/conclusion/conclusion.tex:4-8` - Switched subsequent occurrences of `ED` and `AP` to their abbreviated forms.
+
+**Reasoning.** This change improves the formatting quality, academic writing consistency, and readability of the thesis report, avoiding redundant definitions and standardizing the nomenclature across all chapters.
+
+**Gotchas.** Recompiled and built `main.pdf` successfully to verify that all package/syntax constraints are satisfied.
+
+## 2026-06-24 - Refine abbreviations list based on feedback
+
+**Goal.** Refine the abbreviations list by excluding common terms (`AI`, `USTH`, `VRAM`), removing the full name expansion for view positions (`AP` as Anteroposterior, `PA` as Posteroanterior, `LL` as Left Lateral), and keeping `AP` strictly mapped to "Average Precision".
+
+**Changes.**
+- `report/main.tex` - Removed `AI`, `USTH`, `VRAM`, `LL`, `PA` from the List of Abbreviations table, and set `AP` to mean "Average Precision" only.
+- `report/introduction/introduction.tex` - Restored `Artificial Intelligence (AI)` back to `AI`.
+- `report/methodology/methodology.tex` - Restored view direction terms `Anteroposterior (AP)`, `Posteroanterior (PA)`, and `Left Lateral (LL)` back to their abbreviated forms `AP`, `PA`, and `LL`.
+- `report/results/results.tex` - Restored `48GB Video Random Access Memory (VRAM)` back to `48GB VRAM`.
+
+**Gotchas.** Recompiled and built `main.pdf` successfully to verify correctness.
+
+## 2026-06-24 — Edit thesis citation usage and bibliography metadata
+
+**Goal.** Edit the thesis bibliography metadata and citation usage to apply specific fixes across the LaTeX source files and `.bib` file.
+
+**Changes.**
+- `report/references.bib` — Updated `sloan2025camchex` author metadata; updated `johnson2023mimiciv` key to `johnson2024mimiciv` and corrected authors, year (2024), version, and DOI; corrected `johnson2023mimicived` authors and DOI; corrected `holste2023cxrlt_physionet` (CXR-LT 2023) authors and DOI; added clinical citations `danzer1919cardiothoracic` (cardiothoracic ratio) and `macduff2010management` (pneumothorax management).
+- `report/introduction/introduction.tex:4-6` — Substituted `johnson2019mimiccxr` (dataset citation) with `irmici2023cxr_emergency_ai` (clinical review) to support the automated CXR interpretation difficulty claim; softened the image-centric model claim by referencing `johnson2019mimiccxr` alongside `irvin2019chexpert`.
+- `report/introduction/introduction.tex:24` — Updated MIMIC-IV citation key to `johnson2024mimiciv`.
+- `report/related_work/related_work.tex:9` — Corrected naming to "the NIH ChestX-ray8/ChestX-ray14 dataset".
+- `report/related_work/related_work.tex:59` — Revised Table 2.1 caption to specify that aggregate results and rankings are summarized from the challenge overview while method descriptions are cited in rows.
+- `report/related_work/related_work.tex:79` — Revised Table 2.2 caption to state mAP grouped values are summarized from the challenge overview.
+- `report/related_work/related_work.tex:98` — Replaced the first sentence of Section 2.6 to strengthen the CaMCheX framework reference.
+- `report/eda/eda.tex:10` — Updated MIMIC-IV citation key to `johnson2024mimiciv`.
+- `report/methodology/methodology.tex:66` — Renamed classification head in figure architecture block to "ML-Decoder-inspired Head".
+- `report/methodology/methodology.tex:210` — Modified classification head section text to refer to "learnable query embeddings" and "inspired by the query-based classification-head design of ML-Decoder" to avoid overclaiming exact reproduction.
+- `report/results/results.tex:82-91` — Corrected Table 4.2 to show CheXFusion's correct resolution (1024x1024) and detailed method configuration (ConvNeXt-S, multi-view Transformer fusion, ML-Decoder, weighted ASL) and wrapped the table in an `adjustbox` to prevent overflow.
+- `report/results/results.tex:148,182` — Added separate clinical citations `danzer1919cardiothoracic` and `macduff2010management` for cardiomegaly and pneumothorax clinical claims in the Grad-CAM case studies paragraphs.
+
+**Reasoning.** We applied precise modifications to align all citations with their specific database releases, methodologies, and clinical domains. No unverified claims or new dataset audits were introduced, and all edits were verified by compiling the LaTeX document successfully using `make`.
+
+**Gotchas.** Updating the key name `johnson2023mimiciv` to `johnson2024mimiciv` required finding all occurrences across the `.tex` files. Table 4.2 width grew significantly due to the detailed CheXFusion configuration description, which was solved by wrapping it in a text-width-bounded `adjustbox`.
+
+**Follow-ups.** None required. The thesis source compiles perfectly into the output PDF.
+
+## 2026-06-24 - v7nano: keep v6 max-pool, resolution-gate the current pooler (skip at 512)
+
+**Goal.** User clarified the intended v7 image-path design, which diverged from
+what was implemented. They want v6's 2x2 max-pool *kept*, the learned-query
+current pooler running *on top of* it, and the current pooler *skipped at 512x512*
+(post-max-pool grid is already 8x8 = 64 tokens/view, so the current path equals
+v6 there). The pooler should only do work above 512 (e.g. 1024 -> 32x32 ->
+max-pool -> 16x16 -> K=64 latents/view). Scope: current path only (prior keeps
+its K=32/view pooler, always on). Trigger: hardcoded 512.
+
+**Changes.**
+- `src/model/PriorAwareV7NanoModel.py`:
+  - Added module constant `SKIP_CUR_POOLER_INPUT_SIZE = 512`.
+  - Constructor default `image_pool_stride` 1 -> 2 (restore v6's 2x2 max-pool).
+    This was the core divergence: the prior implementation set stride=1 (max-pool
+    removed) and ran K=64 on the raw 16x16 grid.
+  - `forward`: gate the current pooler on `data["img"]` spatial size. When input
+    is exactly 512x512 (or the pooler is disabled), fall back to v6's flat
+    `einops.rearrange(cur_block, "b s c h w -> b (s h w) c")` + `_valid_image_tokens`
+    over the post-max-pool 8x8 grid (256 tokens, byte-for-byte v6). Above 512 the
+    per-view Perceiver runs as before. cur_block is now post-max-pool.
+  - Rewrote module + class docstrings and the current/prior pooler construction
+    comments to describe "max-pool kept + resolution gate" instead of "max-pool
+    removed, stride=1".
+- `training/prior_aware_v7nano/config.yaml`: `image_pool_stride` 1 -> 2; comments
+  now flag that at the default `size: 512` the current pooler is bypassed at
+  runtime (so the cur_pooler_* knobs build a module that is skipped until >512px).
+- `training/prior_aware_v7nano/{PROPOSAL.md,README.md}`: thesis, v6->v7 delta
+  tables, per-token layouts (now show @512 vs @1024), knobs, ablation grids (the
+  headline experiment is now `size: 1024`, since the pooler is inert at 512),
+  risks, and open-question sections all retargeted.
+- `docs/learned_query_image_pooling.md`: status flipped from "promoted to v7
+  line" to "built in v7, with the resolution caveat baked in as a runtime gate";
+  points at `SKIP_CUR_POOLER_INPUT_SIZE`.
+- `AGENTS.md`: component-map v7 row notes max-pool kept + current pooler skipped
+  at 512.
+
+**Reasoning.** This is the direct implementation of risk #1 in the design note
+("only nets positive if paired with a resolution bump; pooling current at 512px
+would just lose information for no gain"). Keeping the max-pool means the fusion
+token count is a constant 256 current image tokens at every resolution: at 512
+it's 4 views x 8x8 max-pooled cells, at 1024 it's 4 views x K=64 learned latents.
+So fusion O(N^2) cost never changes; the pooler is purely a resolution-decoupling
+mechanism. Gating on the *input* pixel size (rather than the post-max-pool grid)
+honors the user's literal "hardcode 512" choice; the equivalent grid condition is
+8x8, noted in comments. The fallback when skipping reuses the exact v6 code path
+(`_valid_image_tokens` + flat rearrange), so v7@512 current == v6@512 current and
+there is no second code path to maintain.
+
+**Assumptions.**
+- Prior per-view pooler stays always-on (user's explicit "current-only" gate).
+  At 512 this makes the *prior* path differ from v6 (128 latents vs 256 tokens);
+  the user accepted that. Only the current path is claimed to equal v6 at 512.
+- "512x512" means exactly H==W==512 on `data["img"]`. Non-square or other sizes
+  (e.g. 768) run the pooler.
+
+**Gotchas.**
+- At the shipped default `size: 512`, the current pooler is dead weight at
+  runtime (built but bypassed). The `cur_pooler_*` knobs only matter once you
+  train at >512. Flagged in config + README so nobody concludes "the pooler does
+  nothing" from a 512 run.
+- This is NOT checkpoint-compatible with the previous v7 implementation (which
+  had stride=1 and always-on current pooler) nor with v6 (new pooler params,
+  doubled prior K). Train fresh.
+- The previous WORKLOG entries (2026-06-24 "Implement v7 nano" and "add
+  learned-query pooler on the prior image path") describe the stride=1 design
+  that this entry supersedes; they are left intact for history.
+
+**Verification.** Throwaway smoke test (fresh weights, pretrained=False,
+precomputed text embeddings): forward at 512 and 1024 both yield (2, 26) logits;
+backward at 1024 gives finite grads on `cur_image_queries`; backward at 512
+leaves `cur_image_queries.grad is None` (confirming the pooler is bypassed).
+Test file removed after passing.
+
+**Follow-ups.**
+- Consider symmetrically gating the prior pooler at 512 if a future ablation
+  wants v7@512 to equal v6 on *both* branches.
+- The real v7 experiment is at `size: 1024` (the pooler is inert at 512); needs
+  GPU memory headroom. Grad-CAM through the pooler cross-attention is still a
+  follow-up and only relevant above 512.

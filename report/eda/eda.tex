@@ -7,7 +7,7 @@ This section presents an exploratory analysis of the dataset used in this thesis
 \subsection{Dataset Cohort and Subsets}
 \label{subsec:eda_cohort}
 
-The dataset used in this thesis is constructed from chest X-ray studies and associated clinical information. The image component is derived from MIMIC-CXR \cite{johnson2019mimiccxr}, while the clinical context is obtained from associated emergency department and hospital records \cite{johnson2023mimiciv,johnson2023mimicived}. Each sample corresponds to a current chest X-ray study with available target labels defined by the CXR-LT setting \cite{holste2024cxrlt,holste2023cxrlt_physionet} and, when possible, linked clinical indication text, vital signs, and prior-study information.
+The dataset used in this thesis is constructed from chest X-ray studies and associated clinical information. The image component is derived from MIMIC-CXR \cite{johnson2019mimiccxr}, while the clinical context is obtained from associated emergency department and hospital records \cite{johnson2024mimiciv,johnson2023mimicived}. Each sample corresponds to a current chest X-ray study with available target labels defined by the CXR-LT setting \cite{holste2024cxrlt,holste2023cxrlt_physionet} and, when possible, linked clinical indication text, vital signs, and prior-study information.
 
 The cohort construction process follows several filtering steps. First, chest X-ray studies are selected according to the target classification setting. Second, studies are matched with available clinical information, including indication text and structured vital signs. Third, prior-study information is identified for patients who have previous chest X-ray examinations before the current study. Cases with missing modalities are handled according to the preprocessing strategy described in Section~\ref{subsec:method_preprocessing}.
 
@@ -63,8 +63,6 @@ Figure~\ref{fig:label_cooccurrence} shows the co-occurrence rates between differ
 
 Clinical indication text indicates the reason for imaging (e.g., symptoms or clinical queries) and is available at the time of examination. Unlike radiology reports written post-interpretation, indication text represents realistic input context \cite{sloan2025camchex}. The text modality varies in length and content, ranging from short symptoms to detailed clinical summaries.
 
-Figure~\ref{fig:text_length_distribution} shows the distribution of clinical indication text lengths.
-
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.85\textwidth]{img/text_length_distribution.png}
@@ -74,7 +72,6 @@ Figure~\ref{fig:text_length_distribution} shows the distribution of clinical ind
 
 Figure~\ref{fig:text_length_distribution} shows the distribution of clinical indication text lengths, indicating a median length of approximately 12 words with a long tail extending past 50 words. For modelling, this right-skewed distribution suggests that a relatively short text sequence length is sufficient to capture most clinical indication details, allowing the text encoder to use a moderate maximum token limit to preserve context while minimizing computational costs.
 
-Table~\ref{tab:common_text_terms} lists frequent clinical terms found in the indication text.
 
 \begin{table}[htbp]
     \centering
@@ -98,9 +95,8 @@ Table~\ref{tab:common_text_terms} shows the most frequent terms and demographic 
 \subsection{Vital Signs and Missingness Analysis}
 \label{subsec:eda_vitals}
 
-Structured vital signs represent physiological states (e.g., temperature, heart rate, respiratory rate, blood pressure, and oxygen saturation) recorded near the time of imaging. To utilize incomplete physiological records without discarding studies, this thesis employs a missingness-aware representation that combines imputed values with explicit missingness masks.
+Structured vital signs represent physiological states (e.g., temperature, heart rate, respiratory rate, blood pressure (BP), and oxygen (O2) saturation) recorded near the time of imaging. To utilize incomplete physiological records without discarding studies, this thesis employs a missingness-aware representation that combines imputed values with explicit missingness masks.
 
-Table~\ref{tab:vitals_summary} summarizes the distribution and missingness of each vital sign.
 
 \begin{table}[htbp]
     \centering
@@ -121,8 +117,6 @@ Table~\ref{tab:vitals_summary} summarizes the distribution and missingness of ea
 \end{table}
 
 Table~\ref{tab:vitals_summary} shows the distribution and missingness rates of vital sign variables. Extreme minimum and maximum values indicate the presence of data-entry errors and physiological outliers (e.g., a diastolic blood pressure of $7,698.90\text{ mmHg}$). For modelling, these extreme values motivate the implementation of robust preprocessing, such as outlier clipping and training-set-based z-score normalization, to prevent extreme values from distorting the model's feature space.
-
-Figure~\ref{fig:vitals_missingness} visualizes the missingness pattern across vital sign variables.
 
 \begin{figure}[htbp]
     \centering
