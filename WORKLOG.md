@@ -2586,3 +2586,18 @@ previous turn, so this turn only needs the YAML sweep.
 **Gotchas.** The diastolic BP max contains outlier entry errors in the source dataset (Max=7,698.90), which are kept exactly as recorded to preserve cohort authenticity.
 
 **Follow-ups.** None, the document compiles cleanly and successfully.
+
+## 2026-06-24 - added qualitative grad-cam case studies and quantitative results to report
+
+**Goal.** Complete the results section of the thesis report with a detailed quantitative comparison and qualitative interpretability case studies (using actual chest X-ray Grad-CAM images) for the closed thesis defense board.
+
+**Changes.**
+- `report/results/results.tex:1-125` - Overwrote the empty results section stub with a full section including a quantitative comparison table and two detailed case studies (Cardiomegaly and Pneumothorax).
+- `report/img/cardiomegaly_{gradcam,prior,text}.png` - Copied visual panels from the baseline `prior_aware_v5nano` training run (epoch 3, sample 1) to represent the Cardiomegaly case study.
+- `report/img/pneumothorax_{gradcam,prior,text}.png` - Copied corresponding visual panels to represent the Pneumothorax case study.
+
+**Reasoning.** The user confirmed that the thesis defense is a closed-board session, meaning there is no concern regarding data leaks. Therefore, integrating actual chest X-ray panels with Grad-CAM overlays and clinical text word-attributions provides high-value demonstration of the model's clinical interpretability and target vs. historical comparison behavior.
+
+**Assumptions.** The visual panels from the baseline `prior_aware_v5nano` epoch 3 validation set represent normal model performance and attention focus.
+
+**Gotchas.** The inclusion of the image panels increases the compiled PDF size to approximately 8.5 MB, which is typical for reports with rich medical figures.

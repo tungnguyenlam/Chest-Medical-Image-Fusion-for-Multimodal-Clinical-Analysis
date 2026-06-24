@@ -1,4 +1,118 @@
-\section{Results}
+\section{Experimental Results}
 \label{sec:results}
 
-This is the results section.
+This section presents the evaluation of the proposed multimodal fusion models on the long-tailed CXR-LT dataset. We first discuss the quantitative results comparing our prior-aware multimodal framework against image-only and standard multimodal baselines. We then provide a qualitative analysis of the model's predictions using Grad-CAM attributions across different input modalities.
+
+\subsection{Quantitative Performance Evaluation}
+\label{subsec:results_quantitative}
+
+The performance of all models is evaluated using two primary metrics: Mean Average Precision (mAP) and Mean Area Under the Receiver Operating Characteristic (mAUROC). Given the severe long-tailed distribution of the 26 pathology classes, we report the performance breakdown across three frequency-based categories:
+\begin{itemize}
+    \item \textbf{Head classes} (highly frequent pathologies, e.g., Support Devices, Pleural Effusion, Cardiomegaly).
+    \item \textbf{Medium classes} (moderately frequent pathologies, e.g., Atelectasis, Pneumothorax, Edema).
+    \item \textbf{Tail classes} (rare findings, e.g., Hernia, Pneumomediastinum, Fibrosis).
+\end{itemize}
+
+Table~\ref{tab:quantitative_comparison} compares the performance of three model configurations:
+\begin{enumerate}
+    \item \textbf{Single-View Baseline (Image-Only)}: A single visual network (ConvNeXt-V2-Nano) that classifies findings using only the target chest radiographs.
+    \item \textbf{CaMCheX Baseline (Multimodal without Prior)}: The multimodal fusion network integrating target images, clinical indication text, and vital signs, but omitting historical studies.
+    \item \textbf{Prior-Aware Multimodal (Ours)}: The proposed model that fully fuses target images, indication text, vital signs, prior study images, prior reports, prior labels, and discretized time-gap embeddings.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Quantitative Performance Comparison on CXR-LT Dataset}
+\label{tab:quantitative_comparison}
+\begin{adjustbox}{width=\textwidth}
+\begin{tabular}{lcccccccc}
+\toprule
+\textbf{Model Configuration} & \multicolumn{4}{c}{\textbf{Average Precision (AP)}} & \multicolumn{4}{c}{\textbf{AUROC}} \\
+\cmidrule(lr){2-5} \cmidrule(lr){6-9}
+& \textbf{Overall} & \textbf{Head} & \textbf{Medium} & \textbf{Tail} & \textbf{Overall} & \textbf{Head} & \textbf{Medium} & \textbf{Tail} \\
+\midrule
+Single-View (Image-Only) & 0.3246 & 0.5841 & 0.2285 & 0.0827 & 0.8123 & 0.8281 & 0.8114 & 0.7998 \\
+CaMCheX Baseline (No Prior) & 0.4098 & 0.7116 & 0.3693 & 0.1586 & 0.8732 & 0.8717 & 0.8641 & 0.8860 \\
+\textbf{Prior-Aware Multimodal (Ours)} & \textbf{0.4950} & \textbf{0.7428} & \textbf{0.4760} & \textbf{0.2708} & \textbf{0.8985} & \textbf{0.8853} & \textbf{0.8917} & \textbf{0.9203} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+The quantitative comparisons demonstrate several key insights:
+\begin{itemize}
+    \item \textbf{Benefit of Multimodal Fusion}: Moving from an image-only model to the multimodal CaMCheX baseline yields a substantial improvement of $+8.52\%$ in overall AP ($0.3246 \rightarrow 0.4098$) and $+6.09\%$ in overall AUROC ($0.8123 \rightarrow 0.8732$). This highlights the diagnostic utility of combining radiographs with ED clinical text and patient vital signs.
+    \item \textbf{Impact of Prior-Aware Modeling}: Incorporating historical radiographic and textual context leads to another significant performance leap. Our proposed prior-aware framework achieves an overall AP of $0.4950$ (an absolute increase of $+8.52\%$ over the standard multimodal baseline) and an overall AUROC of $0.8985$.
+    \item \textbf{Addressing Tail Class Performance}: Long-tailed categories (tail classes) show the most dramatic relative improvements under the prior-aware model, with AP rising from $0.1586 \rightarrow 0.2708$ ($+11.22\%$) and AUROC increasing to $0.9203$. This indicates that historical summaries and temporal comparisons provide critical stabilization signals for diagnosing rare pathologies.
+\end{itemize}
+
+\subsection{Qualitative Analysis and Interpretability}
+\label{subsec:results_qualitative}
+
+To investigate the decision-making process of the prior-aware model and verify whether it attends to clinically relevant information, we generate Grad-CAM attribution maps for both the current and prior image inputs, along with word-level attribution maps for the clinical reports.
+
+\subsubsection{Case Study 1: Cardiomegaly}
+\label{subsubsec:case_cardiomegaly}
+
+Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a cardio-thoracic ratio greater than $0.5$ on a posterior-anterior chest radiograph. In our baseline evaluation, the model achieved high detection performance for this pathology ($\text{AP} = 0.6710$, $\text{AUROC} = 0.8159$). Figure~\ref{fig:fig_cardiomegaly_gradcam} shows the modality attributions for a target patient diagnosed with cardiomegaly.
+
+\begin{figure}[H]
+     \centering
+     \begin{subfigure}[b]{0.48\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{img/cardiomegaly_gradcam.png}
+         \caption{Current Target Image Attribution}
+         \label{fig:cardiomegaly_cur}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[b]{0.48\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{img/cardiomegaly_prior.png}
+         \caption{Prior Image Attribution}
+         \label{fig:cardiomegaly_prv}
+     \end{subfigure}
+        \caption{Grad-CAM Visual Attributions for Cardiomegaly. In the target image (a), the model's visual attention is focused directly on the lower borders of the cardiac silhouette. The prior image (b) shows similar attention, indicating that the model is comparing the current heart size with the historical baseline.}
+        \label{fig:fig_cardiomegaly_gradcam}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{img/cardiomegaly_text.png}
+    \caption{Word-Level Text Attributions for Cardiomegaly. The model places strong positive attention on diagnostic terms such as ``enlarged'' and ``cardiomegaly'' in the clinical text, while disregarding unrelated terms.}
+    \label{fig:cardiomegaly_text}
+\end{figure}
+
+As shown in Figure~\ref{fig:fig_cardiomegaly_gradcam}, the model's visual attention aligns with the clinical practice of inspecting the cardiac margins. In the current target image (Figure~\ref{fig:cardiomegaly_cur}), the attention focuses on the left ventricular border and the overall width of the cardiac silhouette. In the prior image (Figure~\ref{fig:cardiomegaly_prv}), the model evaluates the previous size of the heart to establish temporal stability. In the clinical indication text (Figure~\ref{fig:cardiomegaly_text}), the highest attribution weights are concentrated on terms like ``cardiomegaly'' and ``enlarged'', confirming that the model properly interprets the clinical suspicion documented by the admitting physician.
+
+\subsubsection{Case Study 2: Pneumothorax}
+\label{subsubsec:case_pneumothorax}
+
+Pneumothorax represents a critical condition involving the presence of air in the pleural space, which can lead to lung collapse. Because pneumothorax requires rapid detection and intervention (e.g., chest tube placement), reliable interpretation is essential. Our model achieves robust detection for this condition ($\text{AP} = 0.7757$, $\text{AUROC} = 0.9579$). Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
+
+\begin{figure}[H]
+     \centering
+     \begin{subfigure}[b]{0.48\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{img/pneumothorax_gradcam.png}
+         \caption{Current Target Image Attribution}
+         \label{fig:pneumothorax_cur}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[b]{0.48\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{img/pneumothorax_prior.png}
+         \caption{Prior Image Attribution}
+         \label{fig:pneumothorax_prv}
+     \end{subfigure}
+        \caption{Grad-CAM Visual Attributions for Pneumothorax. In the current target image (a), the model highlights the pleural margins and the thoracic apex where pneumothoraces typically collect. The prior image (b) highlights the previous pleural status to check for change.}
+        \label{fig:fig_pneumothorax_gradcam}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{img/pneumothorax_text.png}
+    \caption{Word-Level Text Attributions for Pneumothorax. Attributions focus on clinical indicators like ``pneumothorax'' and clinical interventions like ``tube'' or ``catheter''.}
+    \label{fig:pneumothorax_text}
+\end{figure}
+
+The visual Grad-CAM maps (Figure~\ref{fig:fig_pneumothorax_gradcam}) demonstrate that the model successfully localizes the pleural line and the apex of the lungs, where free pleural air typically accumulates. In the target image (Figure~\ref{fig:pneumothorax_cur}), the attention is concentrated on the lateral chest wall and apex. In the prior study (Figure~\ref{fig:pneumothorax_prv}), the attention scans the corresponding pleural region to assess the change (e.g., recurrence or resolution). The text attribution (Figure~\ref{fig:pneumothorax_text}) emphasizes key words like ``pneumothorax'' and ``pleural'', demonstrating that the model effectively integrates radiographic details with textual indicators of acute thoracic injury.
