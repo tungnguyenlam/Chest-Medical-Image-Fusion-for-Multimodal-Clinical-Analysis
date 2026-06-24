@@ -5,7 +5,7 @@ echo 'source ~/miniforge3/bin/activate' >> ~/.bashrc
 
 conda create -n camchex python=3.13 libjpeg-turbo -y
 conda activate camchex
-conda install -c conda-forge p7zip -y       # only needed to (un)bundle subsets
+conda install -c conda-forge p7zip -y       
 
 pip install uv
 

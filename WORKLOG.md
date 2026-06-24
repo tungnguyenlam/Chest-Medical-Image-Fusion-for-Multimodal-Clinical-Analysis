@@ -3022,3 +3022,20 @@ Test file removed after passing.
 - The real v7 experiment is at `size: 1024` (the pooler is inert at 512); needs
   GPU memory headroom. Grad-CAM through the pooler cross-attention is still a
   follow-up and only relevant above 512.
+
+## 2026-06-25 - commit and push caching optimizations and build setup changes
+
+**Goal.** Commit and push pending changes: persistent state caching in the data preparation script, package build dependencies setup, and set-up script comments.
+
+**Changes.**
+- `scripts/prepare_and_cache.py:73` - Implement persistent state loading/saving (`.prepare_cache_state.json`), CSV content signatures hashing (to avoid stage 04 rebuilds when images are unchanged), and skipping of previously-recorded corrupt files.
+- `pyproject.toml:1` - Define `flash-attn` extra build dependency (`psutil`) for `uv` environment isolation.
+- `scripts/set-up/set_up.sh:8` - Minor clean-up in script comments.
+
+**Reasoning.**
+- Re-running the preparation pipeline without caching took significant time due to parquet rebuilding. Content signatures check avoids redundant builds of Stage 4.
+- Known corrupt images are cached so that we don't attempt to re-decode them on subsequent runs, speeding up caching and troubleshooting.
+- The `pyproject.toml` configuration ensures `uv` resolves dependencies correctly during builds.
+
+**Follow-ups.**
+- Confirm state-saving logic correctly handles any concurrent write operations.

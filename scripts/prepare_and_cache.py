@@ -24,17 +24,40 @@ exact string stage 04 stores in the parquet and that training passes to
 train time (no rebuild). ``--cache-dir``/``--size``/``--channel-mode`` must
 therefore match the training config (defaults already do).
 
+Incremental / resumable
+-----------------------
+The script is safe to re-run repeatedly; it only does the *new* work:
+
+  * Channel cache -- content-addressed, so only images without a cached ``.npy``
+    are decoded. Add images, re-run, and existing channels are left untouched.
+  * Corrupt images -- recorded in ``.prepare_cache_state.json`` and skipped on
+    subsequent runs instead of being re-decoded (and re-failing) every time.
+  * Stage 04 parquets -- rebuilt only when the image set actually changed (a new
+    path appears / one is dropped), new channels were built, the parquet is
+    missing, or ``--force-stage04`` is given. Otherwise the (expensive) build is
+    skipped. Label-only edits to existing rows are NOT detected -- use
+    ``--force-stage04`` for those.
+
+State lives in ``data/data-camchex/.prepare_cache_state.json`` and is keyed on
+(subset, channel-mode, size, cache-dir); change any of those and stale state is
+ignored. ``--reset-state`` clears it (re-attempts known-corrupt images);
+``--no-state`` runs without reading/writing it.
+
 Examples::
 
-    python scripts/prepare_and_cache.py                 # full pipeline + cache
+    python scripts/prepare_and_cache.py                 # full pipeline + cache (resumes)
     python scripts/prepare_and_cache.py --skip-prepare  # only warm the cache
     python scripts/prepare_and_cache.py --skip-precompute  # only run 01-04
+    python scripts/prepare_and_cache.py --force-stage04 # rebuild parquets unconditionally
+    python scripts/prepare_and_cache.py --reset-state   # forget corrupt list, full reconcile
 """
 from __future__ import annotations
 
 import argparse
 import functools
+import hashlib
 import importlib.util
+import json
 import multiprocessing
 import os
 import subprocess
@@ -64,6 +87,7 @@ DATA_CAMCHEX_ROOT = ROOT / "data" / "data-camchex"
 # _SOURCE_BY_SUBSET). kaggle is the only one that emits a "kaggle" tag.
 _SOURCE_TAG = {"full": "mimic", "subset": "mimic", "kaggle": "kaggle"}
 SPLITS = ["train", "development", "test"]
+STATE_PATH = DATA_CAMCHEX_ROOT / ".prepare_cache_state.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,9 +121,77 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-prepare", action="store_true", help="Skip stages 01-04; only warm the channel cache.")
     p.add_argument("--skip-precompute", action="store_true", help="Skip the channel-cache build; only run stages 01-04.")
     p.add_argument("--overwrite", action="store_true", help="Rebuild every channel cache entry even if present.")
+    p.add_argument("--force-stage04", action="store_true",
+                   help="Always rebuild the prior-aware parquets, even if the image set is unchanged.")
+    p.add_argument("--reset-state", action="store_true",
+                   help="Ignore and delete the saved incremental state (re-attempt known-corrupt images, force a full reconcile).")
+    p.add_argument("--no-state", action="store_true",
+                   help="Do not read or write the incremental state file for this run.")
     args = p.parse_args()
     args.workers = max(1, int(cpu_count() * args.cpu_fraction))
     return args
+
+
+# ---- incremental run state -------------------------------------------------
+
+def _state_key(args: argparse.Namespace) -> dict:
+    """Identity of the cache this state describes. A change to any of these means
+    a different cache, so stale state must be ignored rather than reused."""
+    return {
+        "subset": args.subset,
+        "channel_mode": args.channel_mode,
+        "size": args.size,
+        "cache_dir": args.cache_dir,
+    }
+
+
+def load_state(args: argparse.Namespace) -> dict:
+    """Load the persisted incremental state, or {} if absent/stale/disabled."""
+    if args.no_state or args.reset_state:
+        return {}
+    try:
+        state = json.loads(STATE_PATH.read_text())
+    except (FileNotFoundError, ValueError):
+        return {}
+    if state.get("key") != _state_key(args):
+        print("[state] run config differs from last run; ignoring stale state.", flush=True)
+        return {}
+    return state
+
+
+def save_state(args: argparse.Namespace, state: dict) -> None:
+    """Atomically persist ``state`` (no-op under --no-state)."""
+    if args.no_state:
+        return
+    state["key"] = _state_key(args)
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_PATH.with_name(STATE_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
+    os.replace(tmp, STATE_PATH)
+
+
+def csv_path_signatures(source_tag: str) -> dict:
+    """Order-independent content signature of each stage-03 split CSV.
+
+    Keyed on the sorted set of image ``path`` strings (+ row count) rather than
+    mtime: stages 01-03 rewrite the CSVs on every run, so mtime always changes
+    even when the content did not. Hashing the sorted paths is stable across
+    reruns and shifts only when images are actually added/removed -- exactly the
+    signal that decides whether stage 04's parquets need rebuilding. (Label-only
+    edits to existing rows are NOT captured; use --force-stage04 for those.)
+    """
+    sigs: dict = {}
+    for split in SPLITS:
+        p = DATA_CAMCHEX_ROOT / f"03_{source_tag}_{split}.csv"
+        if not p.exists():
+            continue
+        paths = pd.read_csv(p, usecols=["path"], low_memory=False)["path"].dropna().astype(str)
+        h = hashlib.sha1()
+        for s in sorted(paths.tolist()):
+            h.update(s.encode("utf-8"))
+            h.update(b"\n")
+        sigs[p.name] = {"rows": int(len(paths)), "paths_sha1": h.hexdigest()}
+    return sigs
 
 
 # ---- stages 01-03 (subprocess) ---------------------------------------------
@@ -172,12 +264,14 @@ def _build_one(resolved_path: str, mode: str, cfg, cache_dir: str) -> tuple[str,
 
 
 def precompute_channels(
-    args: argparse.Namespace, source_tag: str
+    args: argparse.Namespace, source_tag: str, known_corrupt: set[str]
 ) -> tuple[set[str], dict[str, int]]:
     """Decode-once channel cache build. Returns (corrupt_raw_paths, stats).
 
     ``corrupt_raw_paths`` are stage-03 CSV ``path`` strings whose image failed to
-    decode, so the caller can prune them before stage 04.
+    decode, so the caller can prune them before stage 04. ``known_corrupt`` is the
+    set recorded by previous runs: those images are not re-decoded (they would only
+    fail again) but are still reported back so prune drops their regenerated rows.
     """
     cfg = make_preprocess_config({"size": args.size})
     mode = args.channel_mode
@@ -196,6 +290,20 @@ def precompute_channels(
         resolved_to_raw.setdefault(resolved, []).append(raw)
     unique_resolved = list(resolved_to_raw)
 
+    # Files already known corrupt from a prior run never decode cleanly; skip
+    # re-attempting them (the repeated failed decode is pure wasted work) but still
+    # carry their raw paths in corrupt_raw so prune drops the regenerated rows.
+    known_corrupt_resolved = {
+        resolved for resolved, raws in resolved_to_raw.items()
+        if any(r in known_corrupt for r in raws)
+    }
+    corrupt_raw: set[str] = {
+        raw for resolved in known_corrupt_resolved for raw in resolved_to_raw[resolved]
+    }
+    if known_corrupt_resolved:
+        print(f"[precompute] skipping {len(known_corrupt_resolved)} image(s) recorded "
+              f"corrupt by a previous run (--reset-state to re-attempt)", flush=True)
+
     # Existing cache files: one directory listing of the mode shard. The cache key
     # is derived from the (resolved) path string alone, so the miss scan is pure CPU.
     existing_digests: set[str] = set()
@@ -210,14 +318,15 @@ def precompute_channels(
 
     todo = [
         r for r in unique_resolved
-        if channel_cache_path(cache_dir, r, mode, cfg).stem not in existing_digests
+        if r not in known_corrupt_resolved
+        and channel_cache_path(cache_dir, r, mode, cfg).stem not in existing_digests
     ]
-    skipped = len(unique_resolved) - len(todo)
-    corrupt_raw: set[str] = set()
+    skipped = len(unique_resolved) - len(todo) - len(known_corrupt_resolved)
 
     if not todo:
-        print(f"[precompute] all {len(unique_resolved)} images already cached in {cache_dir}/{mode}", flush=True)
-        return corrupt_raw, {"built": 0, "skipped": skipped, "corrupt": 0}
+        decodable = len(unique_resolved) - len(known_corrupt_resolved)
+        print(f"[precompute] all {decodable} decodable images already cached in {cache_dir}/{mode}", flush=True)
+        return corrupt_raw, {"built": 0, "skipped": skipped, "corrupt": len(corrupt_raw)}
 
     print(
         f"[precompute] building {len(todo)}/{len(unique_resolved)} channel images "
@@ -334,20 +443,55 @@ def main() -> int:
 
     source_tag = _SOURCE_TAG[args.subset]
 
+    if args.reset_state and STATE_PATH.exists():
+        STATE_PATH.unlink()
+        print(f"[state] --reset-state: removed {STATE_PATH.name}", flush=True)
+    state = load_state(args)
+    known_corrupt = set(state.get("corrupt_raw", []))
+    if known_corrupt:
+        print(f"[state] resuming from {STATE_PATH.name}: {len(known_corrupt)} corrupt "
+              f"path(s) recorded; stage04 "
+              f"{'recorded done' if state.get('csv_signatures') else 'not yet done'}", flush=True)
+
     if not args.skip_prepare:
         run_prepare_01_to_03(args.subset, args.workers)
 
     stats = {"built": 0, "skipped": 0, "corrupt": 0}
     if not args.skip_precompute:
-        corrupt_raw, stats = precompute_channels(args, source_tag)
+        corrupt_raw, stats = precompute_channels(args, source_tag, known_corrupt)
+        state["corrupt_raw"] = sorted(corrupt_raw)
         if not args.skip_prepare:
             prune_corrupt_rows(source_tag, corrupt_raw)
         elif corrupt_raw:
-            print(f"[prune] --skip-prepare set; not rewriting CSVs ({len(corrupt_raw)} corrupt paths found)", flush=True)
+            print(f"[prune] --skip-prepare set; not rewriting CSVs ({len(corrupt_raw)} corrupt paths recorded)", flush=True)
 
     if not args.skip_prepare:
-        run_stage_04(args.workers)
-        verify_cache_parity(args)
+        # Rebuild the prior-aware parquets only when something that feeds them
+        # actually changed: new/removed images (CSV path signature differs), newly
+        # decoded channels, a missing parquet, or an explicit --force-stage04. A
+        # re-run with no new images skips the (expensive) build entirely.
+        current_sigs = csv_path_signatures(source_tag)
+        parquet_exists = (DATA_CAMCHEX_ROOT / "prior_aware_train.parquet").exists()
+        need_04 = (
+            args.force_stage04
+            or stats["built"] > 0
+            or not parquet_exists
+            or current_sigs != state.get("csv_signatures")
+        )
+        if need_04:
+            reason = ("--force-stage04" if args.force_stage04
+                      else "parquet missing" if not parquet_exists
+                      else f"{stats['built']} new channel(s)" if stats["built"] > 0
+                      else "image set changed")
+            print(f"\n[stage04] rebuilding parquets ({reason})...", flush=True)
+            run_stage_04(args.workers)
+            verify_cache_parity(args)
+            state["csv_signatures"] = current_sigs
+        else:
+            print("[stage04] image set unchanged and parquets present; skipping "
+                  "rebuild (--force-stage04 to override).", flush=True)
+
+    save_state(args, state)
 
     print(
         f"\n[done] channels built={stats['built']} skipped(cached)={stats['skipped']} "
