@@ -3039,3 +3039,23 @@ Test file removed after passing.
 
 **Follow-ups.**
 - Confirm state-saving logic correctly handles any concurrent write operations.
+
+## 2026-06-25 - commit and push changes for PriorAwareV8 implementation
+
+**Goal.** Commit and push pending changes for the PriorAwareV8 label-graph integration model and its supporting codebase.
+
+**Changes.**
+- `docs/prior_aware_v8_label_graph.md` - Documented Gate results (all 10 tail classes connected, reachability passed), build order, and design decisions.
+- `src/decoder/MLDecoder.py:58-79` - Modified `forward()` to accept an optional `query_embed` argument to support external query embeddings injection.
+- `src/interpret/run_prior_gradcam.py:58-156` - Registered the `prior_aware_v8nano` model and stripped `graph_consistency_lambda` for visualizer forward passes.
+- `src/model/graph_head.py` - Created `LabelGraphHead` module supporting GCN/GAT, adjacency construction, and graph consistency loss/pretraining.
+- `src/model/PriorAwareV8NanoModel.py` - Created the PriorAwareV8NanoModel assembly integrating image/text encoders, graph-head query embeddings injection, and consistency loss.
+- `src/prepare/05_build_label_graph.py` - Created a script to compile the label graph, compute co-occurrence stats, apply shrinkage, and save `label_graph.pt`.
+- `training/prior_aware_v8nano/` - Added `README.md`, `config.yaml`, `prior_aware_train.py`, and `prior_aware_eval.py` templates to configure/run v8 ablation training.
+
+**Reasoning.**
+- Staged, committed, and pushed these components to ensure the PriorAwareV8 architecture integration is fully tracked and pushed to origin/main.
+- Compiled the files before staging to verify syntax correctness.
+
+**Follow-ups.**
+- Run the `prior_aware_v8nano` training arm on available GPU resources to compare `independent` vs `graph` label correlation setups.
