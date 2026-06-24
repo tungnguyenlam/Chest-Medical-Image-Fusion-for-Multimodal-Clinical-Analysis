@@ -26,8 +26,8 @@ Standalone v2 example:
         --checkpoint-path output/camchex_v2nano_vitals/runs/<run>/checkpoints/best.pt \
         --split val --gradcam-epoch 1 --scan-limit 800
 
-During training this runs automatically every epoch (see ``--gradcam-epochs`` in the
-trainer). It forces the *live* CXR-BERT text path (cache off, grads on) so per-word
+During training this only runs when the user opts in via ``--gradcam-epochs`` (which
+defaults to ``none`` globally). It forces the *live* CXR-BERT text path (cache off, grads on) so per-word
 attribution is possible even if the checkpoint was trained with cached embeddings — the
 CLS vector, and therefore the predictions, are identical either way.
 """

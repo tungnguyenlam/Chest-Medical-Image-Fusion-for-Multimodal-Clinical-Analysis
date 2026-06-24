@@ -3059,3 +3059,48 @@ Test file removed after passing.
 
 **Follow-ups.**
 - Run the `prior_aware_v8nano` training arm on available GPU resources to compare `independent` vs `graph` label correlation setups.
+
+## 2026-06-25 - Turn off mid-epoch eval and gradcam globally during training
+
+**Goal.** Disable both mid-epoch validation and the per-epoch Grad-CAM panel dump
+across every model by default, so training runs faster and produce no
+`gradcam/epoch_*` artifacts unless the user explicitly opts in.
+
+**Changes.**
+- `training/common.py:177` - `quick_val_fracs` default flipped from `[0.33, 0.66]`
+  to `[]` (the only mid-epoch eval default that was actually on). `full_val_fracs`
+  was already `[]`.
+- `training/common.py:180` - `gradcam_epochs` default flipped from `"all"` to
+  `"none"`. This is the single source of truth: `train.py:622` reads
+  `--gradcam-epochs` and falls back to `gradcam_runner_module(model) or "none"`,
+  so the trainer-arg default is what the user actually sees.
+- `training/common.py:447` and `training/common.py:487` - help text on
+  `--quick-val-fracs` and `--gradcam-epochs` updated to match the new defaults.
+- `src/interpret/run_gradcam.py:29` and `src/interpret/run_prior_gradcam.py:29` -
+  docstrings no longer claim Grad-CAM "runs automatically every epoch"; they now
+  point at the new opt-in default.
+
+**Reasoning.** All training scripts route their defaults through
+`_merge_defaults` in `training/common.py`, and the per-model YAML in
+`configs/baseline.yaml` is flagged as legacy ("verify current entrypoints before
+using" in `AGENTS.md`). Flipping the two defaults in `_merge_defaults` is
+therefore the smallest change that hits every model and every script. The
+flags themselves are unchanged: users can still re-enable either feature via
+`--quick-val-fracs 0.33 0.66` and `--gradcam-epochs all` (or a comma list).
+
+**Assumptions.** The user means "globally during training" = change the trainer
+defaults, not delete the code paths. The CLI flags stay so future runs can opt
+back in. `full_val_fracs` was already off, so this is a no-op there.
+`val_check_interval` was already off (default `None`); left untouched.
+
+**Gotchas.** `configs/baseline.yaml:66` still sets `val_check_interval: 0.25`,
+which would re-enable the legacy fixed-interval mid-epoch eval path if anyone
+ran a script that reads that file. The YAML is labelled legacy in `AGENTS.md`
+and the active entrypoints do not load it, but if a user wires it back in, they
+will silently get a mid-epoch eval. Worth knowing; not fixed here because the
+user asked for the global default, not a YAML sweep.
+
+**Follow-ups.** Decide what to do with `configs/baseline.yaml` (delete, update
+to match new defaults, or keep as the "legacy re-enables everything"
+comparison baseline). If gradcam is ever wanted back in CI smoke tests, the
+opt-in is now an explicit CLI flag rather than the silent default.

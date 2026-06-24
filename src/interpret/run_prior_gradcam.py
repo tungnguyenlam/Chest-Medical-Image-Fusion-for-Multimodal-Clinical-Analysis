@@ -26,7 +26,8 @@ Standalone example:
         --checkpoint-path output/prior_aware_v3nano/runs/<run>/checkpoints/best.pt \
         --split val --gradcam-epoch 1 --scan-limit 800
 
-This runs automatically every epoch during training because the prior models declare
+This only runs during training when the user opts in via ``--gradcam-epochs`` (which
+defaults to ``none`` globally). The prior models declare
 ``gradcam_runner_module = "src.interpret.run_prior_gradcam"``. It forces the live
 CXR-BERT path (cache off, grads on) so per-word/-token attribution is possible even when
 the checkpoint was trained with cached embeddings — the CLS vectors are identical.

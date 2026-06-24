@@ -174,10 +174,10 @@ def _config_default_by_dest(
                 "quick_val_every_steps": trainer.get("quick_val_every_steps"),
                 "quick_val_frac": trainer.get("quick_val_frac", 0.1),
                 "full_val_fracs": trainer.get("full_val_fracs", []),
-                "quick_val_fracs": trainer.get("quick_val_fracs", [0.33, 0.66]),
+                "quick_val_fracs": trainer.get("quick_val_fracs", []),
                 "compile_model": trainer.get("compile_model", False),
                 "channels_last": trainer.get("channels_last", False),
-                "gradcam_epochs": trainer.get("gradcam_epochs", "all"),
+                "gradcam_epochs": trainer.get("gradcam_epochs", "none"),
                 "gradcam_device": trainer.get("gradcam_device", "training device"),
                 "fast_dev_run": False,
             }
@@ -444,7 +444,8 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             nargs="*",
             help="Epoch fractions (each in (0,1)) at which to run a partial quick validation "
             "(logged to val_quick.csv, does not affect best-checkpoint tracking). Independent of "
-            "batch size. Default 0.33 0.66. Pass with no values to disable.",
+            "batch size. Default: none (mid-epoch eval disabled globally during training). "
+            "Pass fractions (e.g. '0.33 0.66') to enable.",
         )
 
     # --- Hardware, precision & compile -------------------------------------
@@ -485,8 +486,9 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
         g = parser.add_argument_group("Grad-CAM panels")
         g.add_argument(
             "--gradcam-epochs",
-            help="When to dump per-class Grad-CAM panels: 'all' (default, every epoch — it's cheap), "
-                 "'none' to disable, or a comma list of 0-indexed epochs (e.g. '0,4,9'). "
+            help="When to dump per-class Grad-CAM panels: 'all' (every epoch), "
+                 "'none' (default, disabled globally during training), or a comma list of "
+                 "0-indexed epochs (e.g. '0,4,9'). "
                  "Only models that define gradcam_runner_module emit panels.",
         )
         g.add_argument(

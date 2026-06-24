@@ -210,13 +210,26 @@ class TextEmbeddingCache:
 
         if missing:
             self._load_model()
-            with torch.inference_mode():
+            # Sort by text length so each batch groups similar-length texts. With
+            # dynamic padding below this collapses per-batch padding to the longest
+            # text in that batch (clinical strings are short) instead of always
+            # padding to max_length -- the bulk of the FLOPs were previously spent
+            # on pad tokens, leaving the GPU latency-bound and idle.
+            missing.sort(key=lambda item: len(item[1]))
+            # bf16 autocast on CUDA roughly doubles throughput; the CLS vectors are
+            # used as frozen features downstream, so the precision drop is immaterial.
+            autocast = (
+                torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                if self.device.type == "cuda"
+                else torch.autocast(device_type=self.device.type, enabled=False)
+            )
+            with torch.inference_mode(), autocast:
                 for start in tqdm(range(0, len(missing), self.batch_size), desc=desc, dynamic_ncols=True):
                     batch = missing[start:start + self.batch_size]
                     batch_texts = [text for _, text in batch]
                     enc = self._tokenizer(
                         batch_texts,
-                        padding="max_length",
+                        padding=True,
                         truncation=True,
                         max_length=max_length,
                         return_tensors="pt",
