@@ -224,19 +224,65 @@ prior-label embedding).
 
 ---
 
-## 9. Build order (when we commit)
+## 9. Build order — **shipped 2026-06-25**
 
-1. `src/prepare/05_build_label_graph.py` — train-split counts → shrinkage → significance
-   test (BH-corrected) → deterministic prune + curated hierarchy → confidence-weighted
-   directed adjacency `A`; CXR-BERT class-name node features `Z0`; save inspectable `.pt`.
-2. Extend notebook §8b to dump the **shrunk-significant** adjacency alongside the raw one, so
-   we can eyeball how many edges (and which tail classes) survive the noise defenses.
-3. `src/model/PriorAwareV7NanoModel.py` — fork v6; add GNN module + the two injection points;
-   preserve encoder/fusion/`delta_embedding` names so Grad-CAM hooks survive.
-4. `training/prior_aware_v8nano/{config.yaml, prior_aware_train.py, prior_aware_eval.py,
-   README.md}` — mirror v6; new knobs per §7.
-5. Register `prior_aware_v8nano` in `src/interpret/run_prior_gradcam.py`.
+1. ✅ `src/prepare/05_build_label_graph.py` — train-split counts → shrinkage → BH-corrected
+   significance → curated hierarchy mask → CXR-BERT class-name node features `Z0`; saves the
+   frozen `.pt`. **Stores the matrices, not a pre-built `A`** — the sparsifier
+   (`lift_threshold`/`top_k`/`reweight_p`/`symmetrize`/`hierarchy`) is applied in the model so
+   the §7 grid is config-only. Artifact: `data/data-camchex/label_graph.pt`.
+2. ✅ `data/00-examine-data/v8_label_graph_gate.ipynb` dumps the shrunk-significant adjacency
+   and the surviving-edge / isolated-tail readout → `output/prior_aware_v8nano/` (see §10).
+3. ✅ `src/model/graph_head.py` (`LabelGraphHead`: GCN/GAT, `build_adjacency`,
+   `consistency_loss`, margin-ranking `pretrain_and_freeze`) + `src/model/PriorAwareV8NanoModel.py`
+   (fork of v6; graph queries injected into `MLDecoder` via a new optional `query_embed` arg;
+   optional graph-aware `prior_label_proj`; consistency aux combined with the bg penalty).
+   Encoder/fusion/`delta_embedding` names preserved → Grad-CAM hooks survive.
+4. ✅ `training/prior_aware_v8nano/{config.yaml, prior_aware_train.py, prior_aware_eval.py,
+   README.md}` — mirror v6; knobs per §7.
+5. ✅ `prior_aware_v8nano` registered in `src/interpret/run_prior_gradcam.py` (consistency aux
+   stripped for logits-only attribution).
 
-**Decision gate before step 3:** read the surviving-edge count and the isolated-tail-class
-list from step 2. That sets `α`, the significance threshold, and whether to use a global
-cutoff or top-k-neighbours-per-node.
+**Decision gate (settled, §10):** the gate set the operative sparsifier to `top_k` +
+`lift_threshold` (significance alone passes 42% of pairs at N=128k); defaults
+`lift_threshold=1.5`, `graph_top_k=6`, `reweight_p=0.25` → 115 directed edges, all 10 tail
+classes connected. Run the minimal `independent` vs `graph` arm next.
+
+---
+
+## 10. Gate result (run 2026-06-25)
+
+Ran the gate ahead of step 1 in `data/00-examine-data/v8_label_graph_gate.ipynb`
+(train split only, N=128,712; α=10, BH q<0.05, det-cap 0.95). Artifacts in
+`output/prior_aware_v8nano/` (`v8_gate_summary.json`, `v8_surviving_edges.csv`,
+`v8_node_degrees.csv`, `v8_surviving_adjacency.png`).
+
+**Verdict: GO — but sparsify by lift/top-k, not by significance.**
+
+- **Reachability (the headline gate): PASS.** All 10 tail classes are connected
+  (degree 14–28 each); the only isolated node is `No Finding`. The "graph can't reach
+  the tail" failure mode is ruled out — the structural premise survives the cheap test.
+- **The strong tail edges are clinically sound,** not artifacts: air-leak family
+  (Subcutaneous Emphysema ↔ Pneumomediastinum lift 28; Pneumomediastinum ↔
+  Pneumoperitoneum 16; Pneumothorax → Subcutaneous Emphysema 8.8), Mass → Lung Lesion
+  6.5, Emphysema → Fibrosis 6.1. This is real biology, on exactly the rare classes v8
+  targets.
+- **Significance is a near-useless filter at this N.** 276/650 pairs (42%) pass BH, and
+  the deterministic prune (§3.3) **never fired** (shrinkage already pulled every
+  `P̂(j|i)` under 0.95). Median surviving lift is only 1.47; 139/276 edges have lift<1.5
+  — weak "everything mildly co-occurs" edges (Atelectasis→Hernia 1.19, …) that survive
+  only because Fisher has enormous power at N=128k. The real defenses here are
+  **shrinkage (§3.1) and lift magnitude**, not the significance test.
+- **Construction decision for step 1:** use **top-k neighbours per node** (or a lift
+  floor ≈1.5–2) as the operative sparsifier, *then* keep confidence weights — otherwise
+  the ~16 genuine high-lift tail edges get diluted in a 42%-dense blob. This resolves the
+  open "global cutoff vs top-k" question the decision gate was meant to settle.
+- **Note on directedness:** edge *survival* is symmetric (Fisher OR>1 is transpose-
+  invariant), so the `directed vs symmetrized` ablation (§7) only bites through the
+  asymmetric *weights* (`P(j|i)≠P(i|j)`), not edge presence. Adjust that ablation's framing.
+
+Bottom line: structure is present and sound, so proceed to the minimal arm
+(`independent` vs `shrunk-significant+top-k+curated`, tail-mAP with bootstrap CIs).
+Expected effect remains modest — the graph largely re-encodes co-occurrence that
+per-sample BCE already sees — so treat a null/within-CI tail result as a legitimate
+chapter outcome, not a failure.

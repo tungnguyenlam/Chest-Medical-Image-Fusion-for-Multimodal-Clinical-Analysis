@@ -55,6 +55,7 @@ from src.model.PriorAwareV4NanoModel import PriorAwareV4NanoModel
 from src.model.PriorAwareV5NanoModel import PriorAwareV5NanoModel
 from src.model.PriorAwareV6NanoModel import PriorAwareV6NanoModel
 from src.model.PriorAwareV7NanoModel import PriorAwareV7NanoModel
+from src.model.PriorAwareV8NanoModel import PriorAwareV8NanoModel
 from src.model.PriorAwareCaMCheXModel import PriorAwareCaMCheXModel
 from src.model.PriorAwareV2NanoModel import PriorAwareV2NanoModel
 from src.model.PriorAwareV3NanoModel import PriorAwareV3NanoModel
@@ -83,6 +84,7 @@ _MODEL_CLASSES = {
     "prior_aware_v5nano_bgpenalty": PriorAwareV5NanoModel,
     "prior_aware_v6nano": PriorAwareV6NanoModel,
     "prior_aware_v7nano": PriorAwareV7NanoModel,
+    "prior_aware_v8nano": PriorAwareV8NanoModel,
 }
 _DEFAULT_TEXT_MODEL = {
     "prior_aware": "dmis-lab/biobert-v1.1",
@@ -93,6 +95,7 @@ _DEFAULT_TEXT_MODEL = {
     "prior_aware_v5nano_bgpenalty": "microsoft/BiomedVLP-CXR-BERT-specialized",
     "prior_aware_v6nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
     "prior_aware_v7nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
+    "prior_aware_v8nano": "microsoft/BiomedVLP-CXR-BERT-specialized",
 }
 
 
@@ -150,6 +153,7 @@ def build_model(cfg, args, device):
     init_args["use_precomputed_text_embeddings"] = False  # force live BERT
     init_args["freeze_text_encoder"] = False              # let gradients flow into embeddings
     init_args.pop("background_penalty_lambda", None)       # logits-only forward for attribution
+    init_args.pop("graph_consistency_lambda", None)        # ditto for the v8 graph consistency aux
     model = _MODEL_CLASSES[arch](
         timm_init_args=timm_args,
         text_model=cfg["model"].get("text_model", _DEFAULT_TEXT_MODEL[arch]),

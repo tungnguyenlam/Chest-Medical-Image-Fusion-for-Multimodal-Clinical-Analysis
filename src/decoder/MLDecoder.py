@@ -55,7 +55,12 @@ class MLDecoder(nn.Module):
         self.train_wordvecs = None
         self.test_wordvecs = None
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, query_embed=None):
+        """``query_embed`` (optional): externally-supplied per-group query vectors of shape
+        ``[embed_len_decoder, decoder_embedding]`` that replace the frozen-random
+        ``self.decoder.query_embed.weight``. Used by Prior-Aware v8 to inject the
+        label-graph-produced class queries ``Z``. ``None`` keeps the exact original
+        behaviour (frozen random queries / zsl word-vector path)."""
         if len(x.shape) == 4:  # [bs,2048, 7,7]
             embedding_spatial = x.flatten(2).transpose(1, 2)
         else:  # [bs, 197,468]
@@ -64,7 +69,13 @@ class MLDecoder(nn.Module):
         embedding_spatial_786 = torch.nn.functional.relu(embedding_spatial_786, inplace=True)
 
         bs = embedding_spatial_786.shape[0]
-        if self.zsl:
+        if query_embed is not None:
+            expected = self.decoder.query_embed.weight.shape if not self.zsl else None
+            if expected is not None and tuple(query_embed.shape) != tuple(expected):
+                raise ValueError(
+                    f"query_embed shape {tuple(query_embed.shape)} != expected {tuple(expected)}"
+                )
+        elif self.zsl:
             query_embed = torch.nn.functional.relu(self.wordvec_proj(self.decoder.query_embed))
         else:
             query_embed = self.decoder.query_embed.weight
