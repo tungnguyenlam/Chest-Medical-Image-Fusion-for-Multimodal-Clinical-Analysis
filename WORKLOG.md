@@ -3252,3 +3252,83 @@ so the explicit false syntax matches the user's request.
 build time will show the resolved value.
 
 **Follow-ups.** Add a row to `training/FLAGS.md` if we want the flag map kept in sync.
+
+## 2026-06-25 - v8nano leakage audit (investigation only, no code changes)
+
+**Goal.** User asked whether the Prior-Aware v8 Nano model has data leakage and why
+its metrics look "so so good." This entry logs the findings to revisit later; no
+code was changed.
+
+**Scope read.** `training/prior_aware_v8nano/{PROPOSAL.md,README.md,config.yaml,
+prior_aware_{train,eval}.py}`, `src/model/PriorAwareV8NanoModel.py`,
+`src/prepare/05_build_label_graph.py`, `src/dataloader/PriorAwareDataset.py`,
+`src/prepare/0{1,2,4}_*.py`, `training/utils/{data,evaluation}.py`.
+
+**Verdict.** No classic train/test contamination in the v8-specific code. The
+inflated metrics come from a strong *informative-prior shortcut* (prior label vector
++ prior report), inherited unchanged from v6 - NOT from the v8 graph head.
+
+**What is clean.**
+- Label graph (`src/prepare/05_build_label_graph.py:78` `compute_cooccurrence`) reads
+  only `prior_aware_train.parquet`; node features are the 26 class *names* via CXR-BERT
+  (`encode_node_features:123`); artifact frozen and applied identically to all splits.
+  Dev/test labels never enter the graph.
+- Current study's diagnostic `report` (findings+impression) is never fed. Text streams
+  are `[clin_text, prior_clin_text, prior_report_text]` (`config.yaml:140`). `clin_text`
+  = `clinical_indication` (indication+history only, `04:164 _clin_text`). Stage 01
+  explicitly separates `report` ("leakage ... never fed") from `clinical_indication`.
+
+**Why metrics are inflated (main mechanism).**
+- Model is fed the prior study's 26-dim GROUND-TRUTH label vector
+  (`PriorAwareDataset.py:435 prior_label` -> `PriorAwareV8NanoModel.py:432 prior_label_proj`)
+  and the prior study's full findings+impression report
+  (`PriorAwareDataset.py:48 prior_report_text`). For chronic/structural classes
+  (Cardiomegaly, Tortuous Aorta, Aortic Calcification, Emphysema, Fibrosis, Support
+  Devices, Atelectasis) P(current|prior) ~= 1, so the model can score high mAP by
+  copying the prior. Legitimate at deployment, but it masks whether the graph head or
+  the image encoder is responsible.
+
+**Genuine smaller leakage risks to check (NOT yet verified).**
+1. Non-independent prior: `PreviousStudy` = chronologically previous study for the
+   subject (`01_make_dataset.py:126`, `groupby('subject_id')['study_id'].shift(1)`).
+   Within one ED visit/admission the "prior" can be hours/days apart describing the
+   SAME acute episode (copy-forward text), so `prior_report_text` can restate current
+   findings -> closer to true leakage. `days_since_prior` can be ~0.
+2. Patient-disjoint splits: split is per-`dicom_id` from CXR-LT 2023
+   (`02_split_dataset.py:21-23`). Prior lookup is same-split only (`build_split_df`
+   builds `lookup` from one split), so no cross-split prior content leak - but should
+   assert `subject_id` disjointness so encoders can't memorize patient appearance.
+3. Mild: `clinical_indication` sometimes states the answer ("known cardiomegaly").
+
+**Gotcha.** The existing `drop_report` eval pass only blanks the CURRENT clinical
+indication (`_blank_prior_aware_current_indication`); it does NOT remove
+`prior_report_text` or `prior_label`. So "no_report" metrics still contain the full
+prior signal - that ablation does not isolate the prior path.
+
+**Follow-ups (to revisit).**
+- Eval with the prior path zeroed (`has_prior=False` / null `prior_label` +
+  `prior_report_text`) to measure prior dependence vs image.
+- `head_mode: independent` vs `graph` with prior held constant = the only clean v8
+  graph attribution (README headline comparison).
+- Re-eval restricted to `days_since_prior > N` to rule out same-episode leakage.
+- Script (offered, not yet written): load the 3 parquets and report subject_id overlap,
+  days_since_prior distribution, and per-class P(current=1|prior=1).
+
+## 2026-06-25 - v8 leakage analysis doc (docs only)
+
+**Goal.** User asked to canonicalize the v8 / prior-aware data-leakage investigation
+(from the earlier chat + WORKLOG entry) as a doc under `docs/`, not only WORKLOG.
+
+**Changes.**
+- `docs/prior_aware_v8_leakage_analysis.md` — full audit: executive summary table,
+  per-field input semantics, v8 graph train-only safety, informative-prior shortcut
+  (inherited from v6), softer risks (same-episode prior, subject overlap, clin_text),
+  `drop_report` gotcha vs recommended ablations, data-flow diagram, quantitative
+  follow-ups.
+- `docs/prior_aware_v9.md` — cross-link to the leakage doc instead of WORKLOG only.
+
+**Reasoning.** WORKLOG is for session handoff; a stable `docs/` note is easier to cite
+in thesis chapters, v8 README, and v9 design. Content matches the 2026-06-25 audit;
+no new empirical runs were added.
+
+**Follow-ups.** Run the §7 quantitative checks; implement prior-zeroed eval slice.
