@@ -12,6 +12,14 @@ from torch.optim import AdamW, Optimizer
 DEFAULT_BACKBONE_PREFIXES: tuple[str, ...] = ("image_encoder.",)
 DEFAULT_BACKBONE_LR_MULT: float = 0.3
 
+# Same idea for the pretrained text encoder (BioBERT/CXR-BERT under ``text_encoder.``).
+# It is a much larger, more delicate pretrained model than the image backbone, so it
+# gets an even lower default multiple. The fresh ``text_proj`` head sits *outside* this
+# prefix and stays at the base LR. Composes with the backbone default above: by default
+# both are synthesised together (backbone 0.3x, text 0.1x, everything else 1.0x).
+DEFAULT_TEXT_PREFIXES: tuple[str, ...] = ("text_encoder.",)
+DEFAULT_TEXT_LR_MULT: float = 0.1
+
 
 def _match_prefix(name: str, param_group_lrs: dict[str, float]) -> str | None:
     """Longest matching prefix in ``param_group_lrs`` for parameter ``name`` (a more
@@ -83,7 +91,9 @@ def build_adamw_optimizer(
     eps: float = 1e-8,
     param_group_lrs: dict[str, float] | None = None,
     backbone_lr_mult: float | None = None,
+    text_lr_mult: float | None = None,
     backbone_prefixes: tuple[str, ...] = DEFAULT_BACKBONE_PREFIXES,
+    text_prefixes: tuple[str, ...] = DEFAULT_TEXT_PREFIXES,
 ) -> Optimizer:
     """AdamW with decay/no-decay split and discriminative (per-component) LR.
 
@@ -91,21 +101,31 @@ def build_adamw_optimizer(
 
     1. ``param_group_lrs`` (from ``optimizer_init_args.param_group_lrs`` in config) maps a
        parameter-name prefix to an *absolute* LR; unmatched params use ``lr``. If given, it
-       takes full control and the backbone default below is skipped.
-    2. Otherwise the **global backbone default** applies: every param under a
-       ``backbone_prefixes`` entry (default ``image_encoder.``) gets ``lr * backbone_lr_mult``
-       (default :data:`DEFAULT_BACKBONE_LR_MULT`). Override the multiplier per-config via
-       ``optimizer_init_args.backbone_lr_mult``; set it to ``1.0`` (or ``None`` -> default,
-       so pass ``1.0`` explicitly) to disable and train everything at ``lr``.
+       takes full control and the backbone/text defaults below are skipped entirely.
+    2. Otherwise the **global component defaults** apply, synthesised together:
+       - every param under a ``backbone_prefixes`` entry (default ``image_encoder.``) gets
+         ``lr * backbone_lr_mult`` (default :data:`DEFAULT_BACKBONE_LR_MULT`);
+       - every param under a ``text_prefixes`` entry (default ``text_encoder.``) gets
+         ``lr * text_lr_mult`` (default :data:`DEFAULT_TEXT_LR_MULT`).
+       Override either multiplier per-config via ``optimizer_init_args.backbone_lr_mult`` /
+       ``optimizer_init_args.text_lr_mult``; set one to ``1.0`` to disable just that
+       component (it then trains at ``lr``) without touching the other.
 
     Per-group LRs compose with the LR schedulers, which scale each group relative to its own
-    initial LR -- so a lower backbone LR stays proportionally lower through the whole schedule.
+    initial LR -- so a lower backbone/text LR stays proportionally lower through the schedule.
     """
-    mult = DEFAULT_BACKBONE_LR_MULT if backbone_lr_mult is None else float(backbone_lr_mult)
-    # Explicit param_group_lrs wins outright; otherwise synthesise the backbone default
-    # (skip when mult == 1.0, which means "no discriminative LR").
-    if not param_group_lrs and mult != 1.0:
-        param_group_lrs = {prefix: lr * mult for prefix in backbone_prefixes}
+    b_mult = DEFAULT_BACKBONE_LR_MULT if backbone_lr_mult is None else float(backbone_lr_mult)
+    t_mult = DEFAULT_TEXT_LR_MULT if text_lr_mult is None else float(text_lr_mult)
+    # Explicit param_group_lrs wins outright; otherwise synthesise the component defaults.
+    # A mult of 1.0 means "no discriminative LR" for that component, so it is left out and
+    # those params fall through to the base LR.
+    if not param_group_lrs:
+        synthesized: dict[str, float] = {}
+        if b_mult != 1.0:
+            synthesized.update({prefix: lr * b_mult for prefix in backbone_prefixes})
+        if t_mult != 1.0:
+            synthesized.update({prefix: lr * t_mult for prefix in text_prefixes})
+        param_group_lrs = synthesized
 
     groups = build_param_groups(model, base_lr=lr, weight_decay=weight_decay, param_group_lrs=param_group_lrs)
     matched_labels = {g["name"] for g in groups}

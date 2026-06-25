@@ -217,24 +217,30 @@ Full list: `python training/camchex/camchex_train.py --help`.
   `single_cosine`. Note: EMA checkpoints are eval-ready but not meant for
   `--resume-from` (use `--checkpoint-path` for weights-only warm-start). Switching
   `schedule` between a checkpoint and a `--resume-from` is blocked for the same reason.
-- **Discriminative (per-component) LR** — `model.optimizer_init_args.param_group_lrs`
-  maps a parameter-name *prefix* to its own LR; unmatched params use the base `lr`
-  (longest prefix wins). Default empty → **all components share one LR** (unchanged
-  behavior, 2 param groups, checkpoint-compatible). Example: give a pretrained text
-  encoder a smaller LR while the rest trains faster:
+- **Discriminative (per-component) LR** — the two pretrained encoders train *slower*
+  than the freshly-initialised fusion/head by default, **applied automatically to every
+  model**: the image backbone (`image_encoder.`) at `0.3×` the base `lr` and the text
+  encoder (`text_encoder.`) at `0.1×`. Tune per run with `--backbone-lr-mult` /
+  `--text-lr-mult` (or `optimizer_init_args.{backbone,text}_lr_mult`); set either to
+  `1.0` to disable just that component. For full manual control,
+  `model.optimizer_init_args.param_group_lrs` maps a parameter-name *prefix* to an
+  *absolute* LR (longest prefix wins) and, when present, **replaces** the automatic
+  defaults entirely:
 
   ```yaml
   model:
     lr: 3.0e-5
     optimizer_init_args:
       param_group_lrs:
-        "text_encoder.": 1.0e-5   # prefixes match model.named_parameters()
+        "image_encoder.": 9.0e-6   # prefixes match model.named_parameters()
+        "text_encoder.": 3.0e-6    # must re-state both: defaults are skipped
   ```
 
   Per-group LRs compose with the schedules: the cosine is a multiplicative factor in
   `[eta_min_factor, 1.0]` applied to each group's own initial LR, so a group's floor is
-  `its_lr * eta_min_factor`. The LR ratio between groups (e.g. the 0.3× backbone) is
-  therefore preserved across the *entire* cycle, peak and trough alike.
+  `its_lr * eta_min_factor`. The LR ratio between groups (e.g. the 0.3× backbone, 0.1×
+  text) is therefore preserved across the *entire* cycle, peak and trough alike. See
+  [docs/discriminative_lr.md](docs/discriminative_lr.md).
 
 ### Loss function
 

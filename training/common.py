@@ -391,6 +391,14 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
             "'image_encoder.') at this multiple of the base --lr. Default 0.3; set 1.0 to "
             "disable (uniform LR). Ignored if the config sets optimizer_init_args.param_group_lrs.",
         )
+        g.add_argument(
+            "--text-lr-mult",
+            type=float,
+            help="Discriminative LR: train the pretrained text encoder (params under "
+            "'text_encoder.') at this multiple of the base --lr. Default 0.1; set 1.0 to "
+            "disable (text trains at base --lr). Composes with --backbone-lr-mult. "
+            "Ignored if the config sets optimizer_init_args.param_group_lrs.",
+        )
         g.add_argument("--warmup-ratio", type=float, help="Warmup steps as a fraction of steps_per_epoch (default 0.05).")
         g.add_argument("--max-epochs", type=int, help="Maximum training epochs.")
         g.add_argument("--accumulate-grad-batches", type=int, help="Gradient accumulation steps.")

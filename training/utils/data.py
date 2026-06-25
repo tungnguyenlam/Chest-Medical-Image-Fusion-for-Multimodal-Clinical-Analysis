@@ -495,16 +495,21 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
         cfg=data_cfg,
         tokenizer=tokenizer,
     )
-    # Build the image channel cache BEFORE the text-embedding cache. The channel
-    # prebuild is the more time-costly step, and it forks a multiprocessing pool --
-    # running it first means the pool forks before the ~0.7GB text-embedding RAM dict
-    # exists, so copy-on-write can't duplicate that dict across the pool workers.
-    # (image paths don't depend on the text cache; the text columns are dropped after.)
+    # Build the text-embedding cache BEFORE the image channel cache. The text
+    # cache is GPU-bound and is the slower-to-warm step on a cold cache, so we
+    # want it started first; the image channel prebuild then runs while the
+    # text dict is already resident.
+    #
+    # Trade-off vs. building channels first: the channel prebuild forks a
+    # multiprocessing pool, and copy-on-write will now duplicate the ~0.7GB
+    # text-embedding RAM dict across the pool workers (one copy per worker on
+    # first write). On a warm channel cache the prebuild is a no-op and forks
+    # no pool, so the cost only bites when channels actually need building.
+    data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
     precompute_channels_for_paths(
         data_cfg, _prior_aware_image_paths([train_ds.df, val_ds.df]), desc="prior_aware channels",
         cpu_fraction=resolve_cpu_fraction(args), skip=getattr(args, "skip_precompute", False),
     )
-    data_cfg = maybe_add_prior_aware_text_embeddings(cfg, data_cfg, [train_ds.df, val_ds.df], args=args)
     train_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     val_ds.text_embedding_cache = data_cfg.get("text_embedding_cache")
     dropped = sum(ds.drop_unused_text_columns() for ds in (train_ds, val_ds))

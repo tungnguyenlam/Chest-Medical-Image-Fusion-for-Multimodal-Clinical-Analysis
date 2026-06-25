@@ -443,6 +443,8 @@ def optimizer_args_from_config(cfg: dict[str, Any] | None, args: argparse.Namesp
         opt_args["weight_decay"] = args.weight_decay
     if args is not None and getattr(args, "backbone_lr_mult", None) is not None:
         opt_args["backbone_lr_mult"] = args.backbone_lr_mult
+    if args is not None and getattr(args, "text_lr_mult", None) is not None:
+        opt_args["text_lr_mult"] = args.text_lr_mult
     return opt_args
 
 

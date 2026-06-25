@@ -3104,3 +3104,56 @@ user asked for the global default, not a YAML sweep.
 to match new defaults, or keep as the "legacy re-enables everything"
 comparison baseline). If gradcam is ever wanted back in CI smoke tests, the
 opt-in is now an explicit CLI flag rather than the silent default.
+
+## 2026-06-25 - Discriminative LR for the text encoder (default 0.1x)
+
+**Goal.** Add a first-class discriminative-LR knob for the pretrained text encoder,
+defaulting to 0.1x the base LR, composing with the existing 0.3x image-backbone
+default (this is "option 2" from the prior discussion, as opposed to a one-off
+per-config `param_group_lrs` override).
+
+**Changes.**
+- `src/optimizer/AdamWOptimizer.py:15` - added `DEFAULT_TEXT_PREFIXES = ("text_encoder.",)`
+  and `DEFAULT_TEXT_LR_MULT = 0.1`.
+- `src/optimizer/AdamWOptimizer.py:86` - `build_adamw_optimizer` now takes `text_lr_mult`
+  and `text_prefixes`. When no explicit `param_group_lrs` is given it synthesises a
+  *combined* dict from both the backbone and text defaults (each component skipped when
+  its mult == 1.0). Explicit `param_group_lrs` still wins outright and skips *both*
+  defaults.
+- `training/common.py:394` - new `--text-lr-mult` train flag (parallel to
+  `--backbone-lr-mult`).
+- `training/utils/config.py:446` - `optimizer_args_from_config` forwards
+  `args.text_lr_mult` into `optimizer_init_args`.
+- Docs: rewrote `docs/discriminative_lr.md` to cover both encoders; updated
+  `training/FLAGS.md` and the README discriminative-LR section.
+
+**Reasoning.** The text encoder (BioBERT/CXR-BERT under the universal `text_encoder.`
+attribute) is pretrained, large, and delicate, and clinical text is closer to its
+pretraining domain than CXRs are to ImageNet - so it needs *less* adaptation than the
+image backbone and is easy to wreck at a high LR. 0.1x is the gentler "barely move it"
+multiple, vs 0.3x for the backbone. I matched the existing backbone mechanism exactly
+(prefix-keyed `param_group_lrs`, longest-prefix wins, name-driven param groups) rather
+than inventing a separate code path, so per-group LR logging (`train/lr/text_encoder.`),
+scheduler ratio-preservation, and the CLI/config/manual precedence all work unchanged.
+The fresh `text_proj` head deliberately sits *outside* the `text_encoder.` prefix and
+stays at the base LR.
+
+**Assumptions.** Every model exposes the text encoder as `self.text_encoder` (verified
+across all `src/model/*.py`). Frozen text encoders contribute no trainable params, so
+the 0.1x group is simply empty for them - no special-casing needed.
+
+**Gotchas.**
+- This is a *default behaviour change*: previously an unfrozen text encoder trained at
+  the base LR; now it trains at 0.1x base for every model unless overridden. Set
+  `--text-lr-mult 1.0` (or `optimizer_init_args.text_lr_mult: 1.0`) to restore the old
+  behaviour for a given run.
+- Optimizer param-group count grows again (up to 6 groups: base/image/text x
+  decay/no-decay). Full `--resume-from` requires a matching group layout, so checkpoints
+  written before this change (2 or 4 groups) cannot be resumed into a new 6-group run.
+  Weights-only `--checkpoint-path` is unaffected.
+- Supplying an explicit `param_group_lrs` now skips the text default too (it already
+  skipped the backbone default) - re-state every prefix you want lowered. No existing
+  config sets `param_group_lrs`, so none silently lose the new default.
+
+**Follow-ups.** Consider a quick A/B (0.1x vs 1.0x text) on one cxrlt2024 run to confirm
+0.1x helps rather than under-trains; tune per-run if a run argues otherwise.
