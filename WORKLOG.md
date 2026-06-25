@@ -3157,3 +3157,28 @@ the 0.1x group is simply empty for them - no special-casing needed.
 
 **Follow-ups.** Consider a quick A/B (0.1x vs 1.0x text) on one cxrlt2024 run to confirm
 0.1x helps rather than under-trains; tune per-run if a run argues otherwise.
+
+## 2026-06-25 - make "loaders built" RSS log honest about text-cache state
+
+**Goal.** A v7nano run with the text-embedding cache disabled still printed
+`[mem] loaders built (parquet dfs + text-embedding RAM cache resident)`,
+implying ~0.7GB of CLS vectors were in RAM when none were. Make the line
+accurate.
+
+**Changes.**
+- `training/utils/data.py:524` - the `log_rss` label at the end of
+  `make_prior_aware_loaders` is now conditional on
+  `data_cfg.get("text_embedding_cache")`. When the cache is off it reads
+  "parquet dfs resident; text-embedding cache off -> text tokenized live in
+  __getitem__".
+
+**Reasoning.** The label was a static string. The cache is only populated by
+`maybe_add_prior_aware_text_embeddings`, which early-returns unless
+`use_text_embedding_cache` / `use_precomputed_text_embeddings` is set; v7nano
+config has both false, so for the default run no cache exists and the RSS at
+that checkpoint is essentially the two parquet dfs plus baseline.
+
+**Gotchas.** `--skip-precompute` only governs the *image channel* prebuild, not
+text embeddings; the two are independent and were easy to conflate given the
+shared "[mem]" prefix. With the cache off, text is tokenized lazily in
+`PriorAwareDataset.__getitem__` and encoded by the model each forward.

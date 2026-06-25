@@ -521,7 +521,13 @@ def make_prior_aware_loaders(cfg: dict[str, Any], args: argparse.Namespace):
     print(f"[dataloader] val:   {val_dl_args}")
     train_loader = DataLoader(train_ds, **train_dl_args)
     val_loader = DataLoader(val_ds, **val_dl_args)
-    log_rss("loaders built (parquet dfs + text-embedding RAM cache resident)")
+    _has_text_cache = data_cfg.get("text_embedding_cache") is not None
+    _rss_label = (
+        "loaders built (parquet dfs + text-embedding RAM cache resident)"
+        if _has_text_cache
+        else "loaders built (parquet dfs resident; text-embedding cache off -> text tokenized live in __getitem__)"
+    )
+    log_rss(_rss_label)
     return train_loader, val_loader
 
 
