@@ -3182,3 +3182,51 @@ that checkpoint is essentially the two parquet dfs plus baseline.
 text embeddings; the two are independent and were easy to conflate given the
 shared "[mem]" prefix. With the cache off, text is tokenized lazily in
 `PriorAwareDataset.__getitem__` and encoded by the model each forward.
+
+## 2026-06-25 - prior_aware_v7nano explore→exploit training variant
+
+**Goal.** Add an explore-exploit training entry for v7 nano, mirroring the existing
+`prior_aware_v5nano_explore_exploit` pattern (same model, two-stage LR schedule).
+
+**Changes.**
+- `training/prior_aware_v7nano_explore_exploit/config.yaml` — v7 model/data defaults with
+  `schedule: warm_restarts` and `trainer.two_stage_exploitation: true` (+ early-stop knobs).
+- `training/prior_aware_v7nano_explore_exploit/prior_aware_train.py` — train entry using
+  `PriorAwareV7NanoModel` and `model_name=prior_aware_v7nano_explore_exploit`.
+- `training/prior_aware_v7nano_explore_exploit/prior_aware_eval.py` — eval mirror.
+- `training/prior_aware_v7nano_explore_exploit/README.md` — schedule docs; links to v7 arch README.
+- `test/benchmark_pipeline.py` — register `prior_aware_v7nano_explore_exploit` alongside v7.
+
+**Reasoning.** The explore→exploit logic already lives in `training/utils/train.py` and is
+config-driven; v5 proved the pattern is a thin wrapper (config + entry scripts) over the
+same `PriorAware*NanoModel`. No new model class or scheduler code was needed.
+
+**Assumptions.** `arch` stays `prior_aware_v7nano` in the YAML (same weights/checkpoint
+layout as baseline v7); only the training folder name and LR schedule differ.
+
+**Follow-ups.** Optional `prior_aware_v7nano_explore_exploit_cxrlt2024` config if needed for
+CXR-LT runs; no lsmooth variant unless requested.
+
+## 2026-06-25 - fix line breaking in Table 10 of bachelor thesis report
+
+**Goal.** Locate the LaTeX source code of Table 10 in the bachelor thesis report and correctly wrap the first cell in the CheXFusion row to allow manual line breaking.
+
+**Changes.**
+- `report/results/results.tex:86` - Wrapped the CheXFusion description cell in a top-aligned `\parbox[t]{8.5cm}{...}` to allow a manual line break (`\\`) in the left-aligned table column.
+
+**Reasoning.** Table 10's first column contains a very long description for the CheXFusion baseline. Standard tabular columns with alignment `l` do not support automatic wrapping or manual `\\` line breaks. Wrapping the cell content in a `\parbox` is the most localized and intuitive fix that preserves the rest of the table alignment without changing the global column specifier or requiring new packages.
+
+**Gotchas.** The `[t]` option in `\parbox` is essential to keep the text aligned at the top baseline with the other columns (`Published CXR-LT 2023`, `0.372`, `0.850`) in the same row.
+
+**Follow-ups.** Verified that the PDF compiles successfully by running `pdflatex` twice on `main.tex`.
+
+## 2026-06-25 - replace parbox with nested tabular for Table 10 line break
+
+**Goal.** Ensure the manual line break in the first row of Table 10 is correctly rendered in PDF.
+
+**Changes.**
+- `report/results/results.tex:86` - Replaced `\parbox` with a nested `tabular[t]` environment.
+
+**Reasoning.** Under `\adjustbox`, a `\parbox` width might be stretched or ignored, or standard line breaks might fail without strict paragraph rules. A nested `\begin{tabular}[t]{@{}l@{}}...\\...\end{tabular}` is standard LaTeX, does not require a hardcoded width, and forces the `\\` line break cleanly.
+
+**Follow-ups.** Compiled report successfully.

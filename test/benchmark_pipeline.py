@@ -169,7 +169,7 @@ def _build_prior_aware_model(cfg: dict[str, Any], args: argparse.Namespace, arch
         from src.model.PriorAwareV6NanoModel import PriorAwareV6NanoModel
 
         return PriorAwareV6NanoModel(**timm_kwargs)
-    if arch == "prior_aware_v7nano":
+    if arch in {"prior_aware_v7nano", "prior_aware_v7nano_explore_exploit"}:
         from src.model.PriorAwareV7NanoModel import PriorAwareV7NanoModel
 
         return PriorAwareV7NanoModel(**timm_kwargs)
@@ -224,6 +224,7 @@ def resolve_pipeline(arch: str) -> tuple[Callable, Callable]:
         "prior_aware_v5nano_explore_exploit_lsmooth",
         "prior_aware_v6nano",
         "prior_aware_v7nano",
+        "prior_aware_v7nano_explore_exploit",
     }
     camchex_arches = {"camchex", "camchex_cxrbert"}
     vitals_arches = {"camchex_v2nano_vitals", "camchex_v2nano_vitals_stable", "camchex_v3nano"}
