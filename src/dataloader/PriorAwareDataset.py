@@ -7,6 +7,8 @@ no tokenizer call, no path resolution at runtime.
 
 from __future__ import annotations
 
+import os
+import time
 import warnings
 from typing import Any
 
@@ -161,6 +163,36 @@ class PriorAwareDataset(Dataset):
             or ["clin_text", "obs_text", "prior_clin_text", "prior_obs_text", "prior_report_text"]
         )
         self.vital_stats = {**DEFAULT_VITAL_STATS, **dict(cfg.get("vital_stats", {}) or {})}
+        # Opt-in __getitem__ timing probe. Set CAMCHEX_GETITEM_PROFILE=1 (or to an
+        # integer = report interval in samples, default 200) to print, per worker, the
+        # cumulative wall-time split across the per-sample stages (current-image load,
+        # prior-image load, text tokenize, vitals). Zero overhead when unset. This is a
+        # diagnostic to locate the dataloader bottleneck (I/O-bound channel-cache reads
+        # vs. CPU tokenization); remove once the bottleneck is identified.
+        prof_env = os.environ.get("CAMCHEX_GETITEM_PROFILE")
+        self._prof_enabled = bool(prof_env) and prof_env != "0"
+        try:
+            self._prof_interval = max(1, int(prof_env)) if prof_env and prof_env != "1" else 200
+        except ValueError:
+            self._prof_interval = 200
+        self._prof_acc = {"cur_img": 0.0, "prior_img": 0.0, "text": 0.0, "vitals": 0.0, "total": 0.0}
+        self._prof_n = 0
+
+    def _prof_report(self) -> None:
+        """Print the per-stage cumulative timing split for this worker."""
+        info = torch.utils.data.get_worker_info()
+        wid = info.id if info is not None else -1
+        n = max(1, self._prof_n)
+        acc = self._prof_acc
+        parts = " | ".join(
+            f"{k}={acc[k] / n * 1e3:.2f}ms ({acc[k] / max(1e-9, acc['total']) * 100:4.1f}%)"
+            for k in ("cur_img", "prior_img", "text", "vitals")
+        )
+        print(
+            f"[getitem-profile w{wid}] n={self._prof_n} avg/sample: "
+            f"total={acc['total'] / n * 1e3:.2f}ms || {parts}",
+            flush=True,
+        )
 
     def precompute_text_indices(self) -> None:
         """Index-mode only: resolve every (row, text stream) to its embedding-table
@@ -363,11 +395,15 @@ class PriorAwareDataset(Dataset):
 
     # ---- main entrypoint --------------------------------------------------
     def __getitem__(self, index: int) -> tuple[dict[str, Any], np.ndarray]:
+        prof = self._prof_enabled
+        t_start = time.perf_counter() if prof else 0.0
         row = self.df.iloc[index]
 
         cur_img, cur_views, cur_bg_mask = self._load_image_block(
             list(row["img_paths"]), list(row["view_positions"]), with_mask=self.compute_bg_mask
         )
+        if prof:
+            t_cur = time.perf_counter()
         if cur_img.sum() == 0:
             # Defensive: every current image unreadable. Fall through to neighbor like the legacy
             # dataset did, so we never return an all-zero current block to the model.
@@ -386,6 +422,8 @@ class PriorAwareDataset(Dataset):
         else:
             prv_img = _zero_image_block(self.size, self._img_dtype)
             prv_views = np.zeros(MAX_VIEWS, dtype=np.int64)
+        if prof:
+            t_prior = time.perf_counter()
 
         data = {
             "study_id": int(row["study_id"]),
@@ -403,6 +441,8 @@ class PriorAwareDataset(Dataset):
         }
         if cur_bg_mask is not None:
             data["bg_mask"] = cur_bg_mask  # (MAX_VIEWS, G, G) confident-background weight
+        if prof:
+            t_dict = time.perf_counter()
         # Emit only the text streams the model consumes (see _emit_streams). The
         # dict key prefix is the column name without the trailing "_text".
         emit = self._emit_streams
@@ -413,6 +453,8 @@ class PriorAwareDataset(Dataset):
             prefix = text_key[: -len("_text")]
             data[f"{prefix}_input_ids"] = ids
             data[f"{prefix}_attn_mask"] = mask
+        if prof:
+            t_text = time.perf_counter()
         vital_values, vital_missing = self._normalize_vitals(row["vital_values_raw"] if _has_value(row, "vital_values_raw") else None)
         prior_vital_values, prior_vital_missing = self._normalize_vitals(
             row["prior_vital_values_raw"] if has_prior and _has_value(row, "prior_vital_values_raw") else None
@@ -422,6 +464,19 @@ class PriorAwareDataset(Dataset):
         data["prior_vital_values"] = prior_vital_values if has_prior else np.zeros(len(VITAL_FIELDS), dtype=np.float32)
         data["prior_vital_missing_mask"] = prior_vital_missing if has_prior else np.ones(len(VITAL_FIELDS), dtype=np.bool_)
         label = _to_fixed_array(row["label"], np.float32, self.n_classes, "label")
+        if prof:
+            t_end = time.perf_counter()
+            acc = self._prof_acc
+            acc["cur_img"] += t_cur - t_start
+            acc["prior_img"] += t_prior - t_cur
+            # t_dict (cheap dict build) is folded into the text window's start; the
+            # text stage measures tokenize/cache-lookup, vitals measures normalization.
+            acc["text"] += t_text - t_dict
+            acc["vitals"] += t_end - t_text
+            acc["total"] += t_end - t_start
+            self._prof_n += 1
+            if self._prof_n % self._prof_interval == 0:
+                self._prof_report()
         return data, label
 
 
