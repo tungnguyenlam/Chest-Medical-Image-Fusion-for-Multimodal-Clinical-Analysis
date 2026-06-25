@@ -156,8 +156,9 @@ trainer:
   val_check_interval: null
   quick_val_every_steps: null
   full_val_fracs: []
-  quick_val_fracs: [0.33, 0.66]
+  quick_val_fracs: []
   quick_val_frac: 0.1
   val_num_workers: 0
   seed: null
   accelerator: null
+  gradcam_epochs: none
