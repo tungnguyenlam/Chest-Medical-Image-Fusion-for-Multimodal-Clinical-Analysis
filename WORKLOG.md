@@ -3230,3 +3230,25 @@ CXR-LT runs; no lsmooth variant unless requested.
 **Reasoning.** Under `\adjustbox`, a `\parbox` width might be stretched or ignored, or standard line breaks might fail without strict paragraph rules. A nested `\begin{tabular}[t]{@{}l@{}}...\\...\end{tabular}` is standard LaTeX, does not require a hardcoded width, and forces the `\\` line break cleanly.
 
 **Follow-ups.** Compiled report successfully.
+
+## 2026-06-25 - global --pin-memory CLI flag
+
+**Goal.** Expose DataLoader `pin_memory` on every train/eval entry point so host-RAM tuning
+does not require editing per-model YAML.
+
+**Changes.**
+- `training/common.py` — added `--pin-memory [BOOL]` to the shared data & batching group
+  (`nargs='?'`, bare flag = true, `--pin-memory false` disables).
+- `training/utils/config.py` — `optional_bool_arg()` parser helper and
+  `resolve_pin_memory()` (CLI → `data.dataloader_init_args.pin_memory` → default true).
+- `training/utils/data.py` — `dataloader_args_from_config()` now sets
+  `pin_memory` via `resolve_pin_memory()`.
+
+**Reasoning.** `pin_memory` was YAML-only; users on tight boxes needed a one-off config edit.
+Mirrored the optional-bool pattern (`--pin-memory false`) rather than `BooleanOptionalAction`
+so the explicit false syntax matches the user's request.
+
+**Gotchas.** Resolution order is CLI > config YAML > true. The `[dataloader]` print at loader
+build time will show the resolved value.
+
+**Follow-ups.** Add a row to `training/FLAGS.md` if we want the flag map kept in sync.

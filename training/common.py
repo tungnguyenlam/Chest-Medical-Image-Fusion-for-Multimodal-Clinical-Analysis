@@ -313,6 +313,17 @@ def add_common_args(parser: argparse.ArgumentParser, model_name: str, default_co
     )
     g.add_argument("--prefetch-factor", type=int, help="DataLoader prefetch_factor (requires num_workers > 0).")
     g.add_argument(
+        "--pin-memory",
+        nargs="?",
+        const=True,
+        default=None,
+        type=optional_bool_arg,
+        metavar="BOOL",
+        help="DataLoader pin_memory for host->device staging. Default true (or "
+        "data.dataloader_init_args.pin_memory from config). Pass false on tight host-RAM "
+        "boxes to skip pinned batch copies. Bare --pin-memory is equivalent to true.",
+    )
+    g.add_argument(
         "--malloc-arena-max",
         type=int,
         help="Cap glibc malloc arenas to control host-RAM/RSS under num_workers>0 (each fork "

@@ -412,6 +412,31 @@ def resolve_train_batch_size(cfg: dict[str, Any], args: argparse.Namespace) -> i
     return int(cfg["data"]["dataloader_init_args"]["batch_size"])
 
 
+def optional_bool_arg(value: str | bool | None) -> bool | None:
+    """argparse type for ``--flag [true|false]``: omitted -> None, bare flag -> True."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    v = str(value).lower()
+    if v in ("true", "1", "yes", "on"):
+        return True
+    if v in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected true or false, got {value!r}")
+
+
+def resolve_pin_memory(args: argparse.Namespace, cfg: dict[str, Any] | None) -> bool:
+    cli_val = getattr(args, "pin_memory", None)
+    if cli_val is not None:
+        return bool(cli_val)
+    if cfg is not None:
+        dl = (cfg.get("data", {}) or {}).get("dataloader_init_args", {}) or {}
+        if "pin_memory" in dl:
+            return bool(dl["pin_memory"])
+    return True
+
+
 def resolve_val_batch_size(cfg: dict[str, Any], args: argparse.Namespace) -> int:
     """Eval is forward-only, so the val/eval loader can run a larger batch than training.
     Explicit --val-batch-size wins; otherwise default to 2x the train batch size."""

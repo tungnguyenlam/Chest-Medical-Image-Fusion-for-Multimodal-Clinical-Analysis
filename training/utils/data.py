@@ -24,6 +24,7 @@ from .constants import CPU_FRACTION, VIEW_ALIASES
 from .config import (
     data_cfg_from_config,
     resolve_path,
+    resolve_pin_memory,
     resolve_trainer_arg,
     resolve_uint8_image_pipeline,
     resolve_val_batch_size,
@@ -208,6 +209,7 @@ def dataloader_args_from_config(cfg: dict[str, Any], args: argparse.Namespace, s
         dl_args["num_workers"] = int(resolve_trainer_arg(args, cfg, "val_num_workers", 0))
     if getattr(args, "prefetch_factor", None) is not None:
         dl_args["prefetch_factor"] = args.prefetch_factor
+    dl_args["pin_memory"] = resolve_pin_memory(args, cfg)
     if dl_args.get("num_workers", 0) == 0:
         dl_args["persistent_workers"] = False
         dl_args.pop("prefetch_factor", None)
