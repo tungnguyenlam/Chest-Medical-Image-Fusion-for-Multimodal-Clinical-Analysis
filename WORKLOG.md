@@ -3332,3 +3332,69 @@ in thesis chapters, v8 README, and v9 design. Content matches the 2026-06-25 aud
 no new empirical runs were added.
 
 **Follow-ups.** Run the §7 quantitative checks; implement prior-zeroed eval slice.
+
+## 2026-06-28 — Document text embedding model transition in thesis methodology
+
+**Goal.** Document the methodology transition from the legacy BioBERT text encoder to the active CXR-BERT-specialized encoder, and detail the token projection design.
+
+**Changes.**
+- `report/methodology/methodology.tex:120-155` - Replaced `Clinical Indication Text Encoder` subsubsection with a detailed `Text Embedding Model` subsection. Included comparison table `tab:text_encoder_comparison` contrasting BioBERT and CXR-BERT-specialized.
+- `report/methodology/methodology.tex:107-119`, `156-160` - Promoted the visual and vital sign encoders to subsections (removing the empty parent `Modality-Specific Encoders` level).
+- `report/methodology/methodology.tex:162-177` - Updated the token construction formulas and text to use $n_{\text{text}}$ tokens (normally 2) for the current study and $2n_{\text{text}}$ tokens for the prior study.
+- `report/references.bib:266-287` - Added BibTeX entries for `lee2020biobert` and `boecking2022making`.
+
+**Reasoning.** Restructuring the encoders as subsections provides a cleaner outline now that the text embedding model has extensive details. Incorporating the explicit $n_{\text{text}}$ dimensionality updates makes the methodology mathematically consistent with the active prior-aware Nano implementation.
+
+## 2026-06-28 — Integrate CXR-LT pathology frequency figure into LaTeX report
+
+**Goal.** Add the `report/img/cxr-lt-2023-newlyadded-original-demonstrate.pdf` class frequency chart to the LaTeX report and place it in a context-appropriate location under the Exploratory Data Analysis section.
+
+**Changes.**
+- `report/eda/eda.tex:34-48` — Added `Figure~\ref{fig:cxrlt_original_newlyadded}` using the `cxr-lt-2023-newlyadded-original-demonstrate.pdf` graphic, describing the benchmark's pathology space split into the 14 original CheXpert classes and the 12 newly added classes. Updated the surrounding text to clarify the difference between the overall benchmark distribution and the filtered subset cohort's label distribution (`Figure~\ref{fig:label_distribution}`).
+
+**Reasoning.**
+The Exploratory Data Analysis section previously discussed the long-tailed nature of the class labels using only `Figure~\ref{fig:label_distribution}` (which shows the subset distribution). Placing `cxr-lt-2023-newlyadded-original-demonstrate.pdf` as `Figure~\ref{fig:cxrlt_original_newlyadded}` next to it provides a direct comparison to the full CXR-LT dataset's official class frequencies and helps the reader distinguish between the original 14 CheXpert labels and the 12 newly added ones.
+
+**Gotchas.**
+Because the figure is a PDF graphic, compiling it via `pdflatex` works natively. The compilation pipeline successfully verified that both figures are numbered and referenced correctly, resolving the overall page count to 39 pages.
+
+## 2026-06-28 - Update Modality Ablation Results in Thesis Report
+
+**Goal.** Populate Table 10 ("Modality ablation on the proposed final model") in the thesis report with the evaluation results from the prior_aware_v8nano baseline checkpoint.
+
+**Changes.**
+- `report/results/results.tex:105-143` - Filled in the placeholders for the "Report dropped (image+vitals)" configuration using results from the v8nano ablation evaluation. Completed the "Image-only" baseline row using metrics from the Single-View baseline. Updated text and table captions to reflect the exact numbers and remove placeholder remarks.
+
+**Reasoning.** The modality ablation results quantify the impact of dropping the clinical indication report from the best model (mAP drops by 0.2183, from 0.5595 to 0.3412). Updating these placeholders completes the quantitative evidence needed for the results section. The baseline image-only metrics serve as the lower bound and were retrieved from the prior single-view baseline.
+
+**Follow-ups.** Re-compile and review the final thesis PDF to ensure the table formatting and citations look correct.
+
+## 2026-06-28 - Update proposed model evaluation metrics in thesis report
+
+**Goal.** Update the thesis report's results and conclusion sections with the latest `prior_aware_v8nano` evaluation metrics from checkpoint `best.pt` (mean AP of 0.5595 and mean AUROC of 0.9014).
+
+**Changes.**
+- `report/results/results.tex:59` — Updated main proposed model test performance (mAP: 0.5595, AUROC: 0.9014, Head mAP: 0.7742, Tail mAP: 0.3893).
+- `report/results/results.tex:67-69` — Recalculated and updated absolute improvements (+0.1497 mAP over baseline, tail mAP increase of +0.2307, tail AUROC to 0.9173).
+- `report/results/results.tex:89,95` — Updated proposed model contextual comparison numbers to 0.5595 mAP and 0.9014 AUROC.
+- `report/results/results.tex:165,174` — Updated full proposed model performance in architectural component ablation to 0.5595 mAP / 0.9014 AUROC, and updated prior cross-attention boost mention to 0.8732 -> 0.9014.
+- `report/results/results.tex:185` — Updated tail class average AUROC to 0.9173.
+- `report/results/results.tex:198,232` — Updated Case Study 1 (Cardiomegaly: AP = 0.6778, AUROC = 0.8230) and Case Study 2 (Pneumothorax: AP = 0.8592, AUROC = 0.9634) with their new class-specific metrics.
+- `report/conclusion/conclusion.tex:8` — Updated overall AP to 0.5595 and AUROC to 0.9014.
+
+**Reasoning.** The thesis results section previously contained outdated/placeholder metrics (overall mAP of 0.4950 and AUROC of 0.8985) for the proposed prior-aware multimodal model in several tables and prose paragraphs. Updating these numbers ensures consistency across all tables and discussions, and correctly represents the final `prior_aware_v8nano` baseline performance.
+
+**Follow-ups.** None.
+
+## 2026-06-29 - Integrate graph head ablation results in results methodology
+
+**Goal.** Differentiate the baseline prior-aware model (without graph head, mAP 0.4950 / AUROC 0.8985) from the final proposed model (with graph head, mAP 0.5595 / AUROC 0.9014) in the architectural component ablation study.
+
+**Changes.**
+- `report/results/results.tex:165-166` — Added a new ablation variant `Proposed (without graph head)` to Table 15 (ablation study of proposed components) to hold the 0.4950 mAP and 0.8985 AUROC baseline, while keeping `Proposed model (Full)` at 0.5595 mAP and 0.9014 AUROC.
+- `report/results/results.tex:174` — Adjusted the cross-attention prior boost description back to $0.8732 \rightarrow 0.8985$ AUROC (which isolates the prior context addition).
+- `report/results/results.tex:179` — Appended a new paragraph explaining the label-correlation graph head's specific contribution to classification performance ($0.4950 \rightarrow 0.5595$ mAP and $0.8985 \rightarrow 0.9014$ Macro AUROC).
+
+**Reasoning.** Structuring the component ablation this way clearly isolates the incremental gains of the directed label graph head from the base prior cross-attention framework. It preserves both the original 0.4950 prior-aware results (re-labeled as without graph head) and the latest 0.5595 final metrics.
+
+**Follow-ups.** None.

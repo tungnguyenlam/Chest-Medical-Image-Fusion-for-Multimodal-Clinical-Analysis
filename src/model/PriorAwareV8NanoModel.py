@@ -307,6 +307,16 @@ class PriorAwareV8NanoModel(nn.Module):
     def _encode_image_block(self, x, view_positions, view_seg_indices):
         b, s = x.shape[:2]
         feats, nonzero_mask = self.image_encoder(x, view_positions)
+        # When no slot in the block holds a real view (e.g. a sample with no prior
+        # study), the encoder returns a 0-row feats tensor. Feeding a zero-batch
+        # tensor through pool/proj/pos_encoding is fine on CUDA but MPS mishandles
+        # empty-batch conv/pool kernels and can hand back a collapsed (non-4d)
+        # tensor, crashing pos_encoding. Substitute a single dummy row so the
+        # shape math stays reliable; its result is discarded since the scatter
+        # below selects zero slots.
+        any_valid = bool(nonzero_mask.any())
+        if not any_valid:
+            feats = feats.new_zeros((1, *feats.shape[1:]))
         feats = self.image_pool(feats)
         feats = self.image_proj(feats)
         feats = self.pos_encoding(feats)
@@ -317,7 +327,8 @@ class PriorAwareV8NanoModel(nn.Module):
         ).type_as(feats).clone()
         seg_for_views = torch.stack([self.segment_embedding[i] for i in view_seg_indices], dim=0)
         seg = einops.repeat(seg_for_views, "s c 1 1 -> (b s) c h w", b=b, h=h2, w=w2).type_as(feats)
-        pad_tokens[nonzero_mask] = feats + seg[nonzero_mask]
+        if any_valid:
+            pad_tokens[nonzero_mask] = feats + seg[nonzero_mask]
         block = einops.rearrange(pad_tokens, "(b s) c h w -> b s c h w", b=b, s=s)
         return block, nonzero_mask.view(b, s)
 

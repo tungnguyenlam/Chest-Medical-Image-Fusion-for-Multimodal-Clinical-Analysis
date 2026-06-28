@@ -123,9 +123,12 @@ def compute_cooccurrence(train_parquet: Path, alpha: float, bh_q: float):
 def encode_node_features(text_model: str, device: str) -> torch.Tensor:
     """CXR-BERT CLS for each class *name* -> Z0 ∈ R^{K×768}. Names only: no leakage."""
     from transformers import AutoModel, AutoTokenizer
+    from src.utils.text_embedding_cache import _materialize_unused_cxrbert_meta_parameters
 
     tok = AutoTokenizer.from_pretrained(text_model, trust_remote_code=True)
-    model = AutoModel.from_pretrained(text_model, trust_remote_code=True).to(device).eval()
+    model = AutoModel.from_pretrained(text_model, trust_remote_code=True, low_cpu_mem_usage=False)
+    _materialize_unused_cxrbert_meta_parameters(model)
+    model = model.to(device).eval()
     feats = []
     with torch.no_grad():
         for name in CLASSES:

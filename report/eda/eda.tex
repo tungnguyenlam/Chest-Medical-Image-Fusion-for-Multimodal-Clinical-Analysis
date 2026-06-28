@@ -34,18 +34,25 @@ Table~\ref{tab:cohort_summary} shows the patient and study counts across splits,
 \subsection{Label Distribution and Co-occurrence}
 \label{subsec:eda_labels}
 
-The target classification task is multi-label, where each study can contain multiple co-occurring findings, and long-tailed, meaning some findings occur far more frequently than others \cite{holste2024cxrlt,holste2023cxrlt_physionet}. This class imbalance presents a challenge where standard training objectives may bias predictions toward common pathologies at the expense of rare, clinically significant findings.
+The target classification task is multi-label, where each study can contain multiple co-occurring findings, and long-tailed, meaning some findings occur far more frequently than others \cite{holste2024cxrlt,holste2023cxrlt_physionet}. Under the Chest X-Ray Long-Tailed (CXR-LT) benchmark formulation, the label space consists of 26 target pathologies. These findings comprise 14 original labels inherited from the standard CheXpert labeling system and 12 newly added labels extracted to specifically represent rare conditions and enrich the long-tailed evaluation. Figure~\ref{fig:cxrlt_original_newlyadded} illustrates the full label frequency distribution across the MIMIC-CXR dataset, demonstrating the severe class imbalance and highlighting the distinction between the original and newly added pathology labels.
 
-Figure~\ref{fig:label_distribution} shows the number of positive samples for each target label.
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/cxr-lt-2023-newlyadded-original-demonstrate.pdf}
+    \caption{Frequency distribution of the 26 pathology classes in the CXR-LT benchmark, categorized by original CheXpert classes (blue) and newly added classes (red).}
+    \label{fig:cxrlt_original_newlyadded}
+\end{figure}
+
+Figure~\ref{fig:label_distribution} shows the number of positive samples for each target label in the filtered subset cohort used for our experiments.
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.95\textwidth]{img/label_distribution.png}
-    \caption{Distribution of positive labels across the target chest X-ray findings.}
+    \caption{Distribution of positive labels across the target chest X-ray findings in the filtered subset cohort.}
     \label{fig:label_distribution}
 \end{figure}
 
-Figure~\ref{fig:label_distribution} shows a strong long-tailed label distribution. Common findings such as pleural effusion, atelectasis, and cardiomegaly appear much more frequently than rare findings such as pneumothorax, fracture, and hernia, with the imbalance ratio exceeding 100:1. For modelling, this severe class imbalance motivates the use of imbalance-aware loss functions, such as asymmetric loss, and separate evaluation of frequent and rare labels to prevent predictions from being dominated by majority negative classes.
+Figure~\ref{fig:label_distribution} shows that our subset cohort retains the strong long-tailed distribution characteristic of the full dataset. Common findings such as pleural effusion, atelectasis, and cardiomegaly appear much more frequently than rare findings such as pneumothorax, fracture, and hernia, with the imbalance ratio exceeding 100:1. For modelling, this severe class imbalance motivates the use of imbalance-aware loss functions, such as asymmetric loss, and separate evaluation of frequent and rare labels to prevent predictions from being dominated by majority negative classes.
 
 In addition to individual label frequencies, label co-occurrence is also important. Figure~\ref{fig:label_cooccurrence} presents a co-occurrence matrix between target findings.
 

@@ -233,6 +233,9 @@ def move_to_device(value, device: torch.device):
         # the target is CUDA (our loaders set pin_memory: true); on CPU/MPS or a
         # non-pinned tensor non_blocking is a silent no-op, so gate on CUDA.
         non_blocking = device.type == "cuda"
+        # MPS has no float64 support; downcast double tensors to float32 before transfer.
+        if device.type == "mps" and value.dtype == torch.float64:
+            value = value.to(torch.float32)
         return value.to(device, non_blocking=non_blocking)
     if isinstance(value, tuple):
         return tuple(move_to_device(v, device) for v in value)

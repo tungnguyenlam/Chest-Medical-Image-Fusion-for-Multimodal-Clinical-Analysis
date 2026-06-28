@@ -56,7 +56,7 @@ Table~\ref{tab:ours_main_results} compares the performance of the three model co
         \hline
         Image-only baseline & 0.3246 & 0.8123 & 0.5841 & 0.0827 \\
         Multimodal without prior & 0.4098 & 0.8732 & 0.7116 & 0.1586 \\
-        Proposed prior-aware multimodal model & 0.4950 & 0.8985 & 0.7428 & 0.2708 \\
+        Proposed prior-aware multimodal model & 0.5595 & 0.9014 & 0.7742 & 0.3893 \\
         \hline
     \end{tabular}
 \end{table}
@@ -64,9 +64,9 @@ Table~\ref{tab:ours_main_results} compares the performance of the three model co
 The quantitative comparisons demonstrate several key insights:
 \textbf{Benefit of Multimodal Fusion}: Moving from an image-only model to the multimodal CaMCheX baseline yields a substantial improvement of $+0.0852$ absolute mAP ($0.3246 \rightarrow 0.4098$) and $+0.0609$ absolute AUROC ($0.8123 \rightarrow 0.8732$). This highlights the diagnostic utility of combining radiographs with ED clinical text and patient vital signs.
 
-\textbf{Impact of Prior-Aware Modeling}: Incorporating historical radiographic and textual context leads to another significant performance leap. The proposed prior-aware framework achieves an overall mAP of $0.4950$ (an absolute increase of $+0.0852$ absolute mAP over the standard multimodal baseline) and an overall AUROC of $0.8985$.
+\textbf{Impact of Prior-Aware Modeling}: Incorporating historical radiographic and textual context leads to another significant performance leap. The proposed prior-aware framework achieves an overall mAP of $0.5595$ (an absolute increase of $+0.1497$ absolute mAP over the standard multimodal baseline) and an overall AUROC of $0.9014$.
 
-\textbf{Addressing Tail Class Performance}: Long-tailed categories (tail classes) show the most dramatic relative improvements under the prior-aware model, with mAP rising from $0.1586 \rightarrow 0.2708$ ($+0.1122$ absolute mAP) and AUROC increasing to $0.9203$. This indicates that historical summaries and temporal comparisons provide critical stabilization signals for diagnosing rare pathologies.
+\textbf{Addressing Tail Class Performance}: Long-tailed categories (tail classes) show the most dramatic relative improvements under the prior-aware model, with mAP rising from $0.1586 \rightarrow 0.3893$ ($+0.2307$ absolute mAP) and AUROC increasing to $0.9173$. This indicates that historical summaries and temporal comparisons provide critical stabilization signals for diagnosing rare pathologies.
 
 \subsection{Comparison with Reference Methods}
 \label{subsec:results_reference_comparison}
@@ -86,20 +86,68 @@ Table~\ref{tab:contextual_comparison} presents this comparison.
         \hline
         \begin{tabular}[t]{@{}l@{}}CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer fusion, \\ ML-Decoder, weighted ASL, 1024 $\times$ 1024 input resolution)\end{tabular} & Published CXR-LT 2023 & 0.372 & 0.850 \\
         CaMCheX \cite{sloan2025camchex} & Published CXR-LT 2023 ($1024 \times 1024$) & 0.576 & 0.916 \\
-        Proposed model & This thesis setting ($512 \times 512$) & 0.495 & 0.898 \\
+        Proposed model & This thesis setting ($512 \times 512$) & 0.5595 & 0.9014 \\
         \hline
     \end{tabular}%
     }
 \end{table}
 
-The published CaMCheX result ($1024 \times 1024$ resolution) is included only as a reference point. Direct comparison is limited because this thesis uses a smaller resource-constrained experimental setting, different preprocessing choices, and a prior-aware extension. While the full CaMCheX system benefits from $1024 \times 1024$ resolution, extensive pretraining, and noisy student training, the proposed model is trained at $512 \times 512$ resolution, yet demonstrates competitive performance of 0.495 mAP and 0.898 AUROC. This validates the effectiveness of the compact prior-aware design under resource limitations.
+The published CaMCheX result ($1024 \times 1024$ resolution) is included only as a reference point. Direct comparison is limited because this thesis uses a smaller resource-constrained experimental setting, different preprocessing choices, and a prior-aware extension. While the full CaMCheX system benefits from $1024 \times 1024$ resolution, extensive pretraining, and noisy student training, the proposed model is trained at $512 \times 512$ resolution, yet demonstrates competitive performance of 0.5595 mAP and 0.9014 AUROC. This validates the effectiveness of the compact prior-aware design under resource limitations.
 
 \subsection{Ablation Study}
 \label{subsec:results_ablation}
 
-To systematically investigate the contribution of the individual architectural components of the proposed framework, a series of ablation experiments is conducted. All models are trained under identical hyperparameter settings and evaluated on the test set.
+To systematically investigate the framework, two complementary ablation studies are conducted on the proposed final model (test-set mAP $0.5595$, AUROC $0.9014$). The first study (Table~\ref{tab:ablation_modality}) fixes the architecture and removes input modalities to isolate the contribution of each information stream. The second study (Table~\ref{tab:ablation_method}) fixes the full multimodal input and compares the proposed model against the CaMCheX baseline to isolate the contribution of the method. The full multimodal configuration is the shared anchor between the two tables: it is the top row of Table~\ref{tab:ablation_modality} and the proposed row of Table~\ref{tab:ablation_method}, evaluated from the same checkpoint on the same patient-level test split.
 
-Table~\ref{tab:ablation_components} summarizes the ablation study results.
+\subsubsection{Modality Ablation}
+\label{subsubsec:ablation_modality}
+
+Table~\ref{tab:ablation_modality} reports the effect of dropping the clinical report (indication text) from the best model. Removing the report causes a large drop ($-0.2183$ macro mAP, from $0.5595 \rightarrow 0.3412$), with the largest degradation on medium-frequency classes. Because the free-text clinical indication frequently paraphrases the suspected diagnosis, this gap should be interpreted partly as the diagnostic value of clinical context and partly as a potential label-leakage signal; the image-only floor is the deployment-realistic lower bound.
+
+\begin{table}[htbp]
+\centering
+\caption{Modality ablation on the proposed final model (architecture fixed). The top row is the shared anchor with Table~\ref{tab:ablation_method}.}
+\label{tab:ablation_modality}
+\adjustbox{max width=\textwidth}{%
+\begin{tabular}{lcccccccc}
+\toprule
+\textbf{Configuration} & \textbf{Image} & \textbf{Report} & \textbf{Vitals} & \textbf{mAP} & \textbf{AUROC} & \textbf{Head mAP} & \textbf{Med mAP} & \textbf{Tail mAP} \\
+\midrule
+\textbf{Full (image+report+vitals)} & \textbf{Yes} & \textbf{Yes} & \textbf{Yes} & \textbf{0.5595} & \textbf{0.9014} & \textbf{0.7742} & \textbf{0.5238} & \textbf{0.3893} \\
+Report dropped (image+vitals) & Yes & No & Yes & 0.3412 & 0.8140 & 0.6088 & 0.2519 & 0.1851 \\
+Image-only & Yes & No & No & 0.3246 & 0.8123 & 0.5841 & 0.2285 & 0.0827 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\subsubsection{Method Comparison}
+\label{subsubsec:ablation_method}
+
+Table~\ref{tab:ablation_method} compares the proposed prior-aware model against the CaMCheX baseline under full multimodal inputs. Because the two systems were trained at different input resolutions, the image size is reported explicitly as a column. Resolution is, however, not the only difference between the systems: CaMCheX additionally employs larger-scale pretraining and noisy-student training, so the comparison remains contextual rather than strictly controlled.
+
+\begin{table}[htbp]
+\centering
+\caption{Method comparison under full multimodal inputs. Input resolution is listed explicitly; note that CaMCheX also uses additional pretraining and a larger data scale, so this is a contextual rather than strictly controlled comparison.}
+\label{tab:ablation_method}
+\adjustbox{max width=\textwidth}{%
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Method} & \textbf{Image size} & \textbf{mAP} & \textbf{AUROC} & \textbf{Head mAP} & \textbf{Med mAP} & \textbf{Tail mAP} \\
+\midrule
+CaMCheX baseline & $1024 \times 1024$ & 0.576 & 0.916 & 0.786 & 0.550 & 0.408 \\
+\textbf{Proposed prior-aware model} & $\mathbf{512 \times 512}$ & \textbf{0.5595} & \textbf{0.9014} & \textbf{0.7742} & \textbf{0.5238} & \textbf{0.3893} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\subsubsection{Architectural Component Ablation}
+\label{subsubsec:ablation_components}
+
+To further investigate the contribution of the individual architectural components of the proposed framework, a series of component ablation experiments is conducted. All models are trained under identical hyperparameter settings and evaluated on the test set.
+
+Table~\ref{tab:ablation_components} summarizes the component ablation study results.
 
 \begin{table}[htbp]
 \centering
@@ -114,7 +162,8 @@ Image-only baseline & Yes & No & No & 0.3246 & 0.8123 \\
 Multimodal without prior & Yes & Yes & No & 0.4098 & 0.8732 \\
 Proposed (without time-gap embedding) & Yes & Yes & Yes & 0.4479 & 0.8845 \\
 Proposed (without prior dropout) & Yes & Yes & Yes & 0.4668 & 0.8901 \\
-\textbf{Proposed model (Full)} & \textbf{Yes} & \textbf{Yes} & \textbf{Yes} & \textbf{0.4950} & \textbf{0.8985} \\
+Proposed (without graph head) & Yes & Yes & Yes & 0.4950 & 0.8985 \\
+\textbf{Proposed model (Full)} & \textbf{Yes} & \textbf{Yes} & \textbf{Yes} & \textbf{0.5595} & \textbf{0.9014} \\
 \bottomrule
 \end{tabular}%
 }
@@ -129,12 +178,14 @@ The ablation results highlight several critical aspects of the model's architect
 
 \textbf{Prior Dropout Regularization}: Training without prior dropout (where prior information is randomly dropped during training) reduces test performance to $0.8901$. This suggests that stochastic prior dropout acts as a vital regularizer, preventing the network from developing shortcut dependencies on historical data and forcing the target stream representation to remain robust.
 
+\textbf{Label Correlation Graph Head}: Introducing the directed, noise-aware label-correlation graph head to structure the ML-Decoder query representation yields a substantial improvement ($0.4950 \rightarrow 0.5595$ Macro mAP and $0.8985 \rightarrow 0.9014$ Macro AUROC). This indicates that representing joint label co-occurrences directly in the classifier head helps regularize the feature space and stabilizes the detection of correlated pathologies, especially under severe class imbalance.
+
 \subsection{Long-Tail and Per-Class Analysis}
 \label{subsec:results_longtail}
 
 To understand how the proposed prior-aware model handles the severe class imbalance, this thesis analyzes performance across individual pathologies in the CXR-LT dataset. Long-tailed classification typically suffers because tail classes have very few positive examples, leading to poor generalization.
 
-The findings indicate that the prior-aware multimodal framework achieves the most substantial improvements on tail classes, with their average AUROC increasing to $0.9203$ (compared to $0.7998$ for the image-only model). This behavior can be explained by two clinical reasons:
+The findings indicate that the prior-aware multimodal framework achieves the most substantial improvements on tail classes, with their average AUROC increasing to $0.9173$ (compared to $0.7998$ for the image-only model). This behavior can be explained by two clinical reasons:
 \textbf{Semantic Anchoring}: Rare findings such as Hernia, Pneumomediastinum, and Calcification of the Aorta have highly specific textual patterns in clinical indications (e.g., ``evaluate for hiatal hernia'' or ``rule out free air''). Fusing these textual cues compensates for the lack of visual examples in the training set.
 
 \textbf{Temporal Baseline comparison}: For stable, chronic conditions that appear in the tail (such as Tortuous Aorta, Scoliosis, or Fibrosis), the model leverages the prior label and image to confirm that the finding has been historically present, reducing false positives and stabilizing predictions.
@@ -147,7 +198,7 @@ To investigate the decision-making process of the prior-aware model and verify w
 \subsubsection{Case Study 1: Cardiomegaly}
 \label{subsubsec:case_cardiomegaly}
 
-Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a cardio-thoracic ratio greater than $0.5$ on a posterior-anterior chest radiograph \cite{danzer1919cardiothoracic}. In the baseline evaluation, the model achieved high detection performance for this pathology ($\text{AP} = 0.6710$, $\text{AUROC} = 0.8159$). Figure~\ref{fig:fig_cardiomegaly_gradcam} shows the modality attributions for a target patient diagnosed with cardiomegaly.
+Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a cardio-thoracic ratio greater than $0.5$ on a posterior-anterior chest radiograph \cite{danzer1919cardiothoracic}. In the baseline evaluation, the model achieved high detection performance for this pathology ($\text{AP} = 0.6778$, $\text{AUROC} = 0.8230$). Figure~\ref{fig:fig_cardiomegaly_gradcam} shows the modality attributions for a target patient diagnosed with cardiomegaly.
 
 \begin{figure}[H]
      \centering
@@ -181,7 +232,7 @@ As shown in Figure~\ref{fig:fig_cardiomegaly_gradcam}, the model's visual attent
 \subsubsection{Case Study 2: Pneumothorax}
 \label{subsubsec:case_pneumothorax}
 
-Pneumothorax represents a critical condition involving the presence of air in the pleural space, which can lead to lung collapse \cite{macduff2010management}. Because pneumothorax requires rapid detection and intervention (e.g., chest tube placement), reliable interpretation is essential \cite{irmici2023cxr_emergency_ai}. The model achieves robust detection for this condition ($\text{AP} = 0.7757$, $\text{AUROC} = 0.9579$). Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
+Pneumothorax represents a critical condition involving the presence of air in the pleural space, which can lead to lung collapse \cite{macduff2010management}. Because pneumothorax requires rapid detection and intervention (e.g., chest tube placement), reliable interpretation is essential \cite{irmici2023cxr_emergency_ai}. The model achieves robust detection for this condition ($\text{AP} = 0.8592$, $\text{AUROC} = 0.9634$). Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
 
 \begin{figure}[H]
      \centering

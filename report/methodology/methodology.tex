@@ -107,11 +107,8 @@ This mask vector \(M_i = [m_{i1}, \dots, m_{iD}]^\top\) is concatenated to the n
 
 \textbf{Label Construction}: The binary targets correspond to the $26$ long-tailed pathologies defined by the CXR-LT dataset. Label vectors are represented as $26$-dimensional multi-hot arrays.
 
-\subsection{Modality-Specific Encoders}
-\label{subsec:method_encoders}
-
-\subsubsection{Chest X-Ray Image Encoder}
-\label{subsubsec:method_image_encoder}
+\subsection{Chest X-Ray Image Encoder}
+\label{subsec:method_image_encoder}
 
 The image encoder extracts visual features from the current chest X-ray study. Because chest X-ray studies may contain different view positions, the model handles frontal and lateral views separately. Each available view is passed through a lightweight ConvNeXt-V2 visual backbone \cite{woo2023convnextv2} to obtain spatial feature maps. These feature maps are then projected to the transformer latent dimension using a convolutional projection layer. Formally, for a set of image views \(I_i\), the image representation \(H_i^{img}\) is extracted as:
 \begin{equation}
@@ -121,19 +118,39 @@ where \(E_{img}\) denotes the visual backbone and projection layers, \(N_{img}\)
 
 To preserve spatial information, two-dimensional positional embeddings are added to the projected image features. If a study contains fewer views than the maximum expected number of views, missing view slots are represented using padding tokens and ignored by the attention mask. This allows the model to handle variable-view studies while maintaining a consistent tensor structure.
 
-\subsubsection{Clinical Indication Text Encoder}
-\label{subsubsec:method_text_encoder}
+\subsection{Text Embedding Model}
+\label{subsec:text_embedding_model}
 
-Clinical indication text provides information about the reason for the examination and the patient's presenting condition. The text is encoded using a radiology-domain language model, BiomedVLP-CXR-BERT-specialized \cite{boecking2022biovil}. The text sequence is tokenized and truncated or padded to a fixed maximum length. The resulting text representation is obtained from the encoder output and projected into the shared fusion dimension:
-\begin{equation}
-    h_i^{txt} = W_t E_{txt}(T_i) \in \mathbb{R}^{1 \times d}
-\end{equation}
-where \(E_{txt}\) represents the pre-trained text language model, \(T_i\) is the input indication text, and \(W_t\) is a learnable projection matrix that maps the language model's hidden representation into the shared latent space.
+In addition to radiographic images and structured vital signs, the model uses free-text clinical context as an explicit input modality. This reflects the clinical setting in which chest radiographs are interpreted together with the indication for imaging, prior findings, and other contextual information rather than as isolated images. Each text field is tokenized and encoded by a Transformer-based biomedical language model. The resulting contextual representation is then projected into the same feature space as the image and vital-sign tokens before multimodal fusion.
 
-To reduce computational cost, the text encoder is frozen during training. In some experiments, text embeddings are precomputed before training so that the multimodal model does not need to repeatedly run the language model. This design choice makes the experiments feasible under limited Graphics Processing Unit (GPU) resources, although it also means that the text encoder is not adapted end-to-end to the final classification objective.
+The original CaMCheX-style implementation used BioBERT (\texttt{dmis-lab/biobert-v1.1}) as the text encoder. BioBERT is a BERT-based language model adapted to biomedical corpora, including PubMed abstracts and PMC full-text articles, and is therefore a reasonable biomedical text representation baseline \cite{lee2020biobert}. However, BioBERT is not specifically optimized for chest radiology reports or for chest X-ray image--text representation learning.
 
-\subsubsection{Vital Signs Encoder}
-\label{subsubsec:method_vitals_encoder}
+In the active refactored implementation, the text encoder is changed to CXR-BERT-specialized (\texttt{microsoft/BiomedVLP-CXR-BERT-specialized}). CXR-BERT is designed for chest X-ray language understanding and is further specialized using radiology reports and multimodal image--text contrastive training in the BioViL framework \cite{boecking2022making}. This makes it more closely matched to the language distribution of MIMIC-CXR reports and clinical indications than a general biomedical encoder. The change is therefore motivated by domain alignment rather than by architectural novelty.
+
+For each text stream, the model uses the final \texttt{[CLS]} representation as a compact sentence-level embedding. In the active prior-aware models, this embedding has dimensionality 768 and is passed through a learned linear projection into the multimodal fusion width. Instead of contributing a single vector directly, the projection expands each text embedding into a small number of fusion tokens, controlled by \(n_{\text{text}}\). In the main refactored models, \(n_{\text{text}}=2\), so each clinical text field contributes two learned text tokens of width \(d_{\text{model}}\). Segment embeddings are added so that the fusion module can distinguish current clinical indication, prior clinical indication, and prior report text.
+
+This design provides a compact and computationally practical text representation. It avoids passing the full sequence of word tokens into the multimodal fusion module, reducing memory and attention cost. The trade-off is that the model relies on a \texttt{[CLS]}-level summary, which may discard some fine-grained phrase-level information from the report. This limitation is important because subtle radiological phrases may carry diagnostic meaning. In this thesis, the choice is treated as a resource-aware design decision rather than as evidence that \texttt{[CLS]}-level text summaries are optimal.
+
+For efficiency, the implementation also supports precomputed text embeddings. When enabled, CXR-BERT embeddings are computed in advance and reused during training, reducing GPU memory use and training time. This is useful under limited compute, but it also means that the language encoder is not updated by the downstream classification objective. Therefore, improvements from the multimodal model should be interpreted as improvements in fusion and downstream classification using fixed text representations, not as evidence of text-encoder fine-tuning.
+
+For interpretability experiments, the cached path can be disabled and the live CXR-BERT encoder can be used so that text-token attribution can still be computed. This allows the Grad-CAM analysis to inspect not only image regions but also the relative contribution of clinical text streams.\footnote{Implementation note: the original reference/legacy path uses \texttt{dmis-lab/biobert-v1.1}, while the active prior-aware Nano experiments use \texttt{microsoft/BiomedVLP-CXR-BERT-specialized}.}
+
+\begin{table}[t]
+\centering
+\caption{Text encoders used in the legacy and active implementations.}
+\label{tab:text_encoder_comparison}
+\begin{tabular}{p{0.22\linewidth} p{0.23\linewidth} p{0.23\linewidth} p{0.24\linewidth}}
+\toprule
+\textbf{Encoder} & \textbf{Domain} & \textbf{Use in this project} & \textbf{Rationale / limitation} \\
+\midrule
+BioBERT ({dmis-lab/biobert-v1.1}) & Biomedical literature & Legacy/reference CaMCheX-style implementation & Strong biomedical baseline, but not specifically trained for chest radiology image--text alignment. \\
+CXR-BERT-specialized ({microsoft/BiomedVLP-CXR-BERT-specialized}) & Chest X-ray radiology text and image--text pretraining & Active refactored prior-aware Nano experiments & Better aligned with CXR report language; used as a compact \texttt{[CLS]}-level representation in this implementation. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Vital Signs Encoder}
+\label{subsec:method_vitals_encoder}
 
 Structured vital signs provide numerical clinical context related to the patient's physiological state. The vital-sign vector includes variables such as temperature, heart rate, oxygen saturation, respiratory rate, systolic blood pressure, and diastolic blood pressure. Each variable is normalized using statistics computed from the training set.
 
@@ -150,13 +167,13 @@ After modality-specific encoding, the model converts all inputs into tokens for 
 \begin{equation}
     X_i^{cur} = [H_i^{img}; h_i^{txt}; h_i^{vit}] \in \mathbb{R}^{N_{cur} \times d}
 \end{equation}
-where \([ \cdot ; \cdot ]\) denotes sequence concatenation along the token dimension, and \(N_{cur} = N_{img} + 2\) is the total number of target tokens.
+where \([ \cdot ; \cdot ]\) denotes sequence concatenation along the token dimension, \(h_i^{txt} \in \mathbb{R}^{n_{\text{text}} \times d}\) represents the projected text tokens, and \(N_{cur} = N_{img} + n_{\text{text}} + 1\) is the total number of target tokens.
 
 If prior-study information exists, a corresponding memory stream token sequence \(X_i^{prior}\) is constructed similarly:
 \begin{equation}
     X_i^{prior} = [H_i^{prior-img}; h_i^{prior-txt}; h_i^{prior-vit}; e_{\Delta t}] \in \mathbb{R}^{N_{prior} \times d}
 \end{equation}
-where \(H_i^{prior-img}\), \(h_i^{prior-txt}\), and \(h_i^{prior-vit}\) are the encoded visual, textual, and vital tokens of the historical prior examination, and \(e_{\Delta t}\) is a learned embedding representing the time gap \(\Delta t\) between the current and prior studies.
+where \(H_i^{prior-img}\), \(h_i^{prior-txt}\), and \(h_i^{prior-vit}\) are the encoded visual, textual, and vital tokens of the historical prior examination, and \(e_{\Delta t}\) is a learned embedding representing the time gap \(\Delta t\) between the current and prior studies. The text sequence \(h_i^{prior-txt} \in \mathbb{R}^{2n_{\text{text}} \times d}\) contains the projected tokens from both the prior clinical indication and prior report text, leading to a total of \(N_{prior} = N_{prior-img} + 2n_{\text{text}} + 2\) prior tokens.
 
 The use of segment embeddings allows the transformer to distinguish between different sources of information even after all features have been projected into the same latent dimension. Positional embeddings are used for spatial image tokens, while temporal embeddings are used for prior-study tokens. Attention masks are applied to ignore padded views or unavailable modalities.
 
