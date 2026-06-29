@@ -41,7 +41,7 @@ The performance of all models is evaluated using two primary metrics: mAP and mA
 
 Table~\ref{tab:ours_main_results} compares the performance of the three model configurations trained and evaluated on the dataset in this thesis.
 
-\begin{table}
+\begin{table}[H]
     \centering
     \caption{Main test-set performance of the implemented models in this thesis.}
     \label{tab:ours_main_results}
@@ -70,7 +70,7 @@ To place the implemented models in context, their performance is compared agains
 
 Table~\ref{tab:contextual_comparison} presents this comparison.
 
-\begin{table}
+\begin{table}[H]
     \centering
     \caption[Contextual comparison with published reference results]{Contextual comparison with published reference results. Published results are not directly comparable because they use different training settings, data scale, resolution, and pretraining.}
     \label{tab:contextual_comparison}
@@ -99,7 +99,7 @@ To systematically investigate the framework, two complementary ablation studies 
 
 Table~\ref{tab:ablation_modality} reports the effect of dropping the clinical report (indication text) from the best model. Removing the report causes a large drop ($-0.2183$ macro mAP, from $0.5595 \rightarrow 0.3412$), with the largest degradation on medium-frequency classes. Because the free-text clinical indication frequently paraphrases the suspected diagnosis, this gap should be interpreted partly as the diagnostic value of clinical context and partly as a potential label-leakage signal; the image-only floor is the deployment-realistic lower bound.
 
-\begin{table}
+\begin{table}[H]
 \centering
 \caption[Modality ablation on the proposed final model]{Modality ablation on the proposed final model (architecture fixed). The top row is the shared anchor with Table~\ref{tab:ablation_method}.}
 \label{tab:ablation_modality}
@@ -121,7 +121,7 @@ Image-only & Yes & No & No & 0.3246 & 0.8123 & 0.5841 & 0.2285 & 0.0827 \\
 
 Table~\ref{tab:ablation_method} compares the proposed prior-aware model against the CaMCheX baseline under full multimodal inputs. Because the two systems were trained at different input resolutions, the image size is reported explicitly as a column. Resolution is, however, not the only difference between the systems: CaMCheX additionally employs larger-scale pretraining and noisy-student training, so the comparison remains contextual rather than strictly controlled.
 
-\begin{table}
+\begin{table}[H]
 \centering
 \caption[Method comparison under full multimodal inputs]{Method comparison under full multimodal inputs. Input resolution is listed explicitly; note that CaMCheX also uses additional pretraining and a larger data scale, so this is a contextual rather than strictly controlled comparison.}
 \label{tab:ablation_method}
@@ -144,7 +144,7 @@ To further investigate the contribution of the individual architectural componen
 
 Table~\ref{tab:ablation_components} summarizes the component ablation study results.
 
-\begin{table}
+\begin{table}[H]
 \centering
 \caption{Ablation study of proposed model components on the CXR-LT test set.}
 \label{tab:ablation_components}
@@ -182,7 +182,7 @@ The image encoder expects a three-channel input, which leaves open the question 
 
 Table~\ref{tab:ablation_channels} reports the comparison. The engineered channel encoding and the plain \texttt{gray3} baseline are effectively tied: \texttt{gray3} is marginally higher on macro mAP ($0.5633$ vs.\ $0.5595$) and tail mAP ($0.4059$ vs.\ $0.3893$), while the engineered encoding is marginally higher on macro AUROC ($0.9014$ vs.\ $0.9000$). The report-dropped floor is likewise within noise of the two ($0.3367$ vs.\ $0.3412$ macro mAP).
 
-\begin{table}
+\begin{table}[H]
 \centering
 \caption[Input channel encoding ablation]{Input channel encoding ablation (architecture and training fixed). The engineered multi-channel encoding is compared against a plain \texttt{gray3} baseline that replicates the grayscale image across all three channels, under both full multimodal inputs and the report-dropped configuration.}
 \label{tab:ablation_channels}
@@ -216,21 +216,18 @@ The findings indicate that the prior-aware multimodal framework achieves the mos
 \subsection{Grad-CAM Qualitative Analysis}
 \label{subsec:results_qualitative}
 
-To investigate the decision-making process of the prior-aware model and verify whether it attends to clinically relevant information, Grad-CAM \cite{selvaraju2017gradcam} attribution maps are generated for both the current and prior image inputs, along with word-level attribution maps for the clinical reports. To probe behaviour across the long-tailed spectrum, three case studies are presented, one drawn from each frequency group: Support Devices (head), Pneumothorax (medium), and Hernia (tail).
+To investigate the decision-making process of the prior-aware model and verify whether it attends to clinically relevant information, Grad-CAM \cite{selvaraju2017gradcam} attribution maps are generated for both the current and prior image inputs, along with word-level attribution maps for the clinical reports. To probe behaviour across the long-tailed spectrum, three case studies are presented, one drawn from each frequency group: Support Devices (head), Nodule (medium), and Hernia (tail).
 
 \subsubsection{Case Study 1 (Head): Support Devices}
 \label{subsubsec:case_support_devices}
 
-Support Devices is the most frequent (head) label and denotes medical hardware such as endotracheal tubes, central venous catheters, pacemakers, and chest drains. It is also the canonical shortcut-learning risk, since devices co-occur with acutely ill patients. Figure~\ref{fig:fig_support_devices_gradcam} shows the modality attributions for a target patient with support devices present.
+Figure~\ref{fig:fig_support_devices_gradcam} and Figure~\ref{fig:support_devices_text} show the visual and text attributions for a target patient with support devices.
 
-\begin{figure}
+\begin{figure}[H]
      \centering
-     % Replace the placeholder boxes below with the real attribution images once generated:
-     % \includegraphics[width=\textwidth]{img/support_devices_gradcam.png}  (current)
-     % \includegraphics[width=\textwidth]{img/support_devices_prior.png}    (prior)
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Support Devices --- Current Target Image Attribution\\ \texttt{img/support\_devices\_gradcam.png}}}
+          \includegraphics[width=\textwidth]{img/support_devices_gradcam.png}
           \caption{Current Target Image Attribution}
           \label{fig:support_devices_cur}
      \end{subfigure}
@@ -238,71 +235,105 @@ Support Devices is the most frequent (head) label and denotes medical hardware s
 
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Support Devices --- Prior Image Attribution\\ \texttt{img/support\_devices\_prior.png}}}
+          \includegraphics[width=\textwidth]{img/support_devices_prior.png}
           \caption{Prior Image Attribution}
           \label{fig:support_devices_prv}
      \end{subfigure}
-        \caption[Grad-CAM Visual Attributions for Support Devices]{Grad-CAM Visual Attributions for Support Devices. In the target image (a), the model's visual attention is expected to localise the device hardware (e.g., the line or tube path) rather than diffuse anatomy. The prior image (b) is expected to show whether the device was already present, supporting a stable-versus-new interpretation.}
+        \caption[Grad-CAM Visual Attributions for Support Devices]{Grad-CAM Visual Attributions for Support Devices. (a) Current target image attribution. (b) Prior image attribution.}
         \label{fig:fig_support_devices_gradcam}
 \end{figure}
 
-\begin{figure}
+\begin{figure}[H]
     \centering
-    % Replace with: \includegraphics[width=0.85\textwidth]{img/support_devices_text.png}
-    \fbox{\parbox[c][0.28\textwidth][c]{0.85\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Support Devices --- Word-Level Text Attribution\\ \texttt{img/support\_devices\_text.png}}}
-    \caption[Word-Level Text Attributions for Support Devices]{Word-Level Text Attributions for Support Devices. Attributions are expected to concentrate on device-related terms such as ``line'', ``tube'', ``catheter'', or ``placement''.}
+    \includegraphics[width=0.85\textwidth]{img/support_devices_text.png}
+    \caption[Word-Level Text Attributions for Support Devices]{Word-Level Text Attributions for Support Devices.}
     \label{fig:support_devices_text}
 \end{figure}
 
-The current image (Figure~\ref{fig:support_devices_cur}) is expected to localise the device hardware rather than diffuse anatomy, the prior image (Figure~\ref{fig:support_devices_prv}) to indicate whether it was already present, and the text attribution (Figure~\ref{fig:support_devices_text}) to emphasise device-related terms.
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{img/support_devices_modality.png}
+        \caption{Normal Scale}
+        \label{fig:support_devices_modality_normal}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{img/support_devices_modality_log.png}
+        \caption{Log Scale}
+        \label{fig:support_devices_modality_log}
+    \end{subfigure}
+    \caption[Modality Attribution Share for Support Devices]{Modality Attribution Share for Support Devices. (a) Normal scale. (b) Log scale.}
+    \label{fig:support_devices_modality}
+\end{figure}
 
-\subsubsection{Case Study 2 (Medium): Pneumothorax}
-\label{subsubsec:case_pneumothorax}
+The relative contribution shares among all modalities are shown in Figure~\ref{fig:support_devices_modality}.
 
-Pneumothorax (medium) involves air in the pleural space and requires rapid detection and intervention such as chest tube placement \cite{macduff2010management,irmici2023cxr_emergency_ai}. Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
+\subsubsection{Case Study 2 (Medium): Nodule}
+\label{subsubsec:case_nodule}
 
-\begin{figure}
+Figure~\ref{fig:fig_nodule_gradcam} and Figure~\ref{fig:nodule_text} show the visual and text attributions for a target patient with a nodule.
+
+\begin{figure}[H]
      \centering
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \includegraphics[width=\textwidth]{img/pneumothorax_gradcam.png}
+          \includegraphics[width=\textwidth]{img/nodule_gradcam.png}
           \caption{Current Target Image Attribution}
-          \label{fig:pneumothorax_cur}
+          \label{fig:nodule_cur}
      \end{subfigure}
      \vspace{0.3cm}
      
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \includegraphics[width=\textwidth]{img/pneumothorax_prior.png}
+          \includegraphics[width=\textwidth]{img/nodule_prior.png}
           \caption{Prior Image Attribution}
-          \label{fig:pneumothorax_prv}
+          \label{fig:nodule_prv}
      \end{subfigure}
-        \caption[Grad-CAM Visual Attributions for Pneumothorax]{Grad-CAM Visual Attributions for Pneumothorax. In the current target image (a), the model highlights the pleural margins and the thoracic apex where pneumothoraces typically collect. The prior image (b) highlights the previous pleural status to check for change.}
-        \label{fig:fig_pneumothorax_gradcam}
+        \caption[Grad-CAM Visual Attributions for Nodule]{Grad-CAM Visual Attributions for Nodule. (a) Current target image attribution. (b) Prior image attribution.}
+        \label{fig:fig_nodule_gradcam}
 \end{figure}
 
-\begin{figure}
+\begin{figure}[H]
     \centering
-    \includegraphics[width=0.85\textwidth]{img/pneumothorax_text.png}
-    \caption[Word-Level Text Attributions for Pneumothorax]{Word-Level Text Attributions for Pneumothorax. Attributions focus on clinical indicators like ``pneumothorax'' and clinical interventions like ``tube'' or ``catheter''.}
-    \label{fig:pneumothorax_text}
+    \includegraphics[width=0.85\textwidth]{img/nodule_text.png}
+    \caption[Word-Level Text Attributions for Nodule]{Word-Level Text Attributions for Nodule.}
+    \label{fig:nodule_text}
 \end{figure}
 
-The model localizes the pleural line and lung apex where free air accumulates (Figure~\ref{fig:pneumothorax_cur}), scans the corresponding region in the prior study to assess change (Figure~\ref{fig:pneumothorax_prv}), and concentrates text attribution on terms such as ``pneumothorax'' and ``pleural'' (Figure~\ref{fig:pneumothorax_text}).
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{img/nodule_modality.png}
+        \caption{Normal Scale}
+        \label{fig:nodule_modality_normal}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{img/nodule_modality_log.png}
+        \caption{Log Scale}
+        \label{fig:nodule_modality_log}
+    \end{subfigure}
+    \caption[Modality Attribution Share for Nodule]{Modality Attribution Share for Nodule. (a) Normal scale. (b) Log scale.}
+    \label{fig:nodule_modality}
+\end{figure}
+
+The relative contribution shares among all modalities are shown in Figure~\ref{fig:nodule_modality}.
 
 \subsubsection{Case Study 3 (Tail): Hernia}
 \label{subsubsec:case_hernia}
 
-Hernia is one of the rarest (tail) findings, with very few positive visual examples. This case study probes whether the model compensates for visual scarcity by anchoring on clinical text and prior-study context. Figure~\ref{fig:fig_hernia_gradcam} shows the modality attributions for a target patient with a hernia.
+Figure~\ref{fig:fig_hernia_gradcam} and Figure~\ref{fig:hernia_text} show the visual and text attributions for a target patient with a hernia.
 
-\begin{figure}
+\begin{figure}[H]
      \centering
-     % Replace the placeholder boxes below with the real attribution images once generated:
-     % \includegraphics[width=\textwidth]{img/hernia_gradcam.png}  (current)
-     % \includegraphics[width=\textwidth]{img/hernia_prior.png}    (prior)
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Hernia --- Current Target Image Attribution\\ \texttt{img/hernia\_gradcam.png}}}
+          \includegraphics[width=\textwidth]{img/hernia_gradcam.png}
           \caption{Current Target Image Attribution}
           \label{fig:hernia_cur}
      \end{subfigure}
@@ -310,20 +341,38 @@ Hernia is one of the rarest (tail) findings, with very few positive visual examp
 
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Hernia --- Prior Image Attribution\\ \texttt{img/hernia\_prior.png}}}
+          \includegraphics[width=\textwidth]{img/hernia_prior.png}
           \caption{Prior Image Attribution}
           \label{fig:hernia_prv}
      \end{subfigure}
-        \caption[Grad-CAM Visual Attributions for Hernia]{Grad-CAM Visual Attributions for Hernia. In the target image (a), the model's visual attention is expected to fall on the retrocardiac or basal region where a hiatal hernia is typically seen. The prior image (b) is expected to confirm whether the hernia was historically present and stable.}
+        \caption[Grad-CAM Visual Attributions for Hernia]{Grad-CAM Visual Attributions for Hernia. (a) Current target image attribution. (b) Prior image attribution.}
         \label{fig:fig_hernia_gradcam}
 \end{figure}
 
-\begin{figure}
+\begin{figure}[H]
     \centering
-    % Replace with: \includegraphics[width=0.85\textwidth]{img/hernia_text.png}
-    \fbox{\parbox[c][0.28\textwidth][c]{0.85\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Hernia --- Word-Level Text Attribution\\ \texttt{img/hernia\_text.png}}}
-    \caption[Word-Level Text Attributions for Hernia]{Word-Level Text Attributions for Hernia. Attributions are expected to concentrate on diagnostic terms such as ``hernia'' or rule-out queries like ``evaluate for hiatal hernia''.}
+    \includegraphics[width=0.85\textwidth]{img/hernia_text.png}
+    \caption[Word-Level Text Attributions for Hernia]{Word-Level Text Attributions for Hernia.}
     \label{fig:hernia_text}
 \end{figure}
 
-Consistent with Section~\ref{subsec:results_longtail}, the expected pattern is that text attribution (Figure~\ref{fig:hernia_text}) carries more of the diagnostic signal than the weak visual evidence (Figure~\ref{fig:hernia_cur}), with the prior image (Figure~\ref{fig:hernia_prv}) confirming historical stability.
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{img/hernia_modality.png}
+        \caption{Normal Scale}
+        \label{fig:hernia_modality_normal}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{img/hernia_modality_log.png}
+        \caption{Log Scale}
+        \label{fig:hernia_modality_log}
+    \end{subfigure}
+    \caption[Modality Attribution Share for Hernia]{Modality Attribution Share for Hernia. (a) Normal scale. (b) Log scale.}
+    \label{fig:hernia_modality}
+\end{figure}
+
+The relative contribution shares among all modalities are shown in Figure~\ref{fig:hernia_modality}.

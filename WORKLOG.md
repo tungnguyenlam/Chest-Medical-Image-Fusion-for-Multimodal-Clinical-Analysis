@@ -3550,3 +3550,70 @@ Ran `make` to compile the PDF successfully. The overall document structure float
 - `report/main.tex:96` - Appended `\vfill` and `{\Large \textbf{HANOI, 2026}\\}` to center-align the location and year at the bottom of the title page, removing the original `\vspace*{\fill}` below the centered block.
 
 **Reasoning.** Positioned at the bottom of the existing centered title page structure using `\vfill` to push it dynamically down within the cover border.
+
+## 2026-06-29 - Put Grad-CAM case study images for prior_aware_v6nano baseline
+
+**Goal.** Put the visual and word-level text attribution images from the prior_aware_v6nano baseline run into the report's qualitative analysis section.
+
+**Changes.**
+- Copied Grad-CAM panels (`image.png` -> `gradcam.png`, `prior_image.png` -> `prior.png`, and `prv_report.png` -> `text.png`) from `output/prior_aware_v6nano/runs/20260624-111754-baseline/gradcam/epoch_15/best/` for `Support_Devices`, `Hernia`, and `Pneumothorax` into `report/img/`.
+- `report/results/results.tex:231-244,252,303-316,324` - Replaced placeholder boxes with the corresponding `\includegraphics` inclusions for Support Devices and Hernia case studies.
+
+**Reasoning.** The qualitative case studies section had placeholder boxes for the newly active Support Devices and Hernia studies. We selected the best epoch (epoch 15) from the v6 nano baseline run, copied the images, and modified the LaTeX code to include the real figures.
+
+**Follow-ups.** None.
+
+## 2026-06-29 - Use [H] specifier for all figure and table environments to strictly preserve order
+
+**Goal.** Enforce strict chronological/structural order of figures and tables in the compiled LaTeX document by applying the `[H]` placement specifier.
+
+**Changes.**
+- Modified LaTeX files to change `\begin{table}` to `\begin{table}[H]` and `\begin{figure}` to `\begin{figure}[H]` across:
+  - `report/eda/eda.tex`
+  - `report/methodology/methodology.tex`
+  - `report/related_work/related_work.tex`
+  - `report/results/results.tex`
+
+**Reasoning.** Without explicit positioning parameters, LaTeX's floating algorithm shifts figures and tables dynamically. Using `[H]` from the `float` package overrides floats and positions elements exactly where they are declared in the source.
+
+**Follow-ups.** None.
+
+## 2026-06-29 - Add side-by-side modality plots (normal/log) to case studies
+
+**Goal.** Add side-by-side modality attribution share plots (linear scale on the left, log scale on the right) for the three qualitative case studies in the results section.
+
+**Changes.**
+- `report/results/results.tex:249-258,284-292,321-330` - Re-added word-level text attribution figures, inserted side-by-side subfigures for modality contribution shares (`modality.png` and `modality_log.png`), and updated the trailing paragraphs to reference the new plots.
+- Re-enforced `[H]` parameter settings for all figures and tables in the results chapter.
+
+**Reasoning.** The modality plots highlight the relative importance of the current image, prior image, clinical indications, and vital signs for the model's decision. Using a log-scaled plot alongside the linear scale makes smaller modality features (like the temporal time-gap or vital signs) clearly visible in the visualization.
+
+**Follow-ups.** None.
+
+## 2026-06-29 - Simplify case study descriptions to be minimal and general
+
+**Goal.** Edit the descriptions in the qualitative case study section of the report to be minimal, general, and free of explanation.
+
+**Changes.**
+- `report/results/results.tex:221-225,272,274-278,325,327-331,378` - Replaced long explanatory text describing the diseases (Support Devices, Pneumothorax, Hernia) and expected attribution patterns with minimal introductory and concluding sentences pointing to the figures.
+
+**Reasoning.** The detailed medical/experimental descriptions and explanations of expected outcomes were removed to keep the qualitative analysis section concise and focused purely on the visual/modality figures.
+
+## 2026-06-29 - Update Case Study 2 to Nodule and remove all caption explanations
+
+**Goal.** Change the medium-frequency case study from Pneumothorax to Nodule, copy Nodule's Grad-CAM files, and completely remove detailed/explanatory text from all case study figure captions.
+
+**Changes.**
+- Copied Nodule Grad-CAM plots (`image.png`, `prior_image.png`, `prv_report.png`, `modality.png`, `modality_log.png`) to `report/img/nodule_*.png`.
+- `report/results/results.tex:219,242-243,249-250,268-269,274-326,348-349,355-356,374-375` - Changed all Pneumothorax case study text, label references, and image paths to Nodule, and updated all subfigure and main figure captions to have zero explanations.
+
+**Reasoning.** Pneumothorax was replaced with Nodule to present a different medium-tier disease case study. Additionally, the figure captions were stripped of any interpretative or behavioral explanations to keep the case study section minimal and general.
+
+## 2026-06-29 - Reference text attributions in case study intro text
+
+**Goal.** Reference word-level text attribution figures (Figures 10, 13, and 16) in the case study introductory sentences to fix any missing/mismatched image references.
+
+**Changes.**
+- `report/results/results.tex:224,277,330` - Updated the introductory sentences for Support Devices, Nodule, and Hernia case studies to reference both the visual attributions and the word-level text attribution figures.
+
+**Reasoning.** Stripping out expected localization statements in the previous change left the word-level text attribution figures unreferenced in the body text. Mentioning them alongside visual attributions ensures that all figures are properly referenced and LaTeX has no unused or dangling figures/references.

@@ -32,45 +32,45 @@ After encoding, all modality features are projected into a shared latent dimensi
 
 The final fused representation is passed to a multi-label classification head, which outputs one logit for each target finding. The model is trained using an imbalance-aware loss function suitable for long-tailed multi-label classification.
 
-\begin{figure}
-    \centering
-    % \includegraphics[width=0.95\textwidth]{figures/model_architecture.png}
-    \fbox{\parbox{0.9\textwidth}{
-        \centering
-        \vspace{1cm}
-        \textbf{Proposed Prior-Aware Multimodal Architecture Diagram}
-        \vspace{0.5cm}
-        
-        \begin{tabular}{ccc}
-            \textbf{Target Stream (Current Study)} & & \textbf{Memory Stream (Prior Study)} \\
-            \hline
-            Current X-Ray Views (up to 4) & & Prior X-Ray Views (up to 4) \\
-            $\downarrow$ & & $\downarrow$ \\
-            Timm Image Encoder (ConvNeXt) & & Timm Image Encoder (ConvNeXt) \\
-            \hline
-            Current Clinical Text & & Prior Clinical Report / Text \\
-            $\downarrow$ & & $\downarrow$ \\
-            BiomedVLP-CXR-BERT & & BiomedVLP-CXR-BERT \\
-            \hline
-            Structured Vitals \& Missingness Mask & & Prior Vitals \& Missingness Mask \\
-            $\downarrow$ & & $\downarrow$ \\
-            MLP Projection Layer & & MLP Projection Layer \\
-        \end{tabular}
-        
-        \vspace{0.5cm}
-        $\downarrow$ \\
-        \textbf{Current Study Fusion (Self-Attention over Target Stream Tokens)} \\
-        $\downarrow$ \\
-        \textbf{Temporal Cross-Attention (Target Stream attends to Memory Stream Tokens)} \\
-        $\downarrow$ \\
-        \textbf{Classification Head (ML-Decoder-inspired Head with 26 Queries)} \\
-        $\downarrow$ \\
-        \textbf{26 Class Probabilities (ASL Loss Optimization)} \\
-        \vspace{1cm}
-    }}
-    \caption[Overview of the proposed prior-aware multimodal classification framework]{Overview of the proposed prior-aware multimodal chest X-ray classification framework. Current-study image, text, and vital-sign tokens form the target stream, while prior-study information forms the memory stream used through cross-attention.}
-    \label{fig:model_architecture}
-\end{figure}
+% \begin{figure}[H]
+%     \centering
+%     % \includegraphics[width=0.95\textwidth]{figures/model_architecture.png}
+%     \fbox{\parbox{0.9\textwidth}{
+%         \centering
+%         \vspace{1cm}
+%         \textbf{Proposed Prior-Aware Multimodal Architecture Diagram}
+%         \vspace{0.5cm}
+%         
+%         \begin{tabular}{ccc}
+%             \textbf{Target Stream (Current Study)} & & \textbf{Memory Stream (Prior Study)} \\
+%             \hline
+%             Current X-Ray Views (up to 4) & & Prior X-Ray Views (up to 4) \\
+%             $\downarrow$ & & $\downarrow$ \\
+%             Timm Image Encoder (ConvNeXt) & & Timm Image Encoder (ConvNeXt) \\
+%             \hline
+%             Current Clinical Text & & Prior Clinical Report / Text \\
+%             $\downarrow$ & & $\downarrow$ \\
+%             BiomedVLP-CXR-BERT & & BiomedVLP-CXR-BERT \\
+%             \hline
+%             Structured Vitals \& Missingness Mask & & Prior Vitals \& Missingness Mask \\
+%             $\downarrow$ & & $\downarrow$ \\
+%             MLP Projection Layer & & MLP Projection Layer \\
+%         \end{tabular}
+%         
+%         \vspace{0.5cm}
+%         $\downarrow$ \\
+%         \textbf{Current Study Fusion (Self-Attention over Target Stream Tokens)} \\
+%         $\downarrow$ \\
+%         \textbf{Temporal Cross-Attention (Target Stream attends to Memory Stream Tokens)} \\
+%         $\downarrow$ \\
+%         \textbf{Classification Head (ML-Decoder-inspired Head with 26 Queries)} \\
+%         $\downarrow$ \\
+%         \textbf{26 Class Probabilities (ASL Loss Optimization)} \\
+%         \vspace{1cm}
+%     }}
+%     \caption[Overview of the proposed prior-aware multimodal classification framework]{Overview of the proposed prior-aware multimodal chest X-ray classification framework. Current-study image, text, and vital-sign tokens form the target stream, while prior-study information forms the memory stream used through cross-attention.}
+%     \label{fig:model_architecture}
+% \end{figure}
 
 \subsection{Data Preprocessing}
 \label{subsec:method_preprocessing}
@@ -135,7 +135,7 @@ For efficiency, the implementation also supports precomputed text embeddings. Wh
 
 For interpretability experiments, the cached path can be disabled and the live CXR-BERT encoder can be used so that text-token attribution can still be computed. This allows the Grad-CAM analysis to inspect not only image regions but also the relative contribution of clinical text streams.\footnote{Implementation note: the original reference/legacy path uses \texttt{dmis-lab/biobert-v1.1}, while the active prior-aware Nano experiments use \texttt{microsoft/BiomedVLP-CXR-BERT-specialized}.}
 
-\begin{table}
+\begin{table}[H]
 \centering
 \caption{Text encoders used in the legacy and active implementations.}
 \label{tab:text_encoder_comparison}
