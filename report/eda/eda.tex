@@ -11,11 +11,11 @@ The dataset used in this thesis is constructed from chest X-ray studies and asso
 
 The cohort construction process follows several filtering steps. First, chest X-ray studies are selected according to the target classification setting. Second, studies are matched with available clinical information, including indication text and structured vital signs. Third, prior-study information is identified for patients who have previous chest X-ray examinations before the current study. Cases with missing modalities are handled according to the preprocessing strategy described in Section~\ref{subsec:method_preprocessing}.
 
-Table~\ref{tab:cohort_summary} summarizes the final cohort used in this thesis, including the number of studies, patients, and available modalities across the training, validation, and test subsets.
 
-\begin{table}[htbp]
+
+\begin{table}
     \centering
-    \caption{Summary of the dataset cohort and train/validation/test splits.}
+    \caption[Summary of the dataset cohort and splits.]{Summary of the dataset cohort and train/validation/test splits.}
     \label{tab:cohort_summary}
     \begin{tabular}{lrrrrr}
         \hline
@@ -31,32 +31,42 @@ Table~\ref{tab:cohort_summary} summarizes the final cohort used in this thesis, 
 
 Table~\ref{tab:cohort_summary} shows the patient and study counts across splits, as well as the availability of clinical text and vital signs. Clinician indication text is present for all studies due to cohort filtering, whereas structured vital signs are missing for approximately 15.6\% of studies. For modelling, these statistics show that the proposed model must accommodate incomplete vital sign inputs while maintaining stable training. Furthermore, patient-level splits prevent data leakage across training and validation sets.
 
+Additionally, the dataset exhibits a diverse distribution of radiographic view positions, which represents a key challenge for multi-view visual encoding. Figure~\ref{fig:view_position_distribution} displays the frequency distribution of the top six view positions globally. Frontal views (such as PA and AP) and lateral views constitute the vast majority of studies, which aligns with standard clinical imaging protocols where these standard projections are preferred.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.85\textwidth]{img/top6-view-position-by-global-fre.png}
+    \caption[Distribution of chest X-ray view positions]{Distribution of the top six chest X-ray view positions by global frequency in the dataset.}
+    \label{fig:view_position_distribution}
+\end{figure}
+
+
 \subsection{Label Distribution and Co-occurrence}
 \label{subsec:eda_labels}
 
 The target classification task is multi-label, where each study can contain multiple co-occurring findings, and long-tailed, meaning some findings occur far more frequently than others \cite{holste2024cxrlt,holste2023cxrlt_physionet}. Under the Chest X-Ray Long-Tailed (CXR-LT) benchmark formulation, the label space consists of 26 target pathologies. These findings comprise 14 original labels inherited from the standard CheXpert labeling system and 12 newly added labels extracted to specifically represent rare conditions and enrich the long-tailed evaluation. Figure~\ref{fig:cxrlt_original_newlyadded} illustrates the full label frequency distribution across the MIMIC-CXR dataset, demonstrating the severe class imbalance and highlighting the distinction between the original and newly added pathology labels.
 
-\begin{figure}[htbp]
+\begin{figure}
     \centering
     \includegraphics[width=0.95\textwidth]{img/cxr-lt-2023-newlyadded-original-demonstrate.pdf}
-    \caption{Frequency distribution of the 26 pathology classes in the CXR-LT benchmark, categorized by original CheXpert classes (blue) and newly added classes (red).}
+    \caption[Frequency distribution of pathology classes in the CXR-LT benchmark]{Frequency distribution of the 26 pathology classes in the CXR-LT benchmark, categorized by original CheXpert classes (blue) and newly added classes (red).}
     \label{fig:cxrlt_original_newlyadded}
 \end{figure}
 
-Figure~\ref{fig:label_distribution} shows the number of positive samples for each target label in the filtered subset cohort used for our experiments.
 
-\begin{figure}[htbp]
+
+\begin{figure}
     \centering
     \includegraphics[width=0.95\textwidth]{img/label_distribution.png}
-    \caption{Distribution of positive labels across the target chest X-ray findings in the filtered subset cohort.}
+    \caption[Distribution of positive labels in the filtered subset cohort]{Distribution of positive labels across the target chest X-ray findings in the filtered subset cohort.}
     \label{fig:label_distribution}
 \end{figure}
 
 Figure~\ref{fig:label_distribution} shows that our subset cohort retains the strong long-tailed distribution characteristic of the full dataset. Common findings such as pleural effusion, atelectasis, and cardiomegaly appear much more frequently than rare findings such as pneumothorax, fracture, and hernia, with the imbalance ratio exceeding 100:1. For modelling, this severe class imbalance motivates the use of imbalance-aware loss functions, such as asymmetric loss, and separate evaluation of frequent and rare labels to prevent predictions from being dominated by majority negative classes.
 
-In addition to individual label frequencies, label co-occurrence is also important. Figure~\ref{fig:label_cooccurrence} presents a co-occurrence matrix between target findings.
+In addition to individual label frequencies, label co-occurrence is also important.
 
-\begin{figure}[htbp]
+\begin{figure}
     \centering
     \includegraphics[width=0.85\textwidth]{img/label_cooccurrence.png}
     \caption{Co-occurrence matrix of target pathology labels.}
@@ -70,7 +80,7 @@ Figure~\ref{fig:label_cooccurrence} shows the co-occurrence rates between differ
 
 Clinical indication text indicates the reason for imaging (e.g., symptoms or clinical queries) and is available at the time of examination. Unlike radiology reports written post-interpretation, indication text represents realistic input context \cite{sloan2025camchex}. The text modality varies in length and content, ranging from short symptoms to detailed clinical summaries.
 
-\begin{figure}[htbp]
+\begin{figure}
     \centering
     \includegraphics[width=0.85\textwidth]{img/text_length_distribution.png}
     \caption{Distribution of clinical indication text lengths (in words).}
@@ -80,9 +90,9 @@ Clinical indication text indicates the reason for imaging (e.g., symptoms or cli
 Figure~\ref{fig:text_length_distribution} shows the distribution of clinical indication text lengths, indicating a median length of approximately 12 words with a long tail extending past 50 words. For modelling, this right-skewed distribution suggests that a relatively short text sequence length is sufficient to capture most clinical indication details, allowing the text encoder to use a moderate maximum token limit to preserve context while minimizing computational costs.
 
 
-\begin{table}[htbp]
+\begin{table}
     \centering
-    \caption{Most frequent clinical terms and demographic templates in the clinical indication text.}
+    \caption[Most frequent clinical terms and templates in the indication text]{Most frequent clinical terms and demographic templates in the clinical indication text.}
     \label{tab:common_text_terms}
     \begin{tabular}{lrlr}
         \hline
@@ -105,9 +115,9 @@ Table~\ref{tab:common_text_terms} shows the most frequent terms and demographic 
 Structured vital signs represent physiological states (e.g., temperature, heart rate, respiratory rate, blood pressure (BP), and oxygen (O2) saturation) recorded near the time of imaging. To utilize incomplete physiological records without discarding studies, this thesis employs a missingness-aware representation that combines imputed values with explicit missingness masks.
 
 
-\begin{table}[htbp]
+\begin{table}
     \centering
-    \caption{Summary statistics and missingness rates for vital signs in the training split.}
+    \caption[Summary statistics and missingness rates for vital signs]{Summary statistics and missingness rates for vital signs in the training split.}
     \label{tab:vitals_summary}
     \begin{tabular}{lrrrrrr}
         \hline
@@ -125,7 +135,7 @@ Structured vital signs represent physiological states (e.g., temperature, heart 
 
 Table~\ref{tab:vitals_summary} shows the distribution and missingness rates of vital sign variables. Extreme minimum and maximum values indicate the presence of data-entry errors and physiological outliers (e.g., a diastolic blood pressure of $7,698.90\text{ mmHg}$). For modelling, these extreme values motivate the implementation of robust preprocessing, such as outlier clipping and training-set-based z-score normalization, to prevent extreme values from distorting the model's feature space.
 
-\begin{figure}[htbp]
+\begin{figure}
     \centering
     \includegraphics[width=0.85\textwidth]{img/vitals_missingness.png}
     \caption{Missingness rate of each vital sign variable.}
@@ -139,9 +149,9 @@ Figure~\ref{fig:vitals_missingness} shows the missingness rate for each vital si
 
 Prior-study context supports comparative diagnosis by enabling temporal comparison over time \cite{bannur2023biovilt}. However, integrating this information requires addressing two main challenges: handling cases where no prior study is available and accounting for variable time gaps between current and historical studies.
 
-Table~\ref{tab:prior_availability} summarizes the availability of prior studies in the dataset.
 
-\begin{table}[htbp]
+
+\begin{table}
     \centering
     \caption{Availability of prior studies at study level.}
     \label{tab:prior_availability}
@@ -158,12 +168,12 @@ Table~\ref{tab:prior_availability} summarizes the availability of prior studies 
 
 Table~\ref{tab:prior_availability} shows the availability of prior chest X-ray examinations at the study level, indicating that 82.24\% of studies have a linked historical prior. For modelling, this high prevalence demonstrates that prior studies provide a frequent source of temporal context, justifying the inclusion of prior-aware components in the classification architecture while requiring robustness to the 17.76\% of cases where no prior is available.
 
-Figure~\ref{fig:prior_gap_distribution} shows the distribution of time gaps between current and prior studies.
 
-\begin{figure}[htbp]
+
+\begin{figure}
     \centering
     \includegraphics[width=0.85\textwidth]{img/prior_gap_distribution.png}
-    \caption{Distribution of time gaps between current and prior chest X-ray studies (in days, log-scaled).}
+    \caption[Distribution of time gaps between current and prior studies]{Distribution of time gaps between current and prior chest X-ray studies (in days, log-scaled).}
     \label{fig:prior_gap_distribution}
 \end{figure}
 

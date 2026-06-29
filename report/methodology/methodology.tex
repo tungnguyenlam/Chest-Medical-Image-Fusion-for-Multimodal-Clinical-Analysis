@@ -32,7 +32,7 @@ After encoding, all modality features are projected into a shared latent dimensi
 
 The final fused representation is passed to a multi-label classification head, which outputs one logit for each target finding. The model is trained using an imbalance-aware loss function suitable for long-tailed multi-label classification.
 
-\begin{figure}[htbp]
+\begin{figure}
     \centering
     % \includegraphics[width=0.95\textwidth]{figures/model_architecture.png}
     \fbox{\parbox{0.9\textwidth}{
@@ -68,7 +68,7 @@ The final fused representation is passed to a multi-label classification head, w
         \textbf{26 Class Probabilities (ASL Loss Optimization)} \\
         \vspace{1cm}
     }}
-    \caption{Overview of the proposed prior-aware multimodal chest X-ray classification framework. Current-study image, text, and vital-sign tokens form the target stream, while prior-study information forms the memory stream used through cross-attention.}
+    \caption[Overview of the proposed prior-aware multimodal classification framework]{Overview of the proposed prior-aware multimodal chest X-ray classification framework. Current-study image, text, and vital-sign tokens form the target stream, while prior-study information forms the memory stream used through cross-attention.}
     \label{fig:model_architecture}
 \end{figure}
 
@@ -135,7 +135,7 @@ For efficiency, the implementation also supports precomputed text embeddings. Wh
 
 For interpretability experiments, the cached path can be disabled and the live CXR-BERT encoder can be used so that text-token attribution can still be computed. This allows the Grad-CAM analysis to inspect not only image regions but also the relative contribution of clinical text streams.\footnote{Implementation note: the original reference/legacy path uses \texttt{dmis-lab/biobert-v1.1}, while the active prior-aware Nano experiments use \texttt{microsoft/BiomedVLP-CXR-BERT-specialized}.}
 
-\begin{table}[t]
+\begin{table}
 \centering
 \caption{Text encoders used in the legacy and active implementations.}
 \label{tab:text_encoder_comparison}
@@ -256,6 +256,25 @@ where \(p_c = \hat{y}_{ic}\) is the predicted probability of class \(c\). To fur
     p_{mc} = \max(p_c - m, 0)
 \end{equation}
 The shifting hyperparameters \(\gamma_+\) and \(\gamma_-\) control the focusing strength for positive and negative samples, respectively, with \(\gamma_- > \gamma_+\) to focus learning on positive cases while ignoring easy negative background samples.
+
+\subsection{Evaluation Metrics}
+\label{subsec:method_evaluation_metrics}
+
+To assess model performance, especially in the context of the severe long-tailed distribution of the 26 pathology classes, several key evaluation metrics are employed. Macro-averaged Mean Average Precision (mAP) serves as the primary metric, while macro Area Under the Receiver Operating Characteristic (mAUROC) and macro-averaged F1 score are used as auxiliary metrics.
+
+For each pathology class \(c\), the Average Precision (AP) is computed over the precision-recall curve as:
+\begin{equation}
+    AP_c = \sum_n (R_n - R_{n-1}) P_n
+\end{equation}
+where \(P_n\) and \(R_n\) are the precision and recall at the \(n\)-th threshold. The overall performance is evaluated using macro-averaged Mean Average Precision (mAP):
+\begin{equation}
+    mAP = \frac{1}{C} \sum_{c=1}^{C} AP_c
+\end{equation}
+To assess classification performance at a fixed operational threshold, the macro-averaged F1 score is computed:
+\begin{equation}
+    F1_{macro} = \frac{1}{C} \sum_{c=1}^{C} \frac{2P_cR_c}{P_c + R_c}
+\end{equation}
+where \(P_c\) and \(R_c\) represent the precision and recall for class \(c\) at a default threshold of \(0.5\). Crucially, macro-averaging treats each pathology class \(c\) equally regardless of prevalence, making it far more sensitive to tail-class (rare) performance than micro-averaged metrics. Performance is also reported breakdown-averaged across head (frequent), medium, and tail (rare) findings.
 
 \subsection{Ablation Study Design}
 \label{subsec:method_ablation_design}

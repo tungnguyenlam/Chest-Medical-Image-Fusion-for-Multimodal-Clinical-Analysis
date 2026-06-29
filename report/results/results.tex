@@ -6,33 +6,29 @@ This section presents the evaluation of the proposed multimodal fusion models on
 \subsection{Experimental Setup}
 \label{subsec:results_setup}
 
-This section details the experimental configuration, hyperparameters, and evaluation settings used to train and test the proposed models:
+This section outlines the experimental configuration, hyperparameter settings, and computing environment used for model training and evaluation. These settings are summarized in Table~\ref{tab:experimental_setup}.
 
-\textbf{Dataset Split}: The cohort is split at the patient level into training (11,941 studies, 19,556 images), validation (1,804 studies, 3,047 images), and test (3,333 studies, 5,642 images) subsets. Patient-level splitting ensures that no patient has images in both the training and evaluation sets, preventing optimistic performance bias.
+\begin{table}[H]
+    \centering
+    \caption{Experimental setup and hyperparameter configurations.}
+    \label{tab:experimental_setup}
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Parameter} & \textbf{Setting / Value} \\
+        \midrule
+        Dataset Split (studies/images) & Train: 11,941/19,556; Val: 1,804/3,047; Test: 3,333/5,642 \\
+        Image Resolution & $512 \times 512$ pixels \\
+        Batch Size & 8 \\
+        Gradient Accumulation Steps & 4 \\
+        Optimizer & AdamW (weight decay = $10^{-4}$) \\
+        Learning Rate & Fusion \& head: $10^{-4}$; Visual backbone: $10^{-5}$ (Cosine Annealing scheduler) \\
+        Epochs & Max 50 epochs\\
+        Early Stopping & Patience = 10 epochs (monitoring validation mAP) \\
+        Loss Function & Asymmetric Loss (ASL) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
-\textbf{Image Resolution}: Images are resized to $512 \times 512$ pixels. This resolution represents a balance between retaining fine clinical details (such as pneumothorax pleural lines) and staying within the memory constraints of our hardware.
-
-\textbf{Batch Size and Hardware}: Models are trained with a batch size of $32$ on a single NVIDIA RTX A6000 GPU (48GB VRAM). The training pipeline utilizes PyTorch and PyTorch Lightning.
-
-\textbf{Optimizer and Learning Rate}: The network is optimized using AdamW \cite{loshchilov2019adamw} with a weight decay of $10^{-4}$. The initial learning rate is set to $10^{-4}$ for the multimodal fusion layers and classification head, and a reduced rate of $10^{-5}$ for the image encoder parameters to prevent pre-trained weight destruction. A cosine annealing learning rate scheduler is applied.
-
-\textbf{Epochs and Early Stopping}: Training is run for a maximum of 20 epochs. Early stopping is applied with a patience of 3 validation checks, monitoring the validation Area Under the Precision-Recall Curve (AUPRC) to determine the best model checkpoint.
-
-\textbf{Loss Function}: To address the multi-label long-tailed distribution, ASL \cite{ridnik2021asymmetric} is employed. The negative focusing hyperparameter is set to $\gamma_- = 4$ and the positive focusing to $\gamma_+ = 0$, with an asymmetric clipping threshold of $m = 0.05$ to suppress the gradient contributions of easy negative samples.
-
-\textbf{Evaluation Metrics}: Performance is measured using mAP as the primary metric for long-tailed classification, along with mAUROC and macro-averaged F1 score. For each pathology class \(c\), the Average Precision (AP) is computed over the precision-recall curve as:
-\begin{equation}
-    AP_c = \sum_n (R_n - R_{n-1}) P_n
-\end{equation}
-where \(P_n\) and \(R_n\) are the precision and recall at the \(n\)-th threshold. The overall performance is evaluated using mAP:
-\begin{equation}
-    mAP = \frac{1}{C} \sum_{c=1}^{C} AP_c
-\end{equation}
-To assess classification balance at a fixed operational threshold, the macro-averaged F1 score is computed:
-\begin{equation}
-    F1_{macro} = \frac{1}{C} \sum_{c=1}^{C} \frac{2P_cR_c}{P_c + R_c}
-\end{equation}
-where \(P_c\) and \(R_c\) represent the precision and recall for class \(c\) at a default threshold of \(0.5\). Crucially, macro-averaging treats each pathology class \(c\) equally regardless of prevalence, making it far more sensitive to tail-class performance than micro-averaged metrics. This section reports overall performance as well as breakdown averages across head (frequent), medium, and tail (rare) findings.
 
 \subsection{Main Performance of the Proposed Model}
 \label{subsec:results_quantitative}
@@ -46,7 +42,7 @@ The performance of all models is evaluated using two primary metrics: mAP and mA
 
 Table~\ref{tab:ours_main_results} compares the performance of the three model configurations trained and evaluated on the dataset in this thesis.
 
-\begin{table}[htbp]
+\begin{table}
     \centering
     \caption{Main test-set performance of the implemented models in this thesis.}
     \label{tab:ours_main_results}
@@ -75,9 +71,9 @@ To place the implemented models in context, their performance is compared agains
 
 Table~\ref{tab:contextual_comparison} presents this comparison.
 
-\begin{table}[htbp]
+\begin{table}
     \centering
-    \caption{Contextual comparison with published reference results. Published results are not directly comparable because they use different training settings, data scale, resolution, and pretraining.}
+    \caption[Contextual comparison with published reference results]{Contextual comparison with published reference results. Published results are not directly comparable because they use different training settings, data scale, resolution, and pretraining.}
     \label{tab:contextual_comparison}
     \adjustbox{max width=\textwidth}{%
     \begin{tabular}{lccc}
@@ -104,9 +100,9 @@ To systematically investigate the framework, two complementary ablation studies 
 
 Table~\ref{tab:ablation_modality} reports the effect of dropping the clinical report (indication text) from the best model. Removing the report causes a large drop ($-0.2183$ macro mAP, from $0.5595 \rightarrow 0.3412$), with the largest degradation on medium-frequency classes. Because the free-text clinical indication frequently paraphrases the suspected diagnosis, this gap should be interpreted partly as the diagnostic value of clinical context and partly as a potential label-leakage signal; the image-only floor is the deployment-realistic lower bound.
 
-\begin{table}[htbp]
+\begin{table}
 \centering
-\caption{Modality ablation on the proposed final model (architecture fixed). The top row is the shared anchor with Table~\ref{tab:ablation_method}.}
+\caption[Modality ablation on the proposed final model]{Modality ablation on the proposed final model (architecture fixed). The top row is the shared anchor with Table~\ref{tab:ablation_method}.}
 \label{tab:ablation_modality}
 \adjustbox{max width=\textwidth}{%
 \begin{tabular}{lcccccccc}
@@ -126,9 +122,9 @@ Image-only & Yes & No & No & 0.3246 & 0.8123 & 0.5841 & 0.2285 & 0.0827 \\
 
 Table~\ref{tab:ablation_method} compares the proposed prior-aware model against the CaMCheX baseline under full multimodal inputs. Because the two systems were trained at different input resolutions, the image size is reported explicitly as a column. Resolution is, however, not the only difference between the systems: CaMCheX additionally employs larger-scale pretraining and noisy-student training, so the comparison remains contextual rather than strictly controlled.
 
-\begin{table}[htbp]
+\begin{table}
 \centering
-\caption{Method comparison under full multimodal inputs. Input resolution is listed explicitly; note that CaMCheX also uses additional pretraining and a larger data scale, so this is a contextual rather than strictly controlled comparison.}
+\caption[Method comparison under full multimodal inputs]{Method comparison under full multimodal inputs. Input resolution is listed explicitly; note that CaMCheX also uses additional pretraining and a larger data scale, so this is a contextual rather than strictly controlled comparison.}
 \label{tab:ablation_method}
 \adjustbox{max width=\textwidth}{%
 \begin{tabular}{lcccccc}
@@ -149,7 +145,7 @@ To further investigate the contribution of the individual architectural componen
 
 Table~\ref{tab:ablation_components} summarizes the component ablation study results.
 
-\begin{table}[htbp]
+\begin{table}
 \centering
 \caption{Ablation study of proposed model components on the CXR-LT test set.}
 \label{tab:ablation_components}
@@ -187,9 +183,9 @@ The image encoder expects a three-channel input, which leaves open the question 
 
 Table~\ref{tab:ablation_channels} reports the comparison. The engineered channel encoding and the plain \texttt{gray3} baseline are effectively tied: \texttt{gray3} is marginally higher on macro mAP ($0.5633$ vs.\ $0.5595$) and tail mAP ($0.4059$ vs.\ $0.3893$), while the engineered encoding is marginally higher on macro AUROC ($0.9014$ vs.\ $0.9000$). The report-dropped floor is likewise within noise of the two ($0.3367$ vs.\ $0.3412$ macro mAP).
 
-\begin{table}[htbp]
+\begin{table}
 \centering
-\caption{Input channel encoding ablation (architecture and training fixed). The engineered multi-channel encoding is compared against a plain \texttt{gray3} baseline that replicates the grayscale image across all three channels, under both full multimodal inputs and the report-dropped configuration.}
+\caption[Input channel encoding ablation]{Input channel encoding ablation (architecture and training fixed). The engineered multi-channel encoding is compared against a plain \texttt{gray3} baseline that replicates the grayscale image across all three channels, under both full multimodal inputs and the report-dropped configuration.}
 \label{tab:ablation_channels}
 \adjustbox{max width=\textwidth}{%
 \begin{tabular}{llcccccc}
@@ -228,7 +224,7 @@ To investigate the decision-making process of the prior-aware model and verify w
 
 Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a cardio-thoracic ratio greater than $0.5$ on a posterior-anterior chest radiograph \cite{danzer1919cardiothoracic}. In the baseline evaluation, the model achieved high detection performance for this pathology ($\text{AP} = 0.6778$, $\text{AUROC} = 0.8230$). Figure~\ref{fig:fig_cardiomegaly_gradcam} shows the modality attributions for a target patient diagnosed with cardiomegaly.
 
-\begin{figure}[H]
+\begin{figure}
      \centering
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
@@ -244,14 +240,14 @@ Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a 
           \caption{Prior Image Attribution}
           \label{fig:cardiomegaly_prv}
      \end{subfigure}
-        \caption{Grad-CAM Visual Attributions for Cardiomegaly. In the target image (a), the model's visual attention is focused directly on the lower borders of the cardiac silhouette. The prior image (b) shows similar attention, indicating that the model is comparing the current heart size with the historical baseline.}
+        \caption[Grad-CAM Visual Attributions for Cardiomegaly]{Grad-CAM Visual Attributions for Cardiomegaly. In the target image (a), the model's visual attention is focused directly on the lower borders of the cardiac silhouette. The prior image (b) shows similar attention, indicating that the model is comparing the current heart size with the historical baseline.}
         \label{fig:fig_cardiomegaly_gradcam}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}
     \centering
     \includegraphics[width=0.85\textwidth]{img/cardiomegaly_text.png}
-    \caption{Word-Level Text Attributions for Cardiomegaly. The model places strong positive attention on diagnostic terms such as ``enlarged'' and ``cardiomegaly'' in the clinical text, while disregarding unrelated terms.}
+    \caption[Word-Level Text Attributions for Cardiomegaly]{Word-Level Text Attributions for Cardiomegaly. The model places strong positive attention on diagnostic terms such as ``enlarged'' and ``cardiomegaly'' in the clinical text, while disregarding unrelated terms.}
     \label{fig:cardiomegaly_text}
 \end{figure}
 
@@ -262,7 +258,7 @@ As shown in Figure~\ref{fig:fig_cardiomegaly_gradcam}, the model's visual attent
 
 Pneumothorax represents a critical condition involving the presence of air in the pleural space, which can lead to lung collapse \cite{macduff2010management}. Because pneumothorax requires rapid detection and intervention (e.g., chest tube placement), reliable interpretation is essential \cite{irmici2023cxr_emergency_ai}. The model achieves robust detection for this condition ($\text{AP} = 0.8592$, $\text{AUROC} = 0.9634$). Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
 
-\begin{figure}[H]
+\begin{figure}
      \centering
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
@@ -278,14 +274,14 @@ Pneumothorax represents a critical condition involving the presence of air in th
           \caption{Prior Image Attribution}
           \label{fig:pneumothorax_prv}
      \end{subfigure}
-        \caption{Grad-CAM Visual Attributions for Pneumothorax. In the current target image (a), the model highlights the pleural margins and the thoracic apex where pneumothoraces typically collect. The prior image (b) highlights the previous pleural status to check for change.}
+        \caption[Grad-CAM Visual Attributions for Pneumothorax]{Grad-CAM Visual Attributions for Pneumothorax. In the current target image (a), the model highlights the pleural margins and the thoracic apex where pneumothoraces typically collect. The prior image (b) highlights the previous pleural status to check for change.}
         \label{fig:fig_pneumothorax_gradcam}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}
     \centering
     \includegraphics[width=0.85\textwidth]{img/pneumothorax_text.png}
-    \caption{Word-Level Text Attributions for Pneumothorax. Attributions focus on clinical indicators like ``pneumothorax'' and clinical interventions like ``tube'' or ``catheter''.}
+    \caption[Word-Level Text Attributions for Pneumothorax]{Word-Level Text Attributions for Pneumothorax. Attributions focus on clinical indicators like ``pneumothorax'' and clinical interventions like ``tube'' or ``catheter''.}
     \label{fig:pneumothorax_text}
 \end{figure}
 

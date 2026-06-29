@@ -3398,3 +3398,126 @@ Because the figure is a PDF graphic, compiling it via `pdflatex` works natively.
 **Reasoning.** Structuring the component ablation this way clearly isolates the incremental gains of the directed label graph head from the base prior cross-attention framework. It preserves both the original 0.4950 prior-aware results (re-labeled as without graph head) and the latest 0.5595 final metrics.
 
 **Follow-ups.** None.
+
+## 2026-06-29 — Restore missing CXR-LT pathology frequency plot and recompile PDF
+
+**Goal.** Fix a LaTeX compilation failure caused by a missing image file (`img/cxr-lt-2023-newlyadded-original-demonstrate.pdf`) and compile `main.pdf`.
+
+**Changes.**
+- Converted the existing `report/img/eda/fig1_label_longtail.png` to `report/img/cxr-lt-2023-newlyadded-original-demonstrate.pdf` via PIL.
+- Ran `make clean-all && make` to successfully generate the final `main.pdf`.
+
+**Reasoning.**
+The PDF file was missing because the `report/.gitignore` file ignores `*.pdf` files globally within that directory, preventing it from being committed. Re-generating it from the source PNG image allows the document compilation to complete successfully.
+
+**Gotchas.**
+Because `report/img/cxr-lt-2023-newlyadded-original-demonstrate.pdf` matches the gitignore pattern `*.pdf`, it will remain untracked. Future environment checkouts will need this file re-generated if it is cleaned.
+
+## 2026-06-29 — Recompile report with pulled original PDF
+
+**Goal.** Pull the original `report/img/cxr-lt-2023-newlyadded-original-demonstrate.pdf` pushed by the user and recompile the PDF.
+
+**Changes.**
+- Pulled the latest commit from origin containing the original PDF asset.
+- Cleaned the build tree and ran `make` to compile the PDF using the official asset.
+
+**Gotchas.**
+Because the file is now tracked by Git explicitly (despite the broad `*.pdf` ignore rules), future checkouts will naturally include this file.
+
+## 2026-06-29 — Add List of Figures and List of Tables pages to LaTeX report
+
+**Goal.** Generate and include the List of Figures and List of Tables in the thesis report document and the Table of Contents.
+
+**Changes.**
+- `report/main.tex:138-149` — Added `\listoffigures` and `\listoftables` commands, including the appropriate `\phantomsection` and `\addcontentsline` annotations to list them under the Table of Contents.
+- Re-ran the build to verify compiling success.
+
+**Reasoning.**
+Including standard List of Figures and List of Tables sections is a formal requirement for thesis documents to reference graphics and tabular data properly.
+
+## 2026-06-29 — Short captions for figures/tables in LaTeX report to prevent bleeding in LoF/LoT
+
+**Goal.** Edit the figures and tables captions in the LaTeX report so that their long descriptive text does not bleed into the List of Figures (LoF) and List of Tables (LoT).
+
+**Changes.**
+- `report/eda/eda.tex:18`, `42`, `51`, `85`, `110`, `166` - Modified table and figure captions using LaTeX optional bracket argument `\caption[Short Version]{Long Version}`.
+- `report/methodology/methodology.tex:71` - Added short caption for the main prior-aware multimodal framework figure.
+- `report/related_work/related_work.tex:58`, `78`, `101` - Added short captions for tables detailing challenge solutions, frequency groups, and reference results.
+- `report/results/results.tex:80`, `109`, `131`, `192`, `247`, `254`, `281`, `288` - Added short captions for results tables (baseline comparisons, modality/method/channel encoding ablations) and qualitative Grad-CAM attribution figures (image/text for Cardiomegaly and Pneumothorax).
+
+**Reasoning.**
+LaTeX's `\caption` accepts an optional bracketed argument `\caption[Short Version]{Long Version}` where the short version is used in list generation (LoF/LoT). This isolates long, thesis-level descriptions and citations from cluttering the generated document list pages, keeping the table of contents clean while maintaining the detailed descriptive captions on the actual pages.
+
+**Gotchas.**
+After modifying the source `.tex` files, compiling the LaTeX document requires running `make` (which invokes multiple passes of `pdflatex` and `bibtex`) to regenerate the `.aux`, `.lof`, and `.lot` auxiliary files so that the new short captions are correctly written to the PDF.
+
+## 2026-06-29 — Add chest X-ray view position distribution figure in report
+
+**Goal.** Add the view position distribution figure (`top6-view-position-by-global-fre.png`) to the LaTeX thesis report to describe standard visual projections.
+
+**Changes.**
+- `report/eda/eda.tex:34` - Added a descriptive paragraph and a figure block referencing `img/top6-view-position-by-global-fre.png` under the "Dataset Cohort and Subsets" subsection.
+
+**Reasoning.**
+The figure highlights the frequency distribution of the top six view positions globally. Inserting it in Section 2.1 (Dataset Cohort and Subsets) provides a logical continuation of the split-level demographic analysis, highlighting that frontal (PA, AP) and lateral views dominate the dataset.
+
+**Gotchas.**
+Recompiled the report using `make`. Verified that the figure is successfully integrated into the PDF, and the captions/LoF are clean without bleeding.
+
+## 2026-06-29 — Remove redundant table/figure placeholder texts in EDA section
+
+**Goal.** Remove redundant introductory placeholder sentences for tables and figures in `report/eda/eda.tex` where the actual findings and layout are already fully explained in the subsequent paragraphs.
+
+**Changes.**
+- `report/eda/eda.tex` - Removed redundant line-level intro placeholders for the cohort summary table (former line 14), label distribution plot (former line 56), co-occurrence matrix (former line 67), prior study availability table (former line 142), and prior gap distribution plot (former line 161).
+
+**Reasoning.**
+The removed lines were brief, redundant descriptions (e.g., "Figure X shows the distribution of Y.") immediately preceding the figures/tables, which duplicated the detail and references provided by the main paragraphs right below them. Cleaning these up improves readability and cohesion in the chapter.
+
+**Gotchas.**
+Ran `make` to compile the PDF successfully and verified the layout is clean.
+
+## 2026-06-29 — Remove float placement specifiers from LaTeX report
+
+**Goal.** Remove manual float placement specifiers (such as `[htbp]`, `[H]`, `[t]`) from all figures and tables in the thesis report files to let LaTeX manage placement natively.
+
+**Changes.**
+- `report/eda/eda.tex` - Replaced all `\begin{table}[htbp]` and `\begin{figure}[htbp]` with plain floating environments `\begin{table}` and `\begin{figure}`.
+- `report/methodology/methodology.tex` - Removed placement parameters `[htbp]` and `[t]` from the architecture figure and text encoder table.
+- `report/related_work/related_work.tex` - Removed `[htbp]` from all tables.
+- `report/results/results.tex` - Removed placement parameters `[htbp]` and `[H]` from all quantitative results tables and Grad-CAM/text attribution figures.
+
+**Reasoning.**
+Removing hardcoded placement boundaries allows LaTeX to optimally float tables and figures across pages, resolving compilation warnings, avoiding artificial page breaks, and preventing overflow into the margins. The List of Abbreviations table in `report/main.tex` still keeps its `[H]` parameter as it functions as an in-place list.
+
+**Gotchas.**
+Ran `make` to compile the PDF successfully. The overall document structure floats naturally and remains clean.
+
+## 2026-06-29 - Restructured metrics and compressed experimental setup
+
+**Goal.** Move the evaluation metrics (mAP, AUROC, F1) from the results section to the methodology section, and compress the experimental setup description into a single structured table.
+
+**Changes.**
+- `report/results/results.tex:6-36` - Replaced the verbose paragraph-based experimental setup details (dataset splits, resolution, optimizer, scheduler, loss hyperparameters, etc.) with a single clean table, and removed the evaluation metrics subsection.
+- `report/methodology/methodology.tex:260` - Added a new `Evaluation Metrics` subsection detailing the calculations of class-wise Average Precision, macro Mean Average Precision, and macro F1 score.
+
+**Reasoning.** Moving evaluation metrics to methodology makes the document logical flow cleaner as evaluation metrics form part of the methodology, while the results section can focus primarily on performance tables and analysis. Compressing the setup details into a table makes the experimental configuration much more readable and space-efficient.
+
+## 2026-06-29 - Added Acknowledgements page
+
+**Goal.** Create an Acknowledgements page placeholder that the user can edit to add specific names.
+
+**Changes.**
+- `report/acknowledgements/acknowledgements.tex:1-13` - Created a new TeX file with template text for project acknowledgements.
+- `report/main.tex:105` - Included `acknowledgements/acknowledgements` immediately after the abstract.
+
+**Reasoning.** Placed the acknowledgements right after the abstract and before the table of contents / list of abbreviations. This follows conventional thesis layout guidelines.
+
+## 2026-06-29 - Customized Acknowledgements with ICT Department and Ms. Nguyen Vu Hong Ngoc
+
+**Goal.** Update the acknowledgements placeholders to thank the ICT department and Ms. Nguyen Vu Hong Ngoc for providing computational resources.
+
+**Changes.**
+- `report/acknowledgements/acknowledgements.tex:8-9` - Replaced supervisor/collaborator placeholders with specific gratitude text for ICT Department and Ms. Nguyen Vu Hong Ngoc.
+
+**Reasoning.** Replaced generic placeholders with actual contributors as requested by the user.
