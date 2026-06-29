@@ -3541,3 +3541,12 @@ Ran `make` to compile the PDF successfully. The overall document structure float
 **Reasoning.** Softened claims to align with realistic capabilities of deep learning models in medical imaging, avoiding overclaiming clinical alignment or absolute prevention of shortcut learning.
 
 **Follow-ups.** Verified that the PDF compiled successfully via `make` (`main.pdf`).
+
+## 2026-06-29 - Add HANOI, 2026 to Title Page
+
+**Goal.** Add the location and year "HANOI, 2026" to the bottom of the title/opening page of the report.
+
+**Changes.**
+- `report/main.tex:96` - Appended `\vfill` and `{\Large \textbf{HANOI, 2026}\\}` to center-align the location and year at the bottom of the title page, removing the original `\vspace*{\fill}` below the centered block.
+
+**Reasoning.** Positioned at the bottom of the existing centered title page structure using `\vfill` to push it dynamically down within the cover border.

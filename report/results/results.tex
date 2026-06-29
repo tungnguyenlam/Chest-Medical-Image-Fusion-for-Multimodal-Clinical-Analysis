@@ -16,12 +16,11 @@ This section outlines the experimental configuration, hyperparameter settings, a
         \toprule
         \textbf{Parameter} & \textbf{Setting / Value} \\
         \midrule
-        Dataset Split (studies/images) & Train: 11,941/19,556; Val: 1,804/3,047; Test: 3,333/5,642 \\
         Image Resolution & $512 \times 512$ pixels \\
         Batch Size & 8 \\
         Gradient Accumulation Steps & 4 \\
         Optimizer & AdamW (weight decay = $10^{-4}$) \\
-        Learning Rate & Fusion \& head: $10^{-4}$; Visual backbone: $10^{-5}$ (Cosine Annealing scheduler) \\
+        Base Learning Rate & $5\times10^{-5}$ (Cosine Annealing scheduler) \\
         Epochs & Max 50 epochs\\
         Early Stopping & Patience = 10 epochs (monitoring validation mAP) \\
         Loss Function & Asymmetric Loss (ASL) \\
@@ -217,46 +216,50 @@ The findings indicate that the prior-aware multimodal framework achieves the mos
 \subsection{Grad-CAM Qualitative Analysis}
 \label{subsec:results_qualitative}
 
-To investigate the decision-making process of the prior-aware model and verify whether it attends to clinically relevant information, Grad-CAM \cite{selvaraju2017gradcam} attribution maps are generated for both the current and prior image inputs, along with word-level attribution maps for the clinical reports.
+To investigate the decision-making process of the prior-aware model and verify whether it attends to clinically relevant information, Grad-CAM \cite{selvaraju2017gradcam} attribution maps are generated for both the current and prior image inputs, along with word-level attribution maps for the clinical reports. To probe behaviour across the long-tailed spectrum, three case studies are presented, one drawn from each frequency group: Support Devices (head), Pneumothorax (medium), and Hernia (tail).
 
-\subsubsection{Case Study 1: Cardiomegaly}
-\label{subsubsec:case_cardiomegaly}
+\subsubsection{Case Study 1 (Head): Support Devices}
+\label{subsubsec:case_support_devices}
 
-Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a cardio-thoracic ratio greater than $0.5$ on a posterior-anterior chest radiograph \cite{danzer1919cardiothoracic}. In the baseline evaluation, the model achieved high detection performance for this pathology ($\text{AP} = 0.6778$, $\text{AUROC} = 0.8230$). Figure~\ref{fig:fig_cardiomegaly_gradcam} shows the modality attributions for a target patient diagnosed with cardiomegaly.
+Support Devices is the most frequent (head) label and denotes medical hardware such as endotracheal tubes, central venous catheters, pacemakers, and chest drains. It is also the canonical shortcut-learning risk, since devices co-occur with acutely ill patients. Figure~\ref{fig:fig_support_devices_gradcam} shows the modality attributions for a target patient with support devices present.
 
 \begin{figure}
      \centering
+     % Replace the placeholder boxes below with the real attribution images once generated:
+     % \includegraphics[width=\textwidth]{img/support_devices_gradcam.png}  (current)
+     % \includegraphics[width=\textwidth]{img/support_devices_prior.png}    (prior)
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \includegraphics[width=\textwidth]{img/cardiomegaly_gradcam.png}
+          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Support Devices --- Current Target Image Attribution\\ \texttt{img/support\_devices\_gradcam.png}}}
           \caption{Current Target Image Attribution}
-          \label{fig:cardiomegaly_cur}
+          \label{fig:support_devices_cur}
      \end{subfigure}
      \vspace{0.3cm}
-     
+
      \begin{subfigure}[b]{0.85\textwidth}
           \centering
-          \includegraphics[width=\textwidth]{img/cardiomegaly_prior.png}
+          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Support Devices --- Prior Image Attribution\\ \texttt{img/support\_devices\_prior.png}}}
           \caption{Prior Image Attribution}
-          \label{fig:cardiomegaly_prv}
+          \label{fig:support_devices_prv}
      \end{subfigure}
-        \caption[Grad-CAM Visual Attributions for Cardiomegaly]{Grad-CAM Visual Attributions for Cardiomegaly. In the target image (a), the model's visual attention is focused directly on the lower borders of the cardiac silhouette. The prior image (b) shows similar attention, indicating that the model is comparing the current heart size with the historical baseline.}
-        \label{fig:fig_cardiomegaly_gradcam}
+        \caption[Grad-CAM Visual Attributions for Support Devices]{Grad-CAM Visual Attributions for Support Devices. In the target image (a), the model's visual attention is expected to localise the device hardware (e.g., the line or tube path) rather than diffuse anatomy. The prior image (b) is expected to show whether the device was already present, supporting a stable-versus-new interpretation.}
+        \label{fig:fig_support_devices_gradcam}
 \end{figure}
 
 \begin{figure}
     \centering
-    \includegraphics[width=0.85\textwidth]{img/cardiomegaly_text.png}
-    \caption[Word-Level Text Attributions for Cardiomegaly]{Word-Level Text Attributions for Cardiomegaly. The model places strong positive attention on diagnostic terms such as ``enlarged'' and ``cardiomegaly'' in the clinical text, while disregarding unrelated terms.}
-    \label{fig:cardiomegaly_text}
+    % Replace with: \includegraphics[width=0.85\textwidth]{img/support_devices_text.png}
+    \fbox{\parbox[c][0.28\textwidth][c]{0.85\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Support Devices --- Word-Level Text Attribution\\ \texttt{img/support\_devices\_text.png}}}
+    \caption[Word-Level Text Attributions for Support Devices]{Word-Level Text Attributions for Support Devices. Attributions are expected to concentrate on device-related terms such as ``line'', ``tube'', ``catheter'', or ``placement''.}
+    \label{fig:support_devices_text}
 \end{figure}
 
-As shown in Figure~\ref{fig:fig_cardiomegaly_gradcam}, the model's visual attention aligns with the clinical practice of inspecting the cardiac margins. In the current target image (Figure~\ref{fig:cardiomegaly_cur}), the attention focuses on the left ventricular border and the overall width of the cardiac silhouette. In the prior image (Figure~\ref{fig:cardiomegaly_prv}), the model evaluates the previous size of the heart to establish temporal stability. In the clinical indication text (Figure~\ref{fig:cardiomegaly_text}), the highest attribution weights are concentrated on terms like ``cardiomegaly'' and ``enlarged'', confirming that the model uses clinically relevant contextual signals documented by the admitting physician.
+The current image (Figure~\ref{fig:support_devices_cur}) is expected to localise the device hardware rather than diffuse anatomy, the prior image (Figure~\ref{fig:support_devices_prv}) to indicate whether it was already present, and the text attribution (Figure~\ref{fig:support_devices_text}) to emphasise device-related terms.
 
-\subsubsection{Case Study 2: Pneumothorax}
+\subsubsection{Case Study 2 (Medium): Pneumothorax}
 \label{subsubsec:case_pneumothorax}
 
-Pneumothorax represents a critical condition involving the presence of air in the pleural space, which can lead to lung collapse \cite{macduff2010management}. Because pneumothorax requires rapid detection and intervention (e.g., chest tube placement), reliable interpretation is essential \cite{irmici2023cxr_emergency_ai}. The model achieves robust detection for this condition ($\text{AP} = 0.8592$, $\text{AUROC} = 0.9634$). Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
+Pneumothorax (medium) involves air in the pleural space and requires rapid detection and intervention such as chest tube placement \cite{macduff2010management,irmici2023cxr_emergency_ai}. Figure~\ref{fig:fig_pneumothorax_gradcam} illustrates the visual and textual attributions for a pneumothorax case.
 
 \begin{figure}
      \centering
@@ -285,4 +288,42 @@ Pneumothorax represents a critical condition involving the presence of air in th
     \label{fig:pneumothorax_text}
 \end{figure}
 
-The visual Grad-CAM maps (Figure~\ref{fig:fig_pneumothorax_gradcam}) demonstrate that the model successfully localizes the pleural line and the apex of the lungs, where free pleural air typically accumulates. In the target image (Figure~\ref{fig:pneumothorax_cur}), the attention is concentrated on the lateral chest wall and apex. In the prior study (Figure~\ref{fig:pneumothorax_prv}), the attention scans the corresponding pleural region to assess the change (e.g., recurrence or resolution). The text attribution (Figure~\ref{fig:pneumothorax_text}) emphasizes key words like ``pneumothorax'' and ``pleural'', demonstrating that the model effectively integrates radiographic details with textual indicators of acute thoracic injury.
+The model localizes the pleural line and lung apex where free air accumulates (Figure~\ref{fig:pneumothorax_cur}), scans the corresponding region in the prior study to assess change (Figure~\ref{fig:pneumothorax_prv}), and concentrates text attribution on terms such as ``pneumothorax'' and ``pleural'' (Figure~\ref{fig:pneumothorax_text}).
+
+\subsubsection{Case Study 3 (Tail): Hernia}
+\label{subsubsec:case_hernia}
+
+Hernia is one of the rarest (tail) findings, with very few positive visual examples. This case study probes whether the model compensates for visual scarcity by anchoring on clinical text and prior-study context. Figure~\ref{fig:fig_hernia_gradcam} shows the modality attributions for a target patient with a hernia.
+
+\begin{figure}
+     \centering
+     % Replace the placeholder boxes below with the real attribution images once generated:
+     % \includegraphics[width=\textwidth]{img/hernia_gradcam.png}  (current)
+     % \includegraphics[width=\textwidth]{img/hernia_prior.png}    (prior)
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Hernia --- Current Target Image Attribution\\ \texttt{img/hernia\_gradcam.png}}}
+          \caption{Current Target Image Attribution}
+          \label{fig:hernia_cur}
+     \end{subfigure}
+     \vspace{0.3cm}
+
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \fbox{\parbox[c][0.45\textwidth][c]{\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Hernia --- Prior Image Attribution\\ \texttt{img/hernia\_prior.png}}}
+          \caption{Prior Image Attribution}
+          \label{fig:hernia_prv}
+     \end{subfigure}
+        \caption[Grad-CAM Visual Attributions for Hernia]{Grad-CAM Visual Attributions for Hernia. In the target image (a), the model's visual attention is expected to fall on the retrocardiac or basal region where a hiatal hernia is typically seen. The prior image (b) is expected to confirm whether the hernia was historically present and stable.}
+        \label{fig:fig_hernia_gradcam}
+\end{figure}
+
+\begin{figure}
+    \centering
+    % Replace with: \includegraphics[width=0.85\textwidth]{img/hernia_text.png}
+    \fbox{\parbox[c][0.28\textwidth][c]{0.85\textwidth}{\centering \textbf{[PLACEHOLDER]}\\ Hernia --- Word-Level Text Attribution\\ \texttt{img/hernia\_text.png}}}
+    \caption[Word-Level Text Attributions for Hernia]{Word-Level Text Attributions for Hernia. Attributions are expected to concentrate on diagnostic terms such as ``hernia'' or rule-out queries like ``evaluate for hiatal hernia''.}
+    \label{fig:hernia_text}
+\end{figure}
+
+Consistent with Section~\ref{subsec:results_longtail}, the expected pattern is that text attribution (Figure~\ref{fig:hernia_text}) carries more of the diagnostic signal than the weak visual evidence (Figure~\ref{fig:hernia_cur}), with the prior image (Figure~\ref{fig:hernia_prv}) confirming historical stability.
