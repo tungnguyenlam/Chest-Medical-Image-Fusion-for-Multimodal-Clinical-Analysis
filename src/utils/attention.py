@@ -44,6 +44,13 @@ def from_pretrained_best_attention(model_cls, model_name, **kwargs):
     Tries flash-attention-2 / SDPA / eager in order (see :func:`attn_candidates`),
     falling back when a backend is unsupported. Logs the backend actually used.
     """
+    # Defensive: recent transformers can initialise a model on the meta device
+    # and load the checkpoint by assignment (the accelerate "low_cpu_mem_usage"
+    # path). Any param/buffer not present in the state dict then stays on meta,
+    # and a later ``.to(device)`` raises "Cannot copy out of meta tensor". Pin
+    # the eager path so every tensor is materialised on CPU first. Caller may
+    # override via kwargs.
+    kwargs.setdefault("low_cpu_mem_usage", False)
     last_err: Exception | None = None
     for impl in attn_candidates():
         extra = {} if impl is None else {"attn_implementation": impl}

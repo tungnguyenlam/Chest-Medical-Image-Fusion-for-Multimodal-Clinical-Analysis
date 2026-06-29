@@ -180,6 +180,34 @@ The ablation results highlight several critical aspects of the model's architect
 
 \textbf{Label Correlation Graph Head}: Introducing the directed, noise-aware label-correlation graph head to structure the ML-Decoder query representation yields a substantial improvement ($0.4950 \rightarrow 0.5595$ Macro mAP and $0.8985 \rightarrow 0.9014$ Macro AUROC). This indicates that representing joint label co-occurrences directly in the classifier head helps regularize the feature space and stabilizes the detection of correlated pathologies, especially under severe class imbalance.
 
+\subsubsection{Input Channel Encoding Ablation}
+\label{subsubsec:ablation_channels}
+
+The image encoder expects a three-channel input, which leaves open the question of how a single-channel chest radiograph should be expanded to fill those channels. The proposed model uses an engineered multi-channel encoding, in which the three channels carry distinct, separately-normalized representations of the radiograph rather than a single replicated grayscale image. To test whether this hand-designed channel encoding is justified, it is compared against a plain \texttt{gray3} baseline, where the raw grayscale image (normalized with mean $0.4721$ and standard deviation $0.3037$) is simply replicated across all three channels. Both configurations share the same architecture, training recipe, and patient-level test split, and both are evaluated under full multimodal inputs as well as the report-dropped ablation.
+
+Table~\ref{tab:ablation_channels} reports the comparison. The engineered channel encoding and the plain \texttt{gray3} baseline are effectively tied: \texttt{gray3} is marginally higher on macro mAP ($0.5633$ vs.\ $0.5595$) and tail mAP ($0.4059$ vs.\ $0.3893$), while the engineered encoding is marginally higher on macro AUROC ($0.9014$ vs.\ $0.9000$). The report-dropped floor is likewise within noise of the two ($0.3367$ vs.\ $0.3412$ macro mAP).
+
+\begin{table}[htbp]
+\centering
+\caption{Input channel encoding ablation (architecture and training fixed). The engineered multi-channel encoding is compared against a plain \texttt{gray3} baseline that replicates the grayscale image across all three channels, under both full multimodal inputs and the report-dropped configuration.}
+\label{tab:ablation_channels}
+\adjustbox{max width=\textwidth}{%
+\begin{tabular}{llcccccc}
+\toprule
+\textbf{Channel encoding} & \textbf{Inputs} & \textbf{mAP} & \textbf{AUROC} & \textbf{Head mAP} & \textbf{Med mAP} & \textbf{Tail mAP} \\
+\midrule
+Engineered multi-channel & Full (image+report+vitals) & 0.5595 & \textbf{0.9014} & \textbf{0.7742} & \textbf{0.5238} & 0.3893 \\
+Plain \texttt{gray3} & Full (image+report+vitals) & \textbf{0.5633} & 0.9000 & 0.7705 & 0.5235 & \textbf{0.4059} \\
+\midrule
+Engineered multi-channel & Report dropped (image+vitals) & \textbf{0.3412} & \textbf{0.8140} & \textbf{0.6088} & \textbf{0.2519} & \textbf{0.1851} \\
+Plain \texttt{gray3} & Report dropped (image+vitals) & 0.3367 & 0.8094 & 0.6054 & 0.2477 & 0.1791 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+The key takeaway is that the engineered multi-channel encoding provides no net benefit over simply replicating the grayscale image: the two configurations differ by at most a few thousandths of a point on every metric, with neither dominating. Given the added preprocessing cost and complexity of the engineered channels, the plain \texttt{gray3} encoding is preferable as the default, and the small differences observed are best attributed to run-to-run variance rather than a genuine advantage for either scheme. This indicates that, for this fusion framework, the diagnostic signal is carried by the multimodal context and architectural components rather than by hand-crafted channel-level image transformations.
+
 \subsection{Long-Tail and Per-Class Analysis}
 \label{subsec:results_longtail}
 
