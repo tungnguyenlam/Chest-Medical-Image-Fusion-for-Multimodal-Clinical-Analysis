@@ -3617,3 +3617,66 @@ Ran `make` to compile the PDF successfully. The overall document structure float
 - `report/results/results.tex:224,277,330` - Updated the introductory sentences for Support Devices, Nodule, and Hernia case studies to reference both the visual attributions and the word-level text attribution figures.
 
 **Reasoning.** Stripping out expected localization statements in the previous change left the word-level text attribution figures unreferenced in the body text. Mentioning them alongside visual attributions ensures that all figures are properly referenced and LaTeX has no unused or dangling figures/references.
+
+## 2026-06-29 - merge v8nano eval wrappers into one ablation + Grad-CAM driver
+
+**Goal.** Collapse the two thin monkeypatch wrappers `eval_no_cache.py` and
+`eval_no_cache_gray.py` into one self-contained driver whose default behaviour is to
+run the report's ablation study on a single checkpoint, and to additionally dump raw
+per-component Grad-CAM assets for hand-built report figures.
+
+**Changes.**
+- `training/prior_aware_v8nano/eval_no_cache.py` - full rewrite. Now a standalone,
+  arch-generic driver for ONE checkpoint (`best.pt`). Output root is the checkpoint's
+  own run dir (`resolve_path(ckpt).parents[1]/ablation/`), so each run is deterministic
+  and attached to its checkpoint. Two passes:
+  - Ablation grid (`run_ablation_grid`): arms `full`, `gray3` (1-channel replicated x3 -
+    the merged-in gray behaviour), `drop_vitals`, `drop_report`, `drop_prior`. Each arm
+    -> `predictions_<arm>.csv` + `metrics_<arm>.json` + console summary + delta vs full;
+    rolls up into `ablation_summary.csv` (macro/head/med/tail mAP+AUROC per arm).
+  - Grad-CAM raw assets (`run_gradcam_assets`): one best TP study/class into
+    `ablation/gradcam/<Class>/` - the 3 input channel planes as individual raw uint8 PNGs
+    (`image-{current,prior}-<view>-<idx>-<raw|clahe|hist_eq>.png`), the CAM heatmaps
+    (`gradcam-...png`), `indication-current.txt`/`indication-prior.txt`/`report-prior.txt`/
+    `vitals-*.txt`, and `meta.json`.
+  - `_AblatedDataset` wrapper does per-sample edits (drop_vitals: zero+flag both branches'
+    vitals; drop_prior: mirror the dataset's own no-prior emission). `_make_base_dataset`
+    builds the token-path PriorAwareDataset with the channel cache off and channel_mode
+    overridable (gray3). drop_report reuses `_blank_prior_aware_current_indication`.
+  - Kept patches: `low_cpu_mem_usage=False` on `BioBertEncoder.from_pretrained_best_attention`
+    and a leftover-meta materialization guard.
+- `training/prior_aware_v8nano/eval_no_cache_gray.py` - deleted (its gray3 behaviour is now
+  the `gray3` arm).
+- `training/prior_aware_v8nano/README.md` - added an "Eval - ablation grid + Grad-CAM assets"
+  section documenting the merged driver.
+
+**Reasoning.** Reused `run_prior_gradcam`'s `build_model`/`build_dataset`/`select_studies`
+and `PriorAwareAttributor` rather than re-implementing model/attribution wiring: `build_model`
+already forces the live CXR-BERT path and strips the bg-penalty / graph-consistency aux so
+`forward` returns bare logits, which both `predict_dataframe` (forward-only) and the
+attributor (backward) need. One model object is built and reused across all arms + Grad-CAM
+to save memory. It reads `model.arch` from the checkpoint's config, so the same script runs
+on a v6 checkpoint - which is exactly how the "v8 without graph head" comparison is produced
+(run on the v6 checkpoint), per the user's instruction to not add a graph-head ablation arm.
+
+**Assumptions.**
+- The current study has no radiology report (withheld to avoid leakage), so "current text"
+  is the clinical indication; saved as `indication-current.txt`. Prior keeps both
+  `indication-prior.txt` and `report-prior.txt`.
+- Grad-CAM dumps the single best (highest-confidence TP) study per class (26 total), not the
+  three-set best/fp/fn grid, per the user's choice.
+- `gray3` here is an eval-time train/eval *mismatch* probe on a model trained on the
+  engineered channels - not a substitute for the separately-retrained gray3 checkpoint the
+  report's channel table used. Documented as such in the docstring/README.
+
+**Gotchas.**
+- With the text-embedding cache off, `PriorAwareDataset._emit_streams` emits ALL text streams
+  (incl. the unused `obs` streams); the v8 forward ignores the extra keys, so this is benign
+  but means the parquet must carry `obs_text`/`prior_obs_text` columns (it does).
+- `drop_prior` only needs `has_prior=False` for the model's padding masks to zero the prior
+  memory; the wrapper also zeros the prior image/label/vitals/days to exactly mirror the
+  dataset's native no-prior sample.
+
+**Follow-ups.**
+- Not yet run end-to-end on a real checkpoint (verified: byte-compile, import, `--help`,
+  arm resolution). A full run needs the test parquet + JPEGs present on the box.

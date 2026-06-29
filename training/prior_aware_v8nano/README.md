@@ -74,6 +74,37 @@ point). Further arms: `gnn: gcn|gat`, `graph_dir: directed|symmetrized`,
 `use_significance`/`use_hierarchy_edges`/`graph_prior_label`/`graph_consistency_lambda`
 on/off, `graph_mode: joint|pretrain_freeze`.
 
+## Eval — ablation grid + Grad-CAM assets (per checkpoint)
+
+`eval_no_cache.py` is a single, deterministic, arch-generic driver for **one** checkpoint
+(`best.pt`; `last.pt` is ignored). It writes everything into the checkpoint's own run dir
+under `<run>/ablation/`. The on-disk channel cache is disabled (channels decode fresh from
+JPEG) and CXR-BERT loads with `low_cpu_mem_usage=False` (avoids the MPS meta-tensor crash).
+
+```bash
+python training/prior_aware_v8nano/eval_no_cache.py \
+    --checkpoint-path output/prior_aware_v8nano/runs/<run>/checkpoints/best.pt
+```
+
+It runs two things:
+
+1. **Ablation grid** (eval-time input ablations, same checkpoint): `full`, `gray3`
+   (1-channel grayscale replicated x3 — the old `eval_no_cache_gray` behaviour, a
+   train/eval *mismatch* probe, not a channel-design proof), `drop_vitals`, `drop_report`
+   (current clinical indication blanked), `drop_prior` (whole prior branch masked). Each arm
+   writes `predictions_<arm>.csv` + `metrics_<arm>.json`, prints a delta vs `full`, and all
+   arms roll up into `ablation_summary.csv`. Pick a subset with `--ablations` (`full` is
+   always included as the delta baseline); `--skip-ablations` runs Grad-CAM only.
+2. **Grad-CAM raw assets** (full pipeline): one best (highest-confidence TP) study per class
+   into `ablation/gradcam/<Class>/` — the 3 input planes split out as individual raw PNGs +
+   the Grad-CAM heatmap (current and prior), plus `indication-current.txt` /
+   `indication-prior.txt` / `report-prior.txt` / `vitals-*.txt` and `meta.json`. Skip with
+   `--skip-gradcam`.
+
+There is **no graph-head arm**: the v6-vs-v8 (no-graph-vs-graph) comparison comes from
+running this same script on each checkpoint separately (it reads the arch from the
+checkpoint's config, so it runs on a v6 checkpoint too).
+
 ## Grad-CAM
 
 `prior_aware_v8nano` is registered in `src/interpret/run_prior_gradcam.py`; the graph
