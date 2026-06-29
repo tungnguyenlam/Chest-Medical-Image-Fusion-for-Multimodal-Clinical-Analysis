@@ -3521,3 +3521,23 @@ Ran `make` to compile the PDF successfully. The overall document structure float
 - `report/acknowledgements/acknowledgements.tex:8-9` - Replaced supervisor/collaborator placeholders with specific gratitude text for ICT Department and Ms. Nguyen Vu Hong Ngoc.
 
 **Reasoning.** Replaced generic placeholders with actual contributors as requested by the user.
+
+## 2026-06-29 - Weaken overconfident claims in thesis report
+
+**Goal.** Weaken or replace several overconfident and deterministic phrases regarding clinical reasoning, shortcut learning, and model validation with more tempered language.
+
+**Changes.**
+- `report/conclusion/conclusion.tex:6` - Replaced "mirrors the diagnostic reasoning of clinicians" with "is inspired by clinical workflow".
+- `report/conclusion/conclusion.tex:8` - Replaced "demonstrate that the model aligns with clinical practice" with "are qualitatively consistent with expected regions".
+- `report/conclusion/conclusion.tex:10` - Replaced "highly effective methodology" with "suggests potential benefit".
+- `report/results/results.tex:254` - Replaced "properly interprets the clinical suspicion" with "uses clinically relevant contextual signals".
+- `report/results/results.tex:91` - Replaced "validates the effectiveness" with "suggests potential benefit".
+- `report/related_work/related_work.tex:37` - Softened the reference to shortcut learning to state that design choices "reduce but do not eliminate shortcut risk".
+- `report/methodology/methodology.tex:222` - Replaced "reduces the risk of shortcut learning" with "reduces but does not eliminate shortcut risk".
+- `report/discussion/discussion.tex:29` - Replaced "but the risk remains" with "which reduces but does not eliminate shortcut risk".
+- `report/introduction/introduction.tex:46` - Replaced "without introducing shortcut learning" with "while reducing but not eliminating shortcut risk".
+- `report/introduction/introduction.tex:55` - Replaced "designed to mitigate shortcut learning and leakage risks" with "designed to reduce shortcut and leakage risks".
+
+**Reasoning.** Softened claims to align with realistic capabilities of deep learning models in medical imaging, avoiding overclaiming clinical alignment or absolute prevention of shortcut learning.
+
+**Follow-ups.** Verified that the PDF compiled successfully via `make` (`main.pdf`).

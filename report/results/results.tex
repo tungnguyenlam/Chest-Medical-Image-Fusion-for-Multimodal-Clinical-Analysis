@@ -88,7 +88,7 @@ Table~\ref{tab:contextual_comparison} presents this comparison.
     }
 \end{table}
 
-The published CaMCheX result ($1024 \times 1024$ resolution) is included only as a reference point. Direct comparison is limited because this thesis uses a smaller resource-constrained experimental setting, different preprocessing choices, and a prior-aware extension. While the full CaMCheX system benefits from $1024 \times 1024$ resolution, extensive pretraining, and noisy student training, the proposed model is trained at $512 \times 512$ resolution, yet demonstrates competitive performance of 0.5595 mAP and 0.9014 AUROC. This validates the effectiveness of the compact prior-aware design under resource limitations.
+The published CaMCheX result ($1024 \times 1024$ resolution) is included only as a reference point. Direct comparison is limited because this thesis uses a smaller resource-constrained experimental setting, different preprocessing choices, and a prior-aware extension. While the full CaMCheX system benefits from $1024 \times 1024$ resolution, extensive pretraining, and noisy student training, the proposed model is trained at $512 \times 512$ resolution, yet demonstrates competitive performance of 0.5595 mAP and 0.9014 AUROC. This suggests potential benefit of the compact prior-aware design under resource limitations.
 
 \subsection{Ablation Study}
 \label{subsec:results_ablation}
@@ -251,7 +251,7 @@ Cardiomegaly is characterized by an enlarged heart, defined quantitatively by a 
     \label{fig:cardiomegaly_text}
 \end{figure}
 
-As shown in Figure~\ref{fig:fig_cardiomegaly_gradcam}, the model's visual attention aligns with the clinical practice of inspecting the cardiac margins. In the current target image (Figure~\ref{fig:cardiomegaly_cur}), the attention focuses on the left ventricular border and the overall width of the cardiac silhouette. In the prior image (Figure~\ref{fig:cardiomegaly_prv}), the model evaluates the previous size of the heart to establish temporal stability. In the clinical indication text (Figure~\ref{fig:cardiomegaly_text}), the highest attribution weights are concentrated on terms like ``cardiomegaly'' and ``enlarged'', confirming that the model properly interprets the clinical suspicion documented by the admitting physician.
+As shown in Figure~\ref{fig:fig_cardiomegaly_gradcam}, the model's visual attention aligns with the clinical practice of inspecting the cardiac margins. In the current target image (Figure~\ref{fig:cardiomegaly_cur}), the attention focuses on the left ventricular border and the overall width of the cardiac silhouette. In the prior image (Figure~\ref{fig:cardiomegaly_prv}), the model evaluates the previous size of the heart to establish temporal stability. In the clinical indication text (Figure~\ref{fig:cardiomegaly_text}), the highest attribution weights are concentrated on terms like ``cardiomegaly'' and ``enlarged'', confirming that the model uses clinically relevant contextual signals documented by the admitting physician.
 
 \subsubsection{Case Study 2: Pneumothorax}
 \label{subsubsec:case_pneumothorax}

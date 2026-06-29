@@ -34,7 +34,7 @@ Recent biomedical vision-language work has started to incorporate temporal struc
 
 Prior-aware modelling can be implemented in different ways. Some approaches compare current and prior images using Siamese encoders or feature-difference representations. Others use attention mechanisms so that current-study features can attend to prior-study features. Cross-attention is especially suitable for this setting because it allows the current examination to act as the target while prior examinations provide contextual memory. This matches the clinical idea that the current image remains the main object of interpretation, while the prior study provides supporting evidence.
 
-However, prior-aware modelling also introduces challenges. First, not every patient has a prior study, so the model must remain robust when historical information is missing. Second, the time gap between current and prior examinations can vary widely, so the model should distinguish between recent and old priors. Third, there is a risk of information leakage or shortcut learning if prior labels or reports are used carelessly. For this reason, this thesis treats prior information as auxiliary context and uses time-gap embeddings and stochastic prior dropout to reduce over-dependence on historical information.
+However, prior-aware modelling also introduces challenges. First, not every patient has a prior study, so the model must remain robust when historical information is missing. Second, the time gap between current and prior examinations can vary widely, so the model should distinguish between recent and old priors. Third, there is a risk of information leakage if prior labels or reports are used carelessly, although design choices can reduce but not eliminate shortcut risk. For this reason, this thesis treats prior information as auxiliary context and uses time-gap embeddings and stochastic prior dropout to reduce over-dependence on historical information.
 
 \subsection{Mitigating Class Imbalance in Medical Datasets}
 \label{subsec:related_class_imbalance}
@@ -77,14 +77,15 @@ The challenge results also showed a clear gap between common and rare findings. 
     \centering
     \caption[CXR-LT 2023 performance by label-frequency group]{CXR-LT 2023 performance by label-frequency group for representative teams. The grouped mAP values are summarized from the CXR-LT challenge overview \cite{holste2024cxrlt}.}
     \label{tab:cxrlt2023_longtail}
-    \begin{tabular}{lcccc}
+    \begin{tabular}{lcccccc}
         \hline
-        Team & Overall mAP & Head mAP & Medium mAP & Tail mAP \\
+        Team & Year & Resolution & Architecture & Overall mAP & Head mAP & Medium mAP & Tail mAP \\
         \hline
-        CheXFusion \cite{kim2023chexfusion} (Rank 1) & 0.372 & 0.499 & 0.246 & 0.242 \\
-        Nguyen-Mau et al. \cite{nguyenmau2023advanced} (Rank 2) & 0.354 & 0.482 & 0.226 & 0.227 \\
-        Park et al. \cite{park2023robust} (Rank 4) & 0.351 & 0.480 & 0.221 & 0.220 \\
-        Hong et al. \cite{hong2023bagoftricks} (Rank 5) & 0.349 & 0.474 & 0.218 & 0.243 \\
+        CheXFusion \cite{kim2023chexfusion} (Rank 1) & 2023 & ConvNeXt, Transformers & 0.499 & 0.246 & 0.242 \\
+        Nguyen-Mau et al. \cite{nguyenmau2023advanced} (Rank 2) & 2023 & 0.482 & 0.226 & 0.227 \\
+        Park et al. \cite{park2023robust} (Rank 4) & 2023 & 0.480 & 0.221 & 0.220 \\
+        Hong et al. \cite{hong2023bagoftricks} (Rank 5) & 2023 & 0.474 & 0.218 & 0.243 \\
+        CaMCheX \cite{sloan2025camchex} (Reference) & 2025 & 0.576 & 0.786 & 0.550 & 0.408 \\
         \hline
     \end{tabular}
 \end{table}

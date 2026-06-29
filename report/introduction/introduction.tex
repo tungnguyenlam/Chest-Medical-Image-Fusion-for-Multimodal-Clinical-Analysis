@@ -43,7 +43,7 @@ Finally, multimodal fusion is computationally expensive. High-resolution images 
 
 This thesis adapts and extends the CaMCheX framework for multimodal chest X-ray classification under practical computational constraints \cite{sloan2025camchex}. The proposed model combines current radiographic images, clinical indication text, structured vital signs, and prior-study context into a single classification pipeline.
 
-Each modality is first encoded using dedicated feature extraction modules: a lightweight visual backbone for radiographs, a pre-trained clinical language model for indication text, projection layers for vital signs, and temporal embeddings for prior-study information. These encoded features are then combined using a transformer-based fusion module. Rather than relying on computationally expensive dense token spaces, this thesis explores compact token layouts and feature routing strategies to balance spatial detail with training efficiency. The prior-study context is integrated as auxiliary temporal evidence to support comparative diagnosis without introducing shortcut learning.
+Each modality is first encoded using dedicated feature extraction modules: a lightweight visual backbone for radiographs, a pre-trained clinical language model for indication text, projection layers for vital signs, and temporal embeddings for prior-study information. These encoded features are then combined using a transformer-based fusion module. Rather than relying on computationally expensive dense token spaces, this thesis explores compact token layouts and feature routing strategies to balance spatial detail with training efficiency. The prior-study context is integrated as auxiliary temporal evidence to support comparative diagnosis while reducing but not eliminating shortcut risk.
 
 \subsection{Thesis Contributions}
 \label{subsec:intro_contributions}
@@ -52,7 +52,7 @@ The primary contributions of this thesis are:
 \begin{itemize}
     \item The implementation of a CaMCheX-inspired multimodal chest X-ray classification framework combining radiographs, clinical indication text, structured vital signs, and prior-study context.
     \item An investigation of practical design choices under limited computational resources, including reduced image resolutions, frozen text encoders, and compact token layouts.
-    \item A prior-aware temporal modelling component incorporating historical study information and time-gap embeddings, designed to mitigate shortcut learning and leakage risks.
+    \item A prior-aware temporal modelling component incorporating historical study information and time-gap embeddings, designed to reduce shortcut and leakage risks.
     \item Evaluation of loss-function choices tailored to long-tailed multi-label chest X-ray classification.
     \item Qualitative interpretability analysis using Gradient-weighted Class Activation Mapping (Grad-CAM) visualizations \cite{selvaraju2017gradcam} to inspect visual attention maps against clinical findings.
 \end{itemize}

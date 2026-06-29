@@ -219,7 +219,7 @@ The prior tokens are then scaled during training:
 \begin{equation}
     X_i^{prior'} = r_i X_i^{prior}
 \end{equation}
-This regularization technique reduces the risk of shortcut learning on historical context, encouraging the model to extract features from both current images and prior evidence.
+This regularization technique reduces but does not eliminate shortcut risk on historical context, encouraging the model to extract features from both current images and prior evidence.
 
 \subsection{Classification Head and Training Objective}
 \label{subsec:method_head_loss}

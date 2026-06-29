@@ -26,7 +26,7 @@ Despite the positive results, this study has several limitations that should be 
 
 \textbf{Single-Dataset Validation}: Models were trained and evaluated on splits derived from the MIMIC-CXR dataset. While patient-level splits prevent data leakage, the lack of external validation on datasets from other hospital systems limits the ability to evaluate the generalizability of the framework to different patient populations and imaging protocols.
 
-\textbf{Shortcut Learning Risk}: While prior-study information improves classification performance, it carries a risk of shortcut learning. The model might learn to rely excessively on historical labels or reports rather than analyzing the current radiograph, which could lead to errors if an acute, new pathology develops that was not present in the past. This was mitigated using prior dropout, but the risk remains.
+\textbf{Shortcut Learning Risk}: While prior-study information improves classification performance, it carries a risk of shortcut learning. The model might learn to rely excessively on historical labels or reports rather than analyzing the current radiograph, which could lead to errors if an acute, new pathology develops that was not present in the past. This was mitigated using prior dropout, which reduces but does not eliminate shortcut risk.
 
 \textbf{Qualitative Interpretability}: Grad-CAM \cite{selvaraju2017gradcam} attribution maps provide qualitative visualizations of where the model is looking, but they do not constitute mathematical proof of clinical reasoning or causal decision-making.
 
