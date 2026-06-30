@@ -2,12 +2,12 @@
 \section{Methodology}
 \label{sec:methodology}
 
-This section describes the proposed prior-aware multimodal framework for long-tailed chest X-ray classification. The model is inspired by CaMCheX, but is adapted to a resource-constrained setting with lightweight image encoding, frozen or precomputed text embeddings, compact multimodal token construction, and prior-aware fusion. Instead of presenting each development stage as a separate model, this section focuses on the final architecture used in the main experiments. Earlier design choices are treated as ablation variants and are discussed in Section~\ref{sec:results}.
+We adapt CaMCheX for long-tailed chest X-ray classification using a lightweight image encoder, frozen or precomputed text embeddings, compact tokens, and prior-aware fusion. We describe only the final architecture used in the main experiments; Section~\ref{sec:results} treats earlier variants as ablations.
 
 \subsection{Problem Formulation}
 \label{subsec:method_problem}
 
-This thesis considers multi-label chest X-ray classification with multimodal clinical context. For each current study, the input consists of one or more chest X-ray images, clinical indication text, structured vital signs, and, when available, information from a previous study. The goal is to predict a binary label vector representing the presence or absence of multiple thoracic findings.
+The task is multi-label chest X-ray classification with multimodal clinical context. For each current study, the input consists of one or more chest X-ray images, clinical indication text, structured vital signs, and, when available, information from a previous study. The model predicts a binary label vector for the presence or absence of each thoracic finding.
 
 Let each sample be represented as:
 \begin{equation}
@@ -26,7 +26,7 @@ where each output dimension \(\hat{y}_{ic}\) corresponds to the predicted probab
 \subsection{Overview of the Proposed Model}
 \label{subsec:method_overview}
 
-The proposed model follows a modality-specific encoding and transformer-based fusion \cite{vaswani2017attention} design. First, each input modality is processed by a dedicated encoder. Chest X-ray images are encoded using a lightweight visual backbone. Clinical indication text is encoded using a radiology-domain language model. Vital signs are normalized and projected through a small multilayer perceptron (MLP) together with their missingness mask. Prior-study information, when available, is encoded separately and used as temporal context.
+Our model encodes each modality separately and fuses the resulting tokens with a transformer \cite{vaswani2017attention}. First, we process each input modality with a dedicated encoder. Chest X-ray images are encoded using a lightweight visual backbone. Clinical indication text is encoded using a radiology-domain language model. Vital signs are normalized and projected through a small multilayer perceptron (MLP) together with their missingness mask. When a prior study exists, we encode it separately and use it as temporal context.
 
 After encoding, all modality features are projected into a shared latent dimension. Current-study information forms the target stream, while prior-study information forms a memory stream. The fusion module first models interactions among current-study tokens and then allows the current study to attend to prior-study context through cross-attention. This design keeps the current examination as the main prediction target while allowing historical information to support interpretation.
 
@@ -75,9 +75,9 @@ The final fused representation is passed to a multi-label classification head, w
 \subsection{Data Preprocessing}
 \label{subsec:method_preprocessing}
 
-Before feeding the multimodal inputs into their respective encoders, a rigorous preprocessing pipeline is applied to standardise the data formats, handle missing values, and prevent data leakage:
+Before encoding the inputs, we standardize the data, handle missing values, and remove leakage-prone fields:
 
-\textbf{Image Preprocessing}: Chest X-ray images are resized to a resolution of $512 \times 512$ pixels. To maintain compatibility with standard pre-trained architectures, single-channel grayscale chest X-rays are duplicated into a 3-channel layout. Alternatively, an optional preprocessing channel mode creates a 3-channel composite combining the raw image, a Contrast Limited Adaptive Histogram Equalization (CLAHE) enhanced image \cite{zuiderveld1994clahe}, and a custom edge-detection channel to emphasize structural details. Pixel values are z-score normalized using the mean and standard deviation computed over the training subset.
+\textbf{Image Preprocessing}: Chest X-ray images are resized to a resolution of $512 \times 512$ pixels. To maintain compatibility with standard pre-trained architectures, single-channel grayscale chest X-rays are duplicated into a 3-channel layout. Alternatively, an optional preprocessing channel mode creates a 3-channel composite combining the raw image, a Contrast Limited Adaptive Histogram Equalization (CLAHE) enhanced image \cite{zuiderveld1994clahe}, and a histogram-equalized channel to emphasize contrast details. Pixel values are z-score normalized using the mean and standard deviation computed over the training subset.
 
 \textbf{View Handling}: Studies with multiple radiographic views are limited to a maximum of $4$ views. Views are classified based on their metadata label (\texttt{ViewPosition}): AP, PA, or FRONTAL are mapped to a frontal code ($1$), LATERAL or LL are mapped to a lateral code ($2$), and any other view is coded as $0$. Studies with fewer than $4$ views are zero-padded, and a binary view attention mask is generated so that the transformer fusion layer ignores the padding tokens.
 
@@ -103,7 +103,7 @@ where \(\mu_j\) and \(\sigma_j\) are the mean and standard deviation of variable
 \end{equation}
 This mask vector \(M_i = [m_{i1}, \dots, m_{iD}]^\top\) is concatenated to the normalized vital-sign vector \(\tilde{V}_i = [\tilde{v}_{i1}, \dots, \tilde{v}_{iD}]^\top\), enabling the subsequent vital-sign projection network to dynamically adjust its weighting based on data availability.
 
-\textbf{Prior-Study Selection}: To compile longitudinal patient history, studies are sorted chronologically per patient. A shift operation is performed to identify the immediate previous study as the historical prior. This chronological constraint prevents future information from being referenced, thereby ensuring strict temporal leakage prevention.
+\textbf{Prior-Study Selection}: To compile longitudinal patient history, studies are sorted chronologically per patient. We use a chronological shift to select the immediately previous study as the prior. This chronological constraint prevents the model from using future information.
 
 \textbf{Label Construction}: The binary targets correspond to the $26$ long-tailed pathologies defined by the CXR-LT dataset. Label vectors are represented as $26$-dimensional multi-hot arrays.
 
@@ -121,30 +121,24 @@ To preserve spatial information, two-dimensional positional embeddings are added
 \subsection{Text Embedding Model}
 \label{subsec:text_embedding_model}
 
-In addition to radiographic images and structured vital signs, the model uses free-text clinical context as an explicit input modality. This reflects the clinical setting in which chest radiographs are interpreted together with the indication for imaging, prior findings, and other contextual information rather than as isolated images. Each text field is tokenized and encoded by a Transformer-based biomedical language model. The resulting contextual representation is then projected into the same feature space as the image and vital-sign tokens before multimodal fusion.
+The text modality consists of pre-imaging clinical indication and history text. Post-interpretation report sections such as findings and impression are excluded because they may contain the target diagnosis and would therefore introduce label leakage.
 
-The original CaMCheX-style implementation used BioBERT (\texttt{dmis-lab/biobert-v1.1}) as the text encoder. BioBERT is a BERT-based language model adapted to biomedical corpora, including PubMed abstracts and PMC full-text articles, and is therefore a reasonable biomedical text representation baseline \cite{lee2020biobert}. However, BioBERT is not specifically optimized for chest radiology reports or for chest X-ray image--text representation learning.
+The final implementation uses a radiology-domain CXR-BERT encoder (\texttt{microsoft/BiomedVLP-CXR-BERT-specialized}) to obtain text representations from the clinical indication. This choice is motivated by the domain mismatch between general biomedical text and radiology-specific language: CXR-BERT is trained on chest radiology reports and multimodal image--text contrastive data, making it more closely matched to MIMIC-CXR report language than a general biomedical encoder such as BioBERT \cite{lee2020biobert}. To reduce computational cost, the text encoder is frozen and text embeddings are precomputed before multimodal training. A trainable projection layer then maps the text representation into the shared fusion dimension used by the multimodal transformer.
 
-In the active refactored implementation, the text encoder is changed to CXR-BERT-specialized (\texttt{microsoft/BiomedVLP-CXR-BERT-specialized}). CXR-BERT is designed for chest X-ray language understanding and is further specialized using radiology reports and multimodal image--text contrastive training in the BioViL framework \cite{boecking2022biovil}. This makes it more closely matched to the language distribution of MIMIC-CXR reports and clinical indications than a general biomedical encoder. The change is therefore motivated by domain alignment rather than by architectural novelty.
+For each text stream, the model uses the final \texttt{[CLS]} representation as a compact sentence-level embedding with dimensionality 768, passed through a learned linear projection into the multimodal fusion width. The projection expands each text embedding into a small number of fusion tokens, controlled by \(n_{\text{text}}\). In the main experiments, \(n_{\text{text}}=2\), so each clinical text field contributes two learned text tokens of width \(d_{\text{model}}\). Segment embeddings are added so that the fusion module can distinguish current clinical indication, prior clinical indication, and prior report text.
 
-For each text stream, the model uses the final \texttt{[CLS]} representation as a compact sentence-level embedding. In the active prior-aware models, this embedding has dimensionality 768 and is passed through a learned linear projection into the multimodal fusion width. Instead of contributing a single vector directly, the projection expands each text embedding into a small number of fusion tokens, controlled by \(n_{\text{text}}\). In the main refactored models, \(n_{\text{text}}=2\), so each clinical text field contributes two learned text tokens of width \(d_{\text{model}}\). Segment embeddings are added so that the fusion module can distinguish current clinical indication, prior clinical indication, and prior report text.
-
-This design provides a compact and computationally practical text representation. It avoids passing the full sequence of word tokens into the multimodal fusion module, reducing memory and attention cost. The trade-off is that the model relies on a \texttt{[CLS]}-level summary, which may discard some fine-grained phrase-level information from the report. This limitation is important because subtle radiological phrases may carry diagnostic meaning. In this thesis, the choice is treated as a resource-aware design decision rather than as evidence that \texttt{[CLS]}-level text summaries are optimal.
-
-For efficiency, the implementation also supports precomputed text embeddings. When enabled, CXR-BERT embeddings are computed in advance and reused during training, reducing GPU memory use and training time. This is useful under limited compute, but it also means that the language encoder is not updated by the downstream classification objective. Therefore, improvements from the multimodal model should be interpreted as improvements in fusion and downstream classification using fixed text representations, not as evidence of text-encoder fine-tuning.
-
-For interpretability experiments, the cached path can be disabled and the live CXR-BERT encoder can be used so that text-token attribution can still be computed. This allows the Grad-CAM analysis to inspect not only image regions but also the relative contribution of clinical text streams.\footnote{Implementation note: the original reference/legacy path uses \texttt{dmis-lab/biobert-v1.1}, while the active prior-aware Nano experiments use \texttt{microsoft/BiomedVLP-CXR-BERT-specialized}.}
+This design preserves clinically relevant textual context while keeping the training pipeline feasible under limited GPU memory. However, freezing the text encoder also prevents task-specific adaptation, which is treated as a limitation in Section~\ref{sec:discussion}.
 
 \begin{table}[H]
 \centering
-\caption{Text encoders used in the legacy and active implementations.}
+\caption{Text encoder choices considered during development. The final model uses the radiology-domain CXR-BERT encoder.}
 \label{tab:text_encoder_comparison}
 \begin{tabular}{p{0.22\linewidth} p{0.23\linewidth} p{0.23\linewidth} p{0.24\linewidth}}
 \toprule
-\textbf{Encoder} & \textbf{Domain} & \textbf{Use in this project} & \textbf{Rationale / limitation} \\
+\textbf{Encoder} & \textbf{Domain} & \textbf{Use in this work} & \textbf{Rationale / limitation} \\
 \midrule
-BioBERT ({dmis-lab/biobert-v1.1}) & Biomedical literature & Legacy/reference CaMCheX-style implementation & Strong biomedical baseline, but not specifically trained for chest radiology image--text alignment. \\
-CXR-BERT-specialized ({microsoft/BiomedVLP-CXR-BERT-specialized}) & Chest X-ray radiology text and image--text pretraining & Active refactored prior-aware Nano experiments & Better aligned with CXR report language; used as a compact \texttt{[CLS]}-level representation in this implementation. \\
+BioBERT ({dmis-lab/biobert-v1.1}) & Biomedical literature & Development baseline & Strong biomedical baseline, but not specifically trained for chest radiology image--text alignment. \\
+CXR-BERT-specialized ({microsoft/BiomedVLP-CXR-BERT-specialized}) & Chest X-ray radiology text and image--text pretraining & Final implementation in main experiments & Better aligned with CXR report language; used as a compact \texttt{[CLS]}-level representation. \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -175,9 +169,9 @@ If prior-study information exists, a corresponding memory stream token sequence 
 \end{equation}
 where \(H_i^{prior-img}\), \(h_i^{prior-txt}\), and \(h_i^{prior-vit}\) are the encoded visual, textual, and vital tokens of the historical prior examination, and \(e_{\Delta t}\) is a learned embedding representing the time gap \(\Delta t\) between the current and prior studies. The text sequence \(h_i^{prior-txt} \in \mathbb{R}^{2n_{\text{text}} \times d}\) contains the projected tokens from both the prior clinical indication and prior report text, leading to a total of \(N_{prior} = N_{prior-img} + 2n_{\text{text}} + 2\) prior tokens.
 
-The use of segment embeddings allows the transformer to distinguish between different sources of information even after all features have been projected into the same latent dimension. Positional embeddings are used for spatial image tokens, while temporal embeddings are used for prior-study tokens. Attention masks are applied to ignore padded views or unavailable modalities.
+Segment embeddings tell the transformer which source each token came from after projection into the shared latent space. Positional embeddings are used for spatial image tokens, while temporal embeddings are used for prior-study tokens. Attention masks are applied to ignore padded views or unavailable modalities.
 
-To make training feasible under limited GPU memory, this thesis utilizes compact token layouts rather than dense spatial maps. For standard self-attention, the computational and memory complexity scales quadratically with the sequence length \cite{vaswani2017attention}:
+To make training feasible under limited GPU memory, the model uses compact token layouts rather than dense spatial maps. For standard self-attention, the computational and memory complexity scales quadratically with the sequence length \cite{vaswani2017attention}:
 \begin{equation}
     \mathcal{O}(N^2 d)
 \end{equation}
@@ -186,7 +180,7 @@ where \(N\) is the number of tokens and \(d\) is the hidden dimension. By projec
 \subsection{Prior-Aware Temporal Fusion}
 \label{subsec:method_prior_fusion}
 
-Prior-study information is incorporated to reflect the clinical practice of comparing current and previous examinations. The core mechanism of the fusion module is Multi-Head Attention (MHA), following the Transformer attention formulation \cite{vaswani2017attention}. For a query matrix \(Q\), key matrix \(K\), and value matrix \(V\), scaled dot-product attention is defined as:
+We incorporate prior-study information because clinicians compare current and previous examinations. The core mechanism of the fusion module is Multi-Head Attention (MHA), following the Transformer attention formulation \cite{vaswani2017attention}. For a query matrix \(Q\), key matrix \(K\), and value matrix \(V\), scaled dot-product attention is defined as:
 \begin{equation}
     \mathrm{Attn}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d}}\right)V
 \end{equation}
@@ -200,7 +194,7 @@ It then attends to the prior-study memory stream through cross-attention:
 \begin{equation}
     Z_i^{fused} = \mathrm{MHA}(Q=Z_i^{cur}, K=X_i^{prior}, V=X_i^{prior})
 \end{equation}
-This cross-attention design ensures that the current study remains the query stream that directs the prediction, while the prior study serves as supporting contextual memory.
+This cross-attention design keeps the current study as the prediction target and uses the prior study only as supporting memory.
 
 To represent temporal distances, the time gap \(\Delta t_i\) between studies is mapped into discretized temporal buckets \(b_i\), which are used to retrieve a learned time-gap embedding:
 \begin{equation}
@@ -219,7 +213,9 @@ The prior tokens are then scaled during training:
 \begin{equation}
     X_i^{prior'} = r_i X_i^{prior}
 \end{equation}
-This regularization technique reduces but does not eliminate shortcut risk on historical context, encouraging the model to extract features from both current images and prior evidence.
+This regularization reduces, but cannot remove, shortcut risk by forcing the model to use both current-study and prior-study evidence.
+
+The exploratory analysis in Section~\ref{subsec:eda_prior_gaps} (Figure~\ref{fig:temporal_label_dynamics}) shows that prior labels often persist between studies but can also change, particularly for common findings. The model therefore treats prior information as auxiliary context rather than a deterministic shortcut: time-gap embeddings allow the fusion module to weigh historical evidence according to temporal distance, while prior dropout ensures that the classification head remains functional when prior context is absent or unreliable.
 
 \subsection{Classification Head and Training Objective}
 \label{subsec:method_head_loss}
@@ -247,7 +243,7 @@ For training, the standard multi-label Binary Cross-Entropy (BCE) loss is define
 \end{equation}
 where \(y_{ic}\) is the true binary label.
 
-However, because the dataset is highly imbalanced, this thesis utilizes Asymmetric Loss (ASL) as the actual training objective \cite{ridnik2021asymmetric}. ASL down-weights easy negative examples more aggressively than positive examples. For a single sample, the loss is formulated as:
+However, because the dataset is highly imbalanced, the model uses Asymmetric Loss (ASL) as the training objective \cite{ridnik2021asymmetric}. ASL down-weights easy negative examples more aggressively than positive examples. For a single sample, the loss is formulated as:
 \begin{equation}
     \mathcal{L}_{ASL} = - \sum_{c=1}^{C} \left[ y_c (1-p_c)^{\gamma_+} \log(p_c) + (1-y_c) p_{mc}^{\gamma_-} \log(1-p_{mc}) \right]
 \end{equation}
@@ -257,16 +253,23 @@ where \(p_c = \hat{y}_{ic}\) is the predicted probability of class \(c\). To fur
 \end{equation}
 The shifting hyperparameters \(\gamma_+\) and \(\gamma_-\) control the focusing strength for positive and negative samples, respectively, with \(\gamma_- > \gamma_+\) to focus learning on positive cases while ignoring easy negative background samples.
 
+\subsection{Label-Correlation Graph Head}
+\label{subsec:method_graph_head}
+
+Standard multi-label classification heads treat each label query as independent, which ignores the strong co-occurrence structure present in chest X-ray findings (e.g., cardiomegaly and pulmonary edema frequently co-occur). To exploit this structure, the proposed model incorporates a directed, noise-aware label-correlation graph head that augments the ML-Decoder query representations with learned inter-label relationships.
+
+A label co-occurrence matrix is computed from the training-set label vectors and thresholded to retain only statistically significant edges. This adjacency matrix defines a directed graph over the 26 pathology nodes. During classification, the graph head propagates information between correlated label queries, effectively regularizing the query space so that predictions for co-occurring conditions are mutually reinforced. Noise-awareness is achieved by weighting edges according to label reliability, down-weighting connections derived from noisy or low-confidence labels. The graph head is applied after the ML-Decoder cross-attention and before the final logit projection.
+
 \subsection{Evaluation Metrics}
 \label{subsec:method_evaluation_metrics}
 
-To assess model performance, especially in the context of the severe long-tailed distribution of the 26 pathology classes, several key evaluation metrics are employed. Macro-averaged Mean Average Precision (mAP) serves as the primary metric, while macro Area Under the Receiver Operating Characteristic (mAUROC) and macro-averaged F1 score are used as auxiliary metrics.
+We evaluate performance with mAP, mAUROC, and macro-F1 because the 26 labels are strongly long-tailed. Macro-averaged Mean Average Precision (mAP) serves as the primary metric, while macro Area Under the Receiver Operating Characteristic (mAUROC) and macro-averaged F1 score are used as auxiliary metrics.
 
 For each pathology class \(c\), the Average Precision (AP) is computed over the precision-recall curve as:
 \begin{equation}
     AP_c = \sum_n (R_n - R_{n-1}) P_n
 \end{equation}
-where \(P_n\) and \(R_n\) are the precision and recall at the \(n\)-th threshold. The overall performance is evaluated using macro-averaged Mean Average Precision (mAP):
+where \(P_n\) and \(R_n\) are the precision and recall at the \(n\)-th threshold. We report overall performance using macro-averaged Mean Average Precision (mAP):
 \begin{equation}
     mAP = \frac{1}{C} \sum_{c=1}^{C} AP_c
 \end{equation}
@@ -279,6 +282,6 @@ where \(P_c\) and \(R_c\) represent the precision and recall for class \(c\) at 
 \subsection{Ablation Study Design}
 \label{subsec:method_ablation_design}
 
-Although the main methodology focuses on the final proposed model, several ablation variants are used to understand the contribution of different architectural choices. These ablations are not presented as separate main models, but as controlled comparisons in the experimental analysis.
+Although the methodology describes the final model, we use ablations to measure how much each design choice contributes.
 
-The ablation studies examine the effect of image-only versus multimodal input, compact versus spatially expanded token layouts, the use of prior-study information, time-gap embeddings, prior dropout, and imbalance-aware loss functions. These comparisons help determine which components contribute most to performance and which design choices are most important under limited computational resources.
+The ablation studies examine the effect of image-only versus multimodal input, the use of prior-study information, time-gap embeddings, prior dropout, the label-correlation graph head, and engineered versus plain channel encodings. These comparisons help determine which components contribute most to performance and which design choices are most important under limited compute.

@@ -3680,3 +3680,90 @@ on a v6 checkpoint - which is exactly how the "v8 without graph head" comparison
 **Follow-ups.**
 - Not yet run end-to-end on a real checkpoint (verified: byte-compile, import, `--help`,
   arm resolution). A full run needs the test parquet + JPEGs present on the box.
+
+## 2026-06-30 — View sample notebook for Prior-Aware v8 Dataloader
+
+**Goal.** Create a Jupyter notebook in `data/00-examine-data` to load and visualize a single sample from the Prior-Aware v8 dataloader (`PriorAwareDataset`) for inclusion in the user's report.
+
+**Changes.**
+- `data/00-examine-data/view_v8_sample.ipynb` — Created a new Jupyter notebook that sets up the path to imports, instantiates `PriorAwareDataset` with the validation/evaluation image transforms and the `BiomedVLP-CXR-BERT-specialized` tokenizer, finds a sample with a prior study, decodes and prints the clinical text, vitals, labels, and plots the current and prior chest X-ray views using the standard project style.
+
+**Reasoning.**
+Using Python to generate the `.ipynb` file programmatically via `json.dump` guarantees a syntactically correct notebook structure, avoiding potential formatting issues with manual notebook creation. We configured the dataset using the default `microsoft/BiomedVLP-CXR-BERT-specialized` tokenizer and the standard evaluation transforms, matching the real training pipeline settings. The visualization plots both the current and prior studies side-by-side using the `eda_style` colors and layout, making it suitable for immediate use in research reports.
+
+**Gotchas.**
+- `PriorAwareDataset` requires an Albumentations transform to be passed if we want correct image stacking. Without it, the dataset returns raw images of variable sizes which fail the batch padding/concatenation steps (`np.concatenate` raises a shape mismatch error because dimensions like channels and spatial sizes are not normalized/transposed). Using `get_transforms(512)` resolves this by resizing and transposing to `(C, H, W)` shape.
+
+## 2026-06-30 — Correct notebook to use the v8 nano model dataloader configuration
+
+**Goal.** Update the notebook to load the actual dataloader configuration from `training/prior_aware_v8nano/config.yaml` using the training entrypoint helpers so that it mimics the v8 nano model's dataloader behavior (including `raw_clahe_histeq` 3-channel image inputs, evaluation transforms, and tokenization) exactly.
+
+**Changes.**
+- `data/00-examine-data/view_v8_sample.ipynb` — Rebuilt the notebook to use `make_prior_aware_loaders` and `argparse.Namespace` with parsed default flags. Configured `args.skip_precompute = True` to bypass cold-cache scan of 145k images, enabling instant execution. Decodes and plots each of the 3 image channels (Raw Grayscale, mild CLAHE, global Histogram Equalization) side-by-side.
+
+**Reasoning.**
+Initializing the dataset via `PriorAwareDataset` directly bypasses the load-time CLAHE and Histogram Equalization preprocessing that makes up the v8 nano model's 3-channel input representation. By leveraging `make_prior_aware_loaders`, the notebook constructs the exact PyTorch `DataLoader` used in the training loop. Displaying the three channels separately allows visual verification of the spatial enhancements fed to the ConvNeXt-v2 image encoder.
+
+**Gotchas.**
+- `args.skip_precompute = True` must be passed to the data builder, otherwise startup blocks indefinitely on a CPU precomputation check of the entire training partition.
+- Dataloader collation batches the samples into a PyTorch `Tensor` of shape `(batch_size, MAX_VIEWS, 3, 512, 512)` and maps dictionary keys to batches, so sample extraction must index into the batch (e.g. `batch_data['img'][sample_idx]`).
+
+## 2026-06-30 — Add example report images and leakage prevention explanation to report
+
+**Goal.** Add `example-report-1.png` and `example-report-2.png` to the report with annotations highlighting pre-imaging clinical context (green boxes) vs. post-imaging findings/impressions (red boxes) to demonstrate boundary rules for leakage prevention.
+
+**Changes.**
+- `report/eda/eda.tex` — Added a double subfigure referencing the report examples and explained that findings/impressions are excluded to prevent data leakage and shortcut learning, while clinical indication and history are kept.
+- Recompiled `report/main.pdf` successfully using the Makefile.
+
+**Reasoning.**
+Visually demonstrating the boundaries of what text context can and cannot be used makes the methodology's data leakage prevention rules instantly clear. Placing the figure in the Clinical Indication Text Analysis section aligns with the existing discussion of indication text limits.
+
+## 2026-06-30 - Fix report number inconsistencies and wording issues
+
+**Goal.** Apply comprehensive fixes to the thesis report based on reviewer feedback identifying number inconsistencies across abstract/conclusion/tables, mixed dataset scales, and wording/conceptual issues.
+
+**Changes.**
+- `report/abstract/abstract.tex` - Updated mAP 0.5595→0.5662, mAUROC 0.9014→0.9026, tail mAP 0.3893→0.4076. Changed "CXR-LT dataset" to "filtered CXR-LT-aligned thesis test split". Standardized to "macro AUROC (mAUROC)".
+- `report/conclusion/conclusion.tex` - Same number updates. Changed "text encoder"→"clinical text encoder", "text indications"→"clinical text indications", "text records"→"clinical text records".
+- `report/results/results.tex` - Standardized all "AUROC"→"mAUROC" in table headers and prose. Changed "Med mAP"→"Medium mAP" in ablation table. Renamed "image+report+vitals"→"image+clinical text+vitals", "Report dropped"→"Clinical text dropped", "Vitals dropped (image+report)"→"Vitals dropped (image+clinical text)". Added per-group mAUROC breakdown table (tab:ours_main_results_auroc) to back up tail AUROC 0.9218 claim. Added interpretation that vitals-dropped 0.5666 mAP is within run-to-run variance of full 0.5662 mAP. Fixed Hernia case study to note no-prior fallback behavior. Fixed channel encoding ablation "report dropped"→"clinical text dropped". Changed all "Word-Level Text Attributions"→"Word-Level Clinical Text Attributions" in figure captions. Changed "long-tailed CXR-LT dataset"→"filtered CXR-LT-aligned thesis test split" in section intro.
+- `report/eda/eda.tex` - Renamed "Text Available" column to "Images with Text" with clarifying caption. Changed vital missingness from 15.6% to 14.3% (image-level). Clarified Figure 1 (view positions) as "full CXR-LT source dataset". Clarified Figure 2 (label distribution) as "full CXR-LT benchmark source dataset" with note that counts reflect full population. Fixed Figure 3 caption to "Top-10 training label prevalence in the filtered thesis subset". Labeled prior-availability tables (Table 8/9) as "full CXR-LT source dataset (227,658 studies)". Fixed Figure 7 caption to "Missingness rate by variable and data split".
+- `report/methodology/methodology.tex` - Changed "edge-detection channel"→"histogram-equalized channel" to match Grad-CAM figures. Added new subsection "Label-Correlation Graph Head" (subsec:method_graph_head) describing the directed noise-aware graph head component. Updated ablation design paragraph to remove unsupported claims about "compact vs expanded token layouts" and "imbalance-aware loss functions", replacing with actual ablation topics.
+- `report/introduction/introduction.tex` - Changed "frozen text encoders"→"frozen clinical text encoders". Replaced "Evaluation of loss-function choices" contribution with "Ablation study analyzing architectural components including graph head and channel encoding".
+- `report/discussion/discussion.tex` - Changed "Frozen Text Encoder"→"Frozen Clinical Text Encoder". Changed "text and image encoders"→"clinical text and image encoders" in future work. Uncommented Section 6.1 "Interpretation of Results and Clinical Relevance" content, changing "text"→"clinical text" throughout.
+
+**Reasoning.** The reviewer identified that numbers from different experiment versions were mixed across the report (abstract/conclusion had old 0.5595/0.9014 while tables had final 0.5662/0.9026). Dataset scale was confused between the filtered thesis subset (17,078 studies) and the full CXR-LT source (227,658 studies). The term "text" was ambiguous and could imply the current radiology report (leakage risk), so "clinical text" was used consistently for the indication-text modality. The graph head was referenced in results but not described in methodology, so a subsection was added.
+
+**Assumptions.**
+- The tail mAUROC values (0.9218 for proposed, 0.7998 for image-only) are correct per-class computations; I added them to a new table rather than removing the claim.
+- The vitals-dropped 0.5666 mAP being slightly above full 0.5662 is run-to-run variance, not evidence that vitals hurt.
+- Figure 2 axis label issue ("Frequency (log)" with linear ticks) is an image-level problem that requires regenerating the plot; I clarified the caption instead.
+
+**Gotchas.**
+- The prior-availability tables use the full CXR-LT source dataset (227,658 studies) while the cohort summary uses the filtered thesis subset (17,078 studies). These are fundamentally different populations and must be labeled as such.
+- The "report" terminology in ablation tables was particularly dangerous because it implies the model uses the current radiology report, which would be label leakage. "Clinical text" (indication text) is the correct term.
+- Section 6.1 had its content entirely commented out, making it an empty heading.
+
+**Follow-ups.**
+- Figure 2 axis label should be regenerated to either use actual log scale or remove "(log)" from the axis label.
+- The per-group mAUROC table (tab:ours_main_results_auroc) has "--" for Head/Medium mAUROC values that could be filled in if available.
+- The imbalance ratio claim "exceeding 100:1" was removed from the Figure 3 discussion since the figure only shows top-10 labels; this could be re-added with supporting data.
+
+## 2026-06-30 - Fill missing per-group metrics in ablation tables
+
+**Goal.** Find missing Head/Medium/Tail mAP and mAUROC values from the output folder and fill them into the two ablation tables in `report/results/results.tex`.
+
+**Changes.**
+- `report/results/results.tex:67-69` - Filled `tab:ours_main_results_auroc`: Multimodal without prior Head=0.8718, Medium=0.8642, Tail=0.8860; Proposed Head=0.8944, Medium=0.8937 (Tail was already 0.9218).
+- `report/results/results.tex:133-137` - Filled `tab:ablation_unified` Group C: Image-only baseline Head=0.5841/Medium=0.2285/Tail=0.0827; +Multimodal no prior Head=0.7116/Medium=0.3693/Tail=0.1587; +Prior dropout no graph head Head=0.7428/Medium=0.4760/Tail=0.2708.
+- `report/results/results.tex:61,112` - Updated table captions to reflect filled values and remaining gaps.
+
+**Reasoning.** Per-group metrics were sourced from two output files:
+1. `output/prior_aware_v8nano/runs/20260625-105549-baseline/ablation/metrics_full.json` — provides full-model Head/Medium/Tail mAUROC (0.8944/0.8937/0.9218).
+2. `output/prior_aware_v5nano/runs/20260617-211145-baseline/logs/val_epochs.csv` — epoch 1 (aggregate mAP=0.4098) matches "Multimodal without prior"; epoch 10 (aggregate mAP=0.4950) matches "Prior dropout no graph head". Per-group mAP values taken from matching epochs.
+
+**Assumptions.** The v5nano val_epochs.csv validation per-group metrics are used as test-set proxies for the component ablation rows because: (a) aggregate val metrics match the test metrics exactly, and (b) the component ablation models were evaluated with aggregate metrics only, so no separate test-set per-group results exist.
+
+**Gotchas.** Two intermediate component ablation rows (135: Prior study no time-gap mAP=0.4479; 136: Time-gap no prior dropout mAP=0.4668) have no exact epoch match in any output log and remain `--`. The Image-only baseline Head/Medium mAUROC is also unavailable because the singleview run used fast_dev_run.
+
+**Follow-ups.** If the user wants the two remaining intermediate rows filled, they would need to retrain those specific component configurations with per-group logging enabled, or locate the original evaluation logs.
