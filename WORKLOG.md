@@ -3767,3 +3767,35 @@ Visually demonstrating the boundaries of what text context can and cannot be use
 **Gotchas.** Two intermediate component ablation rows (135: Prior study no time-gap mAP=0.4479; 136: Time-gap no prior dropout mAP=0.4668) have no exact epoch match in any output log and remain `--`. The Image-only baseline Head/Medium mAUROC is also unavailable because the singleview run used fast_dev_run.
 
 **Follow-ups.** If the user wants the two remaining intermediate rows filled, they would need to retrain those specific component configurations with per-group logging enabled, or locate the original evaluation logs.
+
+## 2026-07-01 — Related Work section cleanup: 18 surgical edits
+
+**Goal.** Apply 18 precise edits to Section 2 (Related Work) of the thesis report to fix structural, naming, and tone issues.
+
+**Changes.**
+- `report/related_work/related_work.tex:4` — Opening sentence now lists six areas instead of four.
+- `report/related_work/related_work.tex:9` — Removed methodology-sounding ConvNeXt-V2 sentence; replaced with generic backbone motivation.
+- `report/related_work/related_work.tex:11` — Tightened image-only limitation paragraph.
+- `report/related_work/related_work.tex:20` — Shortened multimodal gap paragraph; removed redundant sentence about reports.
+- `report/related_work/related_work.tex:22` — Replaced CaMCheX detail paragraph with forward reference to Section 2.6.
+- `report/related_work/related_work.tex:31` — Deleted vague standalone sentence about Siamese encoders; replaced final paragraph with cleaner prior-risk discussion.
+- `report/related_work/related_work.tex:42` — Rewrote ASL paragraph; removed "suitable" repetition; kept British "behaviour."
+- `report/related_work/related_work.tex:47` — Fixed metric wording to "mean Average Precision (mAP)" and "mean AUROC (mAUROC)."
+- `report/related_work/related_work.tex:60` — Renamed Table 1 row to "Nguyen-Mau et al."
+- `report/related_work/related_work.tex:68` — Softened paragraph between tables; attributed values to CheXFusion.
+- `report/related_work/related_work.tex:82` — Deleted CaMCheX row from Table 2 (CXR-LT challenge results).
+- `report/related_work/related_work.tex:86` — Replaced sales-like final paragraph with concise motivation.
+- `report/related_work/related_work.tex:91` — Added exact mAP/mAUROC values; softened overclaim about "substantially improve."
+- `report/related_work/related_work.tex:99` — Changed "AUROC" to "mAUROC" in Table 3 header.
+- `report/related_work/related_work.tex:110` — Changed "body" to "medium" in text.
+- `report/related_work/related_work.tex:114` — Renamed Table 4 caption to include both CheXFusion and CaMCheX.
+- `report/related_work/related_work.tex:118` — Changed "Body mAP" to "Medium mAP" in Table 4.
+- `report/related_work/related_work.tex:126` — Softened final paragraph; acknowledged different training conditions.
+
+**Reasoning.** These edits address six issues identified in review: wrong subsection count in opening, duplicated CaMCheX discussion, CaMCheX misclassified as a challenge team, inconsistent "Body" vs "Medium" naming, inconsistent metric abbreviations, and overclaiming language. All changes preserve the original citation keys and LaTeX labels.
+
+**Assumptions.** Tables 1-4 in the user's instructions map to the four tabular environments in the file (tab:cxrlt2023_results, tab:cxrlt2023_longtail, tab:camchex_reference_results, tab:camchex_longtail_results). The CaMCheX row deletion from Table 2 is correct because CaMCheX is a later reference method, not a CXR-LT 2023 challenge submission.
+
+**Gotchas.** The file went from 129 to 126 lines due to deleted content. The `\ref{subsec:related_camchex_results}` cross-reference on line 22 points to a later subsection that must exist (it does, at line 88).
+
+**Follow-ups.** Compile the LaTeX report to verify no broken references or overfull hbox warnings in the edited section.

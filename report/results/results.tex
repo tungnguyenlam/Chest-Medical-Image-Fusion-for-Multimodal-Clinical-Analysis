@@ -28,6 +28,75 @@ Table~\ref{tab:experimental_setup} summarizes the experimental configuration and
     \end{tabular}
 \end{table}
 
+\paragraph{Model complexity.}
+Table~\ref{tab:model_complexity} compares per-component parameter counts between the original CaMCheX architecture and the proposed prior-aware model. The two systems use different image backbones and text encoders: CaMCheX uses ConvNeXt-Small (768-channel, 49.45M per view) with BioBERT (\texttt{dmis-lab/biobert-v1.1}, 108.31M), while the proposed model uses ConvNeXt-V2-Nano (640-channel, 14.98M per view) with BiomedVLP-CXR-BERT-specialized (109.63M). A key architectural difference is that CaMCheX encodes vital signs as a text string (e.g., ``Temperature: 36.5 $|$ Heart rate: 80 $|$ \ldots'') and passes them through the shared BioBERT encoder alongside the clinical indication, whereas the proposed model uses a dedicated vitals projector that maps 7 scalar values directly to a learned token. The text encoder is frozen or precomputed in both systems; the trainable count reflects the optimization cost, while the total count reflects the full inference-time model size.
+
+\begin{table}[H]
+    \centering
+    \caption{Per-component parameter counts for the original CaMCheX architecture and the proposed prior-aware model. Text encoders are frozen; MLDecoder query embeddings (19{,}968) are also frozen.}
+    \label{tab:model_complexity}
+    \adjustbox{max width=\textwidth}{%
+    \begin{tabular}{lrrr}
+        \toprule
+        \textbf{Component} & \textbf{CaMCheX} & \textbf{Ours (V8Nano)} & \textbf{$\Delta$} \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Image backbone}} \\
+        \quad ConvNeXt-Small (frontal + lateral, 768ch) & 98.91M & -- & $-$98.91M \\
+        \quad ConvNeXt-V2-Nano (frontal + lateral, 640ch) & -- & 29.96M & $+$29.96M \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Text encoder (frozen, shared)}} \\
+        \quad BioBERT (\texttt{dmis-lab/biobert-v1.1}) & 108.31M & -- & $-$108.31M \\
+        \quad BiomedVLP-CXR-BERT-specialized & -- & 109.63M & $+$109.63M \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Image projection}} \\
+        \quad Conv2d 768$\to$768, k3 s2 & 5.31M & -- & $-$5.31M \\
+        \quad MaxPool2d (stride 2) + Identity proj & -- & 0 & -- \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Text projection}} \\
+        \quad Linear 768$\to$1280 (2 tokens $\times$ 640) & -- & 0.98M & $+$0.98M \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Vitals encoding}} \\
+        \quad Text through shared BioBERT (vitals as text) & 0\textsuperscript{$\dagger$} & -- & -- \\
+        \quad Dedicated 2-layer MLP (7$\to$256$\to$640) & -- & 0.17M & $+$0.17M \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Prior context modules}} \\
+        \quad Time-gap delta embedding (64 buckets) & -- & 6{,}144 & $+$6K \\
+        \quad Prior label projection (26$\to$640) & -- & 20{,}736 & $+$21K \\
+        \quad Per-modality LayerNorm ($\times$6) & -- & 9{,}216 & $+$9K \\
+        \quad No-prior sentinel token & -- & 640 & $+$1K \\
+        \quad Prior pooler (1-layer TransformerDecoder) & -- & 5.91M & $+$5.91M \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Fusion}} \\
+        \quad TransformerEncoder (2 layers, d=768) & 11.03M & -- & $-$11.03M \\
+        \quad Fusion TransformerDecoder (2 layers, d=640) & -- & 11.82M & $+$11.82M \\
+        \midrule
+        \multicolumn{4}{l}{\textit{Classifier head}} \\
+        \quad MLDecoder (query embed frozen) & 6.15M & 6.05M & $-$0.10M \\
+        \midrule
+        \midrule
+        \textbf{Total} & \textbf{229.71M} & \textbf{164.58M} & \textbf{$-$65.13M} \\
+        \textbf{Trainable} & \textbf{229.69M} & \textbf{54.93M} & \textbf{$-$174.76M} \\
+        \bottomrule
+    \end{tabular}%
+    }
+\end{table}
+
+{\small \textsuperscript{$\dagger$} CaMCheX has no dedicated vitals module; vital signs are tokenized as a text string and encoded by the shared BioBERT encoder, incurring zero additional parameters beyond the text encoder itself.}
+
+\textbf{Image backbone.} The largest single reduction comes from replacing ConvNeXt-Small (49.45M per view, 768 channels) with ConvNeXt-V2-Nano (14.98M per view, 640 channels), saving 68.95M parameters across the dual-frontal/lateral encoders. This is the primary contributor to the overall parameter reduction and reflects the resource-constrained design choice.
+
+\textbf{Text encoder.} The original CaMCheX uses BioBERT (108.31M), while the proposed model uses BiomedVLP-CXR-BERT-specialized (109.63M). Both are transformer-based clinical language models frozen during training; the 1.32M difference is negligible and does not affect the trainable parameter count. Critically, CaMCheX uses this single shared encoder for both the clinical indication text and the vital signs (encoded as a text string), whereas the proposed model routes vitals through a separate dedicated projector.
+
+\textbf{Vitals encoding.} In CaMCheX, the 7 vital signs (temperature, heart rate, respiratory rate, O2 saturation, systolic/diastolic BP, gender) are formatted as a natural-language string and passed through BioBERT alongside the clinical indication, incurring no additional parameters. The proposed model instead uses a compact 2-layer MLP (0.17M) that maps the 7 scalar values directly to a single 640-dimensional token, avoiding the overhead of tokenizing and encoding vitals through a 108M-parameter transformer.
+
+\textbf{Image projection.} CaMCheX projects 768-channel backbone features through a strided Conv2d (5.31M) to match the transformer width. The proposed model operates natively at 640 dimensions ($d_\text{model} = 640$), replacing the convolution with a parameter-free 2$\times$2 max-pool.
+
+\textbf{Prior context modules.} These are unique to the proposed model: a 64-bucket time-gap embedding (6K), a prior label projection from 26 classes to 640 dimensions (21K), six per-modality LayerNorms (9K), a no-prior sentinel token (640), and a 1-layer prior pooler TransformerDecoder (5.91M) with 16 learned query latents that compress the prior memory via cross-attention.
+
+\textbf{Fusion mechanism.} CaMCheX uses a 2-layer TransformerEncoder (11.03M) that self-attends over all concatenated tokens. The proposed model replaces this with a 2-layer Fusion TransformerDecoder (11.82M) where current tokens query prior-pooled latents via asymmetric cross-attention.
+
+The overall effect is a reduction from 229.71M to 164.58M total parameters ($-$65.13M, $-$28\%) and from 229.69M to 54.93M trainable parameters ($-$174.76M, $-$76\%), driven primarily by the lighter image backbone. Despite the addition of prior-pooling, cross-attention fusion, and a dedicated vitals projector, the proposed model remains substantially smaller than the original CaMCheX architecture.
+
 
 \subsection{Main Performance of the Proposed Model}
 \label{subsec:results_quantitative}

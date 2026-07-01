@@ -1,14 +1,14 @@
 \section{Related Work}
 \label{sec:related_work}
 
-We review four areas that directly support this work: image-only chest X-ray classification, multimodal clinical fusion, temporal/prior-aware modelling, and class-imbalance methods.
+This section reviews the work needed to position this thesis: image-only chest X-ray classification, multimodal clinical fusion, temporal/prior-aware modelling, class-imbalance methods, CXR-LT challenge solutions, and the CaMCheX framework.
 
 \subsection{Single-Modal Chest X-Ray Classification}
 \label{subsec:related_single_modal}
 
-Public datasets such as the NIH ChestX-ray8/ChestX-ray14 dataset, CheXpert, and MIMIC-CXR have enabled large-scale chest X-ray classification research by providing radiographs with labels extracted from radiology reports \cite{wang2017chestxray8,irvin2019chexpert,johnson2019mimiccxr}. Convolutional neural networks such as ResNet and DenseNet have been commonly used because they learn hierarchical visual features from medical images while remaining practical to train \cite{he2016resnet,huang2017densenet}. DenseNet-based models are particularly prevalent because dense connections encourage feature reuse and improve gradient flow. More recently, modern visual backbones such as Vision Transformers, Swin Transformers, ConvNeXt, and ConvNeXt-V2 have been explored for medical image analysis. ConvNeXt-V2 combines convolutional design with modern architectural improvements and provides a strong visual feature extractor while remaining more efficient than very large transformer-based models \cite{woo2023convnextv2}. We use a lightweight ConvNeXt-V2 image encoder to balance visual representation quality with feasible training cost.
+Public datasets such as the NIH ChestX-ray8/ChestX-ray14 dataset, CheXpert, and MIMIC-CXR have enabled large-scale chest X-ray classification research by providing radiographs with labels extracted from radiology reports \cite{wang2017chestxray8,irvin2019chexpert,johnson2019mimiccxr}. Convolutional neural networks such as ResNet and DenseNet have been commonly used because they learn hierarchical visual features from medical images while remaining practical to train \cite{he2016resnet,huang2017densenet}. DenseNet-based models are particularly prevalent because dense connections encourage feature reuse and improve gradient flow. More recently, modern visual backbones such as Vision Transformers, Swin Transformers, ConvNeXt, and ConvNeXt-V2 have been explored for medical image analysis. ConvNeXt-V2 combines convolutional design with modern architectural improvements and provides a strong visual feature extractor while remaining more efficient than very large transformer-based models \cite{woo2023convnextv2}. This motivates the use of a lightweight modern convolutional backbone as the visual encoder in this thesis.
 
-Although single-modal chest X-ray classifiers have achieved strong results, they treat the radiograph as an isolated image. This does not fully reflect clinical practice, where image interpretation is influenced by clinical indication, symptoms, physiological state, and prior history. Therefore, image-only classification is useful as a baseline but may not capture the full diagnostic context available during real chest X-ray interpretation.
+However, image-only classifiers treat the radiograph as an isolated input. This differs from clinical practice, where radiologists interpret images together with indications, symptoms, vital signs, and prior studies. Image-only models are therefore important baselines, but they cannot use the full clinical context available during real chest X-ray interpretation.
 
 \subsection{Multimodal Clinical Fusion}
 \label{subsec:related_multimodal}
@@ -17,9 +17,9 @@ Multimodal learning aims to combine information from different sources in order 
 
 Prior work often uses contrastive learning to align medical images and text. ConVIRT learns medical visual representations by contrasting paired radiographs and reports, showing that naturally occurring image-report pairs can improve representation learning without requiring additional manual annotations \cite{zhang2022convirt}. GLoRIA extends this idea by learning both global and local image-text representations, aligning image regions with words or phrases from radiology reports \cite{huang2021gloria}. BioViL further improves biomedical vision-language pretraining by using stronger domain-specific text modelling through Chest X-Ray Bidirectional Encoder Representations from Transformers (CXR-BERT) and radiology-specific semantic learning \cite{boecking2022biovil}. MedCLIP relaxes the requirement for strictly paired image-text data by using unpaired medical images and text with a semantic matching objective \cite{wang2022medclip}.
 
-These methods show the value of image-text learning, but many focus on pretraining, retrieval, phrase grounding, or report-based image-text alignment. They do not always directly model the full clinical context available at the time of diagnosis, such as clinical indication text, vital signs, or multi-view study structure. In addition, radiology reports are usually written after image interpretation, so using reports as direct input for current-study prediction can create an unrealistic setting if the goal is to support interpretation before the final report is produced.
+These methods show the value of image-text learning, but many focus on pretraining, retrieval, phrase grounding, or report-based alignment. They do not always model the clinical context available before interpretation, such as indication text, vital signs, and prior studies. In addition, radiology reports are usually written after image interpretation, so using reports as direct input for current-study prediction can create an unrealistic setting if the goal is to support interpretation before the final report is produced.
 
-CaMCheX is our closest reference because it combines chest radiographs with clinically available context for classification \cite{sloan2025camchex}. Instead of relying only on image-report contrastive learning, CaMCheX combines multi-view chest radiographs with structured clinical information, including clinical indications, patient history, and vital signs. This is closer to the information available in real clinical workflows. We follow this motivation but adapt the model for limited compute by using a lightweight image encoder, frozen or precomputed text embeddings, and compact transformer fusion.
+CaMCheX is the closest prior work to this thesis because it moves beyond image-report pretraining and directly uses clinical context for chest X-ray classification \cite{sloan2025camchex}. Section~\ref{subsec:related_camchex_results} discusses CaMCheX separately because it is both a methodological reference and a benchmark reference for this work.
 
 \subsection{Temporal and Prior-Aware Medical Modelling}
 \label{subsec:related_temporal}
@@ -28,9 +28,7 @@ Temporal information is important in radiology because interpretation often depe
 
 Recent biomedical vision-language work has started to incorporate temporal structure. BioViL-T explicitly models prior images and reports when they are available, showing that temporal context can improve downstream tasks such as progression classification, phrase grounding, and report generation \cite{bannur2023biovilt}. The associated MS-CXR-T benchmark further highlights the importance of evaluating whether models understand temporal disease progression, including whether findings are improving, stable, or worsening \cite{bannur2023biovilt}.
 
-Prior-aware models usually compare current and historical studies through feature differences, Siamese encoders, or attention.
-
-However, prior-aware modelling also introduces challenges. First, not every patient has a prior study, so the model must remain robust when historical information is missing. Second, the time gap between current and prior examinations can vary widely, so the model should distinguish between recent and old priors. Third, there is a risk of information leakage if prior labels or reports are used carelessly, although design choices can reduce but not eliminate shortcut risk. We therefore treat prior information as auxiliary context and use time-gap embeddings plus stochastic prior dropout to reduce over-dependence on historical studies.
+Prior-aware modelling also introduces practical risks. Some patients have no prior study, and the time gap between studies can vary from days to years. Historical reports or labels can also create shortcut learning if they are used carelessly. For this reason, this thesis treats prior information as auxiliary context rather than as the main evidence, and uses time-gap embeddings and prior dropout to reduce over-dependence on historical information.
 
 \subsection{Mitigating Class Imbalance in Medical Datasets}
 \label{subsec:related_class_imbalance}
@@ -41,12 +39,12 @@ A common baseline loss for multi-label classification is binary cross-entropy (B
 
 Focal Loss addresses class imbalance by reducing the contribution of easy examples and focusing training on harder examples \cite{lin2017focalloss}. However, standard focal loss was originally designed for dense object detection and does not fully address the asymmetric nature of multi-label classification, where the number of negative labels is usually much larger than the number of positive labels.
 
-ASL directly targets multi-label imbalance, making it suitable for our long-tailed chest X-ray task \cite{ridnik2021asymmetric}. ASL applies different focusing behaviour to positive and negative samples, allowing easy negatives to be down-weighted more aggressively while preserving learning from positive labels. This makes it suitable for long-tailed multi-label chest X-ray classification, where the model must learn from rare positive cases without being overwhelmed by the large number of negative labels.
+Asymmetric Loss (ASL) was designed for multi-label classification and is more suitable for this setting \cite{ridnik2021asymmetric}. It applies different focusing behaviour to positive and negative samples, so easy negative labels are down-weighted more strongly while positive labels remain informative. This is useful for long-tailed chest X-ray classification, where rare positive findings can otherwise be overwhelmed by the large number of negative labels.
 
 \subsection{CXR-LT 2023 Challenge Solutions}
 \label{subsec:related_cxrlt_solutions}
 
-Since our task follows long-tailed multi-label chest X-ray classification, the CXR-LT 2023 challenge provides useful reference methods and performance levels \cite{holste2024cxrlt}. Built on the MIMIC-CXR database, the challenge evaluated models on 26 findings—including 12 rare classes extracted from clinical reports—using patient-level splits to avoid leakage, with macro Mean Average Precision (mAP) as the primary metric, and Mean Area Under the Receiver Operating Characteristic (mAUROC) as an auxiliary metric \cite{holste2024cxrlt,holste2023cxrlt_physionet}. We focus on four representative submissions: the top-performing CheXFusion model (which employs a Multi-Label Decoder (ML-Decoder) head) \cite{kim2023chexfusion}, the second-ranked ensemble system \cite{nguyenmau2023advanced}, the robust asymmetric loss approach by Park et al. \cite{park2023robust}, and the text-aligned bag-of-tricks framework by Hong et al. \cite{hong2023bagoftricks}.
+Since our task follows long-tailed multi-label chest X-ray classification, the CXR-LT 2023 challenge provides useful reference methods and performance levels \cite{holste2024cxrlt}. Built on the MIMIC-CXR database, the challenge evaluated models on 26 findings—including 12 rare classes extracted from clinical reports—using patient-level splits to avoid leakage, with mean Average Precision (mAP) as the primary metric and mean AUROC (mAUROC) as an auxiliary metric \cite{holste2024cxrlt,holste2023cxrlt_physionet}. We focus on four representative submissions: the top-performing CheXFusion model (which employs a Multi-Label Decoder (ML-Decoder) head) \cite{kim2023chexfusion}, the second-ranked ensemble system \cite{nguyenmau2023advanced}, the robust asymmetric loss approach by Park et al. \cite{park2023robust}, and the text-aligned bag-of-tricks framework by Hong et al. \cite{hong2023bagoftricks}.
 
 
 \begin{table}[H]
@@ -59,7 +57,7 @@ Since our task follows long-tailed multi-label chest X-ray classification, the C
         Rank & Team / Strategy & mAP & mAUROC \\
         \hline
         1 & CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer, ML-Decoder, weighted ASL) & 0.372 & 0.850 \\
-        2 & Advanced augmentation and ensemble \cite{nguyenmau2023advanced} (EfficientNetV2/ConvNeXt, test-time augmentation (TTA)) & 0.354 & 0.836 \\
+        2 & Nguyen-Mau et al. \cite{nguyenmau2023advanced} (EfficientNetV2/ConvNeXt, test-time augmentation (TTA)) & 0.354 & 0.836 \\
         4 & Robust Asymmetric Loss \cite{park2023robust} (ConvNeXt-B, Robust Asymmetric Loss) & 0.351 & 0.838 \\
         5 & Bag of Tricks \cite{hong2023bagoftricks} (ResNet50, text encoder, external data, TTA/ensemble) & 0.349 & 0.836 \\
         \hline
@@ -67,7 +65,7 @@ Since our task follows long-tailed multi-label chest X-ray classification, the C
     \end{adjustbox}
 \end{table}
 
-The challenge results also showed a clear gap between common and rare findings. Table~\ref{tab:cxrlt2023_longtail} reports mAP grouped by label frequency for the representative teams. The top-performing model achieved 0.499 mAP on head classes but only 0.242 mAP on tail classes. This large performance gap across all methods confirms that rare-label recognition remains extremely challenging even for the strongest systems.
+The challenge results also show a clear gap between common and rare findings. Table~\ref{tab:cxrlt2023_longtail} reports mAP by label-frequency group for the selected challenge teams. CheXFusion achieved 0.499 mAP on head classes but only 0.242 mAP on tail classes. Similar gaps appear across the other submissions, showing that rare-label recognition remains difficult even for strong challenge systems.
 
 \begin{table}[H]
     \centering
@@ -81,17 +79,16 @@ The challenge results also showed a clear gap between common and rare findings. 
         Nguyen-Mau et al. \cite{nguyenmau2023advanced} (Rank 2) & 0.354 & 0.482 & 0.226 & 0.227 \\
         Park et al. \cite{park2023robust} (Rank 4) & 0.351 & 0.480 & 0.221 & 0.220 \\
         Hong et al. \cite{hong2023bagoftricks} (Rank 5) & 0.349 & 0.474 & 0.218 & 0.243 \\
-        CaMCheX \cite{sloan2025camchex} (Reference) & 0.576 & 0.786 & 0.550 & 0.408 \\
         \hline
     \end{tabular}
 \end{table}
 
-The challenge systems show that strong image-only or image-dominant systems can achieve competitive aggregate performance, especially with high-resolution inputs, ensembling, and test-time augmentation \cite{holste2024cxrlt}. However, their lower tail-class mAP indicates that rare-label recognition remains difficult. This motivates evaluating whether clinical context and prior-study information can improve long-tail performance. Rather than relying on leaderboard-style ensembling or high-resolution images, we study a multimodal approach, investigating whether clinical indications, vital signs, and prior-study context can improve prediction accuracy under limited compute.
+These results motivate studying whether clinical context and prior-study information can help long-tail classification. Instead of focusing on leaderboard-style ensembling, this thesis evaluates a resource-constrained multimodal model that uses indication text, vital signs, and prior-study context.
 
 \subsection{CaMCheX Results and Relevance to This Thesis}
 \label{subsec:related_camchex_results}
 
-CaMCheX is the primary reference for this work because it combines multi-view chest radiographs with clinical indications and vital signs using a multimodal transformer-based framework \cite{sloan2025camchex}. As summarized in Table~\ref{tab:camchex_reference_results}, CaMCheX reported 0.576 mAP and high Area Under the Receiver Operating Characteristic (AUROC) values on CXR-LT 2023 and 0.725 mAP on CXR-LT 2024, showing that multimodal context can substantially improve classification accuracy. We include these benchmark results as context only, because our dataset scale, resolution, and training resources differ from the published CaMCheX setting.
+CaMCheX is the primary reference for this work because it combines multi-view chest radiographs with clinical indications and vital signs using a multimodal transformer-based framework \cite{sloan2025camchex}. As summarized in Table~\ref{tab:camchex_reference_results}, CaMCheX reported 0.576 mAP and 0.916 mAUROC on CXR-LT 2023, and 0.725 mAP and 0.904 mAUROC on CXR-LT 2024 Task 2. These results suggest that clinical context can improve chest X-ray classification, although they should be interpreted as external benchmark results rather than controlled comparisons with this thesis. We include these benchmark results as context only, because our dataset scale, resolution, and training resources differ from the published CaMCheX setting.
 
 \begin{table}[H]
     \centering
@@ -99,7 +96,7 @@ CaMCheX is the primary reference for this work because it combines multi-view ch
     \label{tab:camchex_reference_results}
     \begin{tabular}{lccc}
         \hline
-        Benchmark & Model & mAP & AUROC \\
+        Benchmark & Model & mAP & mAUROC \\
         \hline
         CXR-LT 2023 & CheXFusion & 0.372 & 0.850 \\
         CXR-LT 2023 & CaMCheX & 0.576 & 0.916 \\
@@ -110,15 +107,15 @@ CaMCheX is the primary reference for this work because it combines multi-view ch
     \end{tabular}
 \end{table}
 
-As shown in Table~\ref{tab:camchex_longtail_results}, the performance of CaMCheX varies across frequency groups, achieving high mAP on head classes but lower mAP on body and tail classes. This pattern confirms that long-tailed classification remains difficult even for strong multimodal models.
+As shown in Table~\ref{tab:camchex_longtail_results}, the performance of CaMCheX varies across frequency groups, achieving high mAP on head classes but lower mAP on medium and tail classes. This pattern confirms that long-tailed classification remains difficult even for strong multimodal models.
 
 \begin{table}[H]
     \centering
-    \caption{CXR-LT 2023 frequency-group mAP reported by CaMCheX.}
+    \caption{CXR-LT 2023 frequency-group mAP for CheXFusion and CaMCheX.}
     \label{tab:camchex_longtail_results}
     \begin{tabular}{lcccc}
         \hline
-        Model & Overall mAP & Head mAP & Body mAP & Tail mAP \\
+        Model & Overall mAP & Head mAP & Medium mAP & Tail mAP \\
         \hline
         CheXFusion & 0.372 & 0.499 & 0.246 & 0.242 \\
         CaMCheX & 0.576 & 0.786 & 0.550 & 0.408 \\
@@ -126,4 +123,4 @@ As shown in Table~\ref{tab:camchex_longtail_results}, the performance of CaMCheX
     \end{tabular}
 \end{table}
 
-While these results motivate the design choices adopted in this work---including multi-view encoders, transformer-based fusion, and asymmetric loss---this work does not attempt an exact reproduction. The original CaMCheX framework relies on large-scale training with high-resolution inputs and external pretraining. We instead implement a resource-constrained adaptation and add prior-study temporal context.
+These results motivate several design choices in this thesis, including multimodal fusion and asymmetric loss. However, this thesis does not attempt an exact reproduction of CaMCheX. The published CaMCheX setting uses different training scale, preprocessing, resolution, and pretraining conditions. This thesis instead implements a resource-constrained adaptation and adds prior-study temporal context.
