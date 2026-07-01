@@ -4,10 +4,13 @@ import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from IPython.display import display
+
+from eda_style import TIER_COLORS, tier_of
 
 
 FRONTAL_VIEWS = {"AP", "PA"}
@@ -283,6 +286,51 @@ def plot_global_label_prevalence(df: pd.DataFrame, label_columns_: list[str], to
     plt.title(f"Global top {top_n} labels")
     plt.xlabel("Positive rate (%)")
     plt.ylabel("")
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_global_label_prevalence_log_tiers(
+    df: pd.DataFrame,
+    label_columns_: list[str],
+    top_n: int | None = None,
+    *,
+    bar_width: float = 0.67,
+    dpi: int = 200,
+) -> None:
+    plot_df = summarize_labels(df, "global", label_columns_).copy()
+    if top_n is not None:
+        plot_df = plot_df.head(top_n)
+    plot_df["tier"] = plot_df["label"].map(tier_of)
+    label_order = plot_df["label"].tolist()
+    bar_colors = [TIER_COLORS[tier_of(label)] for label in label_order]
+    n_labels = len(plot_df)
+
+    plt.figure(figsize=(10, max(6, n_labels * 0.25)), dpi=dpi)
+    ax = sns.barplot(
+        data=plot_df,
+        x="positive_rate_pct",
+        y="label",
+        order=label_order,
+        color="C0",
+        width=bar_width,
+    )
+    for patch, color in zip(ax.patches, bar_colors):
+        patch.set_facecolor(color)
+    ax.set_xscale("log")
+    annotate_bar_containers(
+        ax,
+        [labels_for_categories(plot_df, "label", "positive_count", "positive_rate_pct", label_order)],
+        orientation="horizontal",
+    )
+    xmin = plot_df["positive_rate_pct"].min()
+    xmax = plot_df["positive_rate_pct"].max()
+    ax.set_xlim(left=xmin * 0.7, right=xmax * 2.0)
+    plt.title("Global label count (log scale, head/medium/tail)")
+    plt.xlabel("Positive rate (%), log scale")
+    plt.ylabel("")
+    tier_handles = [Patch(facecolor=TIER_COLORS[tier], label=tier) for tier in ("Head", "Medium", "Tail")]
+    ax.legend(handles=tier_handles, title="Tier", loc="lower right", frameon=True)
     plt.tight_layout()
     plt.show()
 

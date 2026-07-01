@@ -1,42 +1,43 @@
 \section{Introduction}
 \label{sec:introduction}
 
-Chest radiography is a fundamental imaging modality in clinical practice, particularly in Emergency Departments (ED) and inpatient wards where diagnostic decisions must be made rapidly. It is widely used to detect thoracic conditions such as pneumonia, pneumothorax, pulmonary oedema, pleural effusion, and cardiomegaly \cite{irmici2023cxr_emergency_ai}. However, automated chest X-ray interpretation remains clinically challenging due to overlapping anatomical structures, subtle visual signs, and variations in image quality \cite{irmici2023cxr_emergency_ai}.
+Chest radiography is one of the most widely used imaging studies in clinical practice. Approximately two billion chest radiographic studies are performed globally each year, reflecting its role as a fast, low-cost, and widely available first-line examination for cardiopulmonary disease \cite{abbott2025challenging_cxr}. In the broader workload of medical imaging with ionizing radiation, UNSCEAR estimates around 4.2 billion medical radiological examinations and procedures per year, including about 2.6 billion conventional radiography examinations, 1.1 billion dental radiography examinations, and 400 million CT examinations \cite{unscear2021medical_exposure}. A typical adult chest X-ray has an effective dose of about 0.1 mSv, which is much lower than chest CT at about 6.1 mSv, low-dose lung cancer screening CT at about 1.5 mSv, and whole-body PET/CT at about 22.7 mSv \cite{radiologyinfo2025radiation_dose}. Together, these facts show why chest X-ray interpretation matters: the examination is common, low-dose, widely available, and heavily used in time-sensitive clinical care.
 
-In clinical settings, chest radiographs are not interpreted in isolation. Clinicians interpret images alongside clinical context, including indications, active symptoms, vital signs, and historical studies. While deep learning has significantly improved automated chest X-ray classification, many widely used chest X-ray classification baselines are image-centric, using radiographs as the primary input \cite{irvin2019chexpert,johnson2019mimiccxr}. This image-only focus creates a gap between automated systems and clinical workflow, where patient history is essential for accurate diagnosis.
 
-Furthermore, chest X-ray classification is naturally a multi-label, long-tailed problem. Multiple findings often co-occur, and many critical conditions occur far less frequently than common ones, as highlighted by the CXR-LT benchmarks \cite{holste2024cxrlt,holste2025cxrlt2024}. We build on CaMCheX \cite{sloan2025camchex} and test multimodal chest X-ray classification under our available compute budget. Our model fuses radiographs, indication text, vital signs, and prior-study context to better match how clinicians interpret chest X-rays.
+Automated chest X-ray interpretation remains challenging because thoracic findings can be subtle, overlapping anatomy can obscure abnormalities, and image quality varies across acquisition settings \cite{irmici2023cxr_emergency_ai}. The task is also naturally multi-label and long-tailed. The CXR-LT benchmark contains more than 350,000 CXRs labelled with 26 clinical findings following a long-tailed distribution \cite{holste2024cxrlt}. In the label distribution used in this thesis, Support Devices appears 126,776 times, while Pneumoperitoneum appears only 813 times, a more than 150-fold frequency gap. This imbalance motivates imbalance-aware training and separate head, medium, and tail evaluation, as later shown in Figure~\ref{fig:logscale_label_distribution}.
+
+In clinical settings, chest radiographs are interpreted together with available clinical context, including the indication or history, clinical signs and symptoms, vital signs, and prior examinations \cite{acr2025communication,jacenkow2022indication,sloan2025camchex}. However, many widely used CXR classification baselines are image-centric and use radiographs as the primary input \cite{irvin2019chexpert,johnson2019mimiccxr}. This creates a gap between automated CXR classification and the clinical workflow. This thesis builds on CaMCheX \cite{sloan2025camchex} and evaluates multimodal chest X-ray classification under a limited compute budget.
 
 \subsection{Background and Motivation}
 \label{subsec:intro_background}
 
-Chest X-ray interpretation is a complex diagnostic task where visual findings must be contextualized using a patient's overall clinical state. The significance of a radiographic finding often depends on non-image details: a pulmonary opacity may represent acute pneumonia in a febrile patient with cough, but indicate chronic atelectasis in an asymptomatic patient.
+Chest X-ray interpretation depends on both visual evidence and patient context. The same radiographic pattern can have different clinical meanings depending on symptoms, vital signs, and prior examinations. For example, a pulmonary opacity may support acute pneumonia in a febrile patient with cough, but may represent chronic atelectasis in a stable patient.
 
-While deep learning has achieved strong diagnostic performance on large datasets like MIMIC-CXR and CheXpert \cite{johnson2019mimiccxr,irvin2019chexpert}, conventional models remain image-centric, limiting their effectiveness in settings where clinical context influences diagnostic urgency. We build a CaMCheX-inspired multimodal model that combines radiographs, clinical text, vital signs, and prior-study context within our compute limits.
+This motivates a multimodal approach that combines the current radiograph with clinically available context. Following the CaMCheX direction \cite{sloan2025camchex}, this thesis studies whether indication text, vital signs, and prior-study information can improve long-tailed CXR classification compared with image-only baselines.
 
 \subsection{Task and Dataset Context}
 \label{subsec:intro_task_dataset}
 
-The objective is long-tailed, multi-label chest X-ray classification: predicting the presence or absence of multiple thoracic findings from a chest X-ray study. Medical diagnosis is naturally multi-label, as patients frequently present with concurrent conditions (e.g., cardiomegaly, pleural effusion, and pulmonary oedema).
+The objective is long-tailed, multi-label chest X-ray classification. For each chest X-ray study, the model predicts the presence or absence of multiple thoracic findings. This setting matches clinical diagnosis, where patients may have several concurrent findings, such as cardiomegaly, pleural effusion, and pulmonary oedema.
 
-The experimental setup is aligned with the CXR-LT benchmark, which reflects clinical distributions where common conditions appear frequently while rare, critical findings occur infrequently \cite{holste2024cxrlt,holste2025cxrlt2024}. This severe imbalance biases standard models toward frequent labels, necessitating strategies that handle long-tailed class distributions.
+The experimental setup follows the CXR-LT benchmark, which was designed for long-tailed multi-label chest X-ray classification \cite{holste2024cxrlt,holste2025cxrlt2024}. Common findings appear frequently, while rare findings have very few positive examples. This imbalance can bias standard models toward frequent labels, so the evaluation reports both overall performance and frequency-group performance.
 
-Data is sourced from MIMIC-CXR and MIMIC-IV \cite{johnson2019mimiccxr,johnson2024mimiciv,johnson2023mimicived}. We integrate these datasets to obtain study images, clinical indications, structured vital signs, and linked prior studies.
+The data are sourced from MIMIC-CXR, MIMIC-CXR-JPG, MIMIC-IV, and MIMIC-IV-ED \cite{johnson2019mimiccxr,johnson2019mimiccxrjpg,johnson2024mimiciv,johnson2023mimicived}. These sources provide study images, clinical indication text, structured vital signs, and linked prior studies.
 
 \subsection{Clinical and Technical Challenges}
 \label{subsec:intro_challenges}
 
-Developing this multimodal chest X-ray model requires addressing four main challenges:
+Building this multimodal chest X-ray model requires addressing five main challenges.
 
-First, image-only models have limited access to clinical context. Although radiographs contain essential visual evidence, clinical interpretation depends on indications, symptoms, and vital signs to guide diagnostic decisions.
+First, the model must avoid label leakage. Radiology findings and impressions are written after image interpretation, so using them as model inputs would create an unrealistic shortcut. This thesis therefore uses only pre-interpretation text, such as indication and history, as clinical text input.
 
-Second, the input modalities are heterogeneous. Reconciling high-dimensional images, free-text indications, and structured numerical vitals requires encoding different formats, feature scales, and missingness patterns into a shared representation.
+Second, the input modalities are heterogeneous and incomplete. Radiographs are high-dimensional images, indications are short free-text descriptions, vital signs are structured numerical variables, and prior studies are not available for every patient. These inputs must be encoded into a shared representation while preserving missingness information.
 
-Third, the classification problem is long-tailed and multi-label. Severe class imbalance and label co-occurrence bias models toward common findings, requiring specialized objectives to maintain sensitivity on rare, critical conditions.
+Third, the target label space is long-tailed and multi-label. Common findings dominate the training data, while rare findings have few positive examples. Multiple findings may also co-occur in the same study, so the model must handle both class imbalance and label correlation.
 
-Fourth, prior-study information introduces shortcut and leakage risks. While comparing previous examinations is clinically valuable, historical reports can lead to shortcut learning if the model relies on prior text instead of analyzing the current radiograph.
+Fourth, prior-study information is useful but risky. Previous examinations help clinicians judge whether a finding is new, stable, improved, or resolved. However, a model may over-rely on historical information and ignore the current radiograph. The prior-aware component must therefore use prior context as auxiliary evidence rather than as the main prediction shortcut.
 
-Finally, multimodal fusion is computationally expensive. High-resolution images generate large token sequences, causing quadratic attention costs in transformer-based architectures \cite{vaswani2017attention} that must be optimized for limited GPU memory.
+Finally, multimodal fusion is computationally expensive. High-resolution image features can produce many tokens, and transformer attention scales quadratically with sequence length \cite{vaswani2017attention}. The implementation therefore uses compact token layouts and other resource-aware choices to fit within the available GPU budget.
 
 \subsection{Approach Overview}
 \label{subsec:intro_approach}
@@ -45,16 +46,18 @@ We adapt CaMCheX for multimodal chest X-ray classification under our compute bud
 
 We encode each modality with a dedicated encoder: a lightweight visual backbone for radiographs, a pre-trained clinical language model for indication text, projection layers for vital signs, and temporal embeddings for prior-study information. We combine these features with a transformer-based fusion module. The model uses compact token layouts and feature routing to balance spatial detail with training efficiency. We use prior-study context as auxiliary temporal evidence, so the model can compare studies without relying entirely on historical information.
 
+Because multimodal models can improve aggregate metrics while relying on implausible shortcuts, this thesis also includes qualitative attribution analysis. Grad-CAM visualizations, text attribution, and modality-level summaries are used as sanity checks for selected predictions. These analyses are not treated as validated clinical explanations, but as qualitative evidence of model behaviour \cite{selvaraju2017gradcam}.
+
 \subsection{Thesis Contributions}
 \label{subsec:intro_contributions}
 
 The primary contributions are:
 \begin{itemize}
     \item A CaMCheX-inspired multimodal chest X-ray classification framework combining radiographs, clinical indication text, structured vital signs, and prior-study context.
-    \item Evaluation of practical design choices under limited computational resources, including reduced image resolutions, frozen text encoders, and compact token layouts.
-    \item A prior-aware temporal modelling component incorporating historical study information and time-gap embeddings, designed to reduce shortcut and leakage risks.
-    \item An ablation study analyzing the contribution of each architectural component, including the label-correlation graph head and channel encoding strategies.
-    \item Qualitative interpretability analysis using Grad-CAM visualizations \cite{selvaraju2017gradcam} to inspect visual attention maps against clinical findings.
+    \item A resource-constrained implementation that evaluates practical design choices, including reduced image resolution, frozen text encoders, and compact token layouts.
+    \item A prior-aware temporal component that incorporates historical study information and time-gap embeddings while reducing over-reliance on prior information.
+    \item An ablation study measuring the contribution of input modalities and architectural components, including prior context, label-correlation modelling, and channel encoding.
+    \item Qualitative attribution analysis using Grad-CAM, text attribution, and modality-level summaries to inspect selected predictions and check for plausible model behaviour.
 \end{itemize}
 
 Overall, we present a resource-constrained implementation and analysis of clinically motivated multimodal chest X-ray classification, not a completely new clinical AI framework.
