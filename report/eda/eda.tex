@@ -172,25 +172,8 @@ Prior-study context supports comparative diagnosis by enabling temporal comparis
 
 \begin{table}[H]
     \centering
-    \caption{Availability of prior studies at study level in the full CXR-LT source dataset.}
+    \caption{Availability of prior studies at study level in the full CXR-LT source dataset, broken down by data split.}
     \label{tab:prior_availability}
-    \begin{tabular}{lrr}
-        \hline
-        Prior-study status & Count & Percentage \\
-        \hline
-        With prior study & 162,329 & 71.30\% \\
-        Without prior study & 65,329 & 28.70\% \\
-        Total & 227,658 & 100.00\% \\
-        \hline
-    \end{tabular}
-\end{table}
-
-Table~\ref{tab:prior_availability} shows the availability of prior chest X-ray examinations at the study level in the full CXR-LT source dataset (227,658 studies), indicating that 71.30\% of studies have a linked historical prior. This prevalence supports using prior-aware components, but the model must still handle the 28.70\% of studies without priors.
-
-\begin{table}[H]
-    \centering
-    \caption{Prior-study availability per data split in the full CXR-LT source dataset.}
-    \label{tab:prior_per_split}
     \begin{tabular}{lrrrr}
         \hline
         Split & With prior & Without prior & Total & \% With prior \\
@@ -199,10 +182,12 @@ Table~\ref{tab:prior_availability} shows the availability of prior chest X-ray e
         Test & 32,398 & 13,064 & 45,462 & 71.26\% \\
         Train & 114,195 & 45,733 & 159,928 & 71.40\% \\
         \hline
+        Total & 162,329 & 65,329 & 227,658 & 71.30\% \\
+        \hline
     \end{tabular}
 \end{table}
 
-Table~\ref{tab:prior_per_split} breaks down the prior-study availability by data split. The proportion of studies with a linked prior is consistent across splits (approximately 71\%), confirming that the train/validation/test partition does not introduce systematic bias in prior availability.
+Table~\ref{tab:prior_availability} shows the availability of prior chest X-ray examinations at the study level in the full CXR-LT source dataset (227,658 studies), broken down by data split. Overall, 71.30\% of studies have a linked historical prior. The proportion is consistent across splits (approximately 71\%), confirming that the train/validation/test partition does not introduce systematic bias in prior availability. This prevalence supports using prior-aware components, but the model must still handle the 28.70\% of studies without priors.
 
 
 
