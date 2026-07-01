@@ -7,9 +7,18 @@ We first analyze the dataset structure before training the model.
 \subsection{Dataset Cohort and Subsets}
 \label{subsec:eda_cohort}
 
-We construct the dataset from chest X-ray studies and linked clinical information. The image component is derived from MIMIC-CXR \cite{johnson2019mimiccxr}, while the clinical context is obtained from associated emergency department and hospital records \cite{johnson2024mimiciv,johnson2023mimicived}. Each sample corresponds to a current chest X-ray study with available target labels defined by the CXR-LT setting \cite{holste2024cxrlt,holste2023cxrlt_physionet} and, when possible, linked clinical indication text, vital signs, and prior-study information.
+We construct the dataset from chest X-ray studies, radiology reports, and linked emergency department records. Chest X-ray images are taken from MIMIC-CXR-JPG, the processed JPG release derived from MIMIC-CXR, while radiology reports are obtained from MIMIC-CXR and vital signs are linked from MIMIC-IV ED \cite{johnson2019mimiccxr,johnson2024mimiciv,johnson2023mimicived}. Each sample corresponds to a current chest X-ray study with CXR-LT target labels \cite{holste2024cxrlt,holste2023cxrlt_physionet} and, when available, clinical indication text, structured vital signs, and prior-study information.
 
-We build the cohort through three filtering steps. First, chest X-ray studies are selected according to the target classification setting. Second, studies are matched with available clinical information, including indication text and structured vital signs. Third, prior-study information is identified for patients who have previous chest X-ray examinations before the current study. We handle missing modalities using the preprocessing strategy described in Section~\ref{subsec:method_preprocessing}.
+Figure~\ref{fig:data_construction_pipeline} summarizes the construction of one multimodal sample. Diagnostions, namely Findings and Impression, are used only for label construction. In contrast, Indication and History are treated as pre-interpretation clinical text inputs. The 26 CXR-LT labels combine 14 original labels from MIMIC-CXR-JPG with 12 additional long-tail labels mined from report text using RadText. Images, text inputs, labels, and vital signs are then linked into the final multimodal sample.
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/data-construction-pipeline.pdf}
+    \caption{Construction of the multimodal sample. MIMIC-CXR-JPG provides chest X-ray images and the 14 original labels, while MIMIC-CXR reports provide both pre-interpretation text inputs and diagnostic sections used for label mining. Findings and Impression are used only for label construction, whereas Indication and History are used as model text inputs. The final sample combines the image, clinical text, vital signs, and the 26 CXR-LT target labels.}
+    \label{fig:data_construction_pipeline}
+\end{figure}
+
+We build the cohort through three filtering steps. First, chest X-ray studies are selected according to the target CXR-LT classification setting. Second, studies are matched with available clinical information, including indication/history text and structured vital signs. Third, prior-study information is identified for patients who have previous chest X-ray examinations before the current study. Missing modalities are handled using the preprocessing strategy described in Section~\ref{sec:methodology}.
 
 
 
@@ -55,14 +64,14 @@ The target classification task is multi-label, where each study can contain mult
 
 
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
     \centering
-    \includegraphics[width=0.95\textwidth]{img/label_distribution.png}
-    \caption[Top-10 training label prevalence in the filtered subset]{Top-10 training label prevalence in the filtered thesis subset.}
-    \label{fig:label_distribution}
+    \includegraphics[width=0.95\textwidth]{img/eda/logscale-label-count-distribution.png}
+    \caption{Global label-count distribution of the 26 CXR-LT target labels on a log-scaled positive-rate axis, grouped into head, medium, and tail frequency tiers. Bar annotations report the raw positive count and positive rate for each class.}
+    \label{fig:logscale_label_distribution}
 \end{figure}
 
-Figure~\ref{fig:label_distribution} shows the top-10 most prevalent labels in the filtered training subset, confirming that the subset retains the strong long-tailed distribution characteristic of the full dataset. Common findings such as pleural effusion, atelectasis, and cardiomegaly appear much more frequently than rare findings such as pneumothorax, fracture, and hernia. This imbalance motivates asymmetric loss and separate head/body/tail evaluation.
+Figure~\ref{fig:logscale_label_distribution} shows the global distribution of all 26 CXR-LT target labels using a log-scaled positive-rate axis. The distribution is strongly long-tailed: common findings such as Support Devices, Lung Opacity, Cardiomegaly, Pleural Effusion, and Atelectasis occur far more frequently than rare findings such as Pneumomediastinum, Pleural Other, and Pneumoperitoneum. The head, medium, and tail grouping makes this imbalance explicit and motivates the use of asymmetric loss, label-frequency-aware evaluation, and separate head/medium/tail analysis.
 
 In addition to individual label frequencies, label co-occurrence is also important.
 
