@@ -3956,3 +3956,47 @@ Visually demonstrating the boundaries of what text context can and cannot be use
 **Reasoning.** Followed the user's explicit request to modify only the specified sentences to refine sentence flow and presentation.
 
 **Gotchas.** Care was taken to preserve LaTeX syntax (like `\cite{...}`, `Figure~\ref{...}`, `Table~\ref{...}`) at the end/within sentences during the target replacements.
+
+## 2026-07-02 — Rewrite Report Structure subsection in Introduction
+
+**Goal.** Rewrite the Report Structure subsection in the Introduction chapter (`report/introduction/introduction.tex`) to properly reference all subsequent chapters and refine the writing style.
+
+**Changes.**
+- `report/introduction/introduction.tex:47-49` — Replaced the placeholder references (where `Section` was missing a ref or incorrectly pointed to `\ref{sec}`) with correct LaTeX cross-references (`\ref{sec:related_work}`, `\ref{sec:eda}`, `\ref{sec:methodology}`, `\ref{sec:results}`, `\ref{sec:discussion}`, `\ref{sec:conclusion}`). Refined the paragraph structure and updated the label to `subsec:report_structure`.
+
+**Reasoning.** The previous section structure relied on duplicate/broken references. Updating these references ensures the PDF generates with correct section numbers automatically mapped to their respective LaTeX document segments.
+
+**Gotchas.** Recompiled the document with `make clean-all && make` to ensure the table of contents and PDF generated correctly with no broken reference errors.
+
+## 2026-07-02 — Replace CXR-LT with CXR-LT-2023 from EDA to end
+
+**Goal.** Replace occurrences of "CXR-LT" with "CXR-LT-2023" starting from the Exploratory Data Analysis section to the end of the report to reference the specific challenge version.
+
+**Changes.**
+- `report/eda/eda.tex` - Updated occurrences of "CXR-LT" to "CXR-LT-2023" in descriptions of target labels, dataset, benchmark, and prior study tables.
+- `report/methodology/methodology.tex` - Replaced "CXR-LT" with "CXR-LT-2023" in label construction and evaluation setting descriptions.
+- `report/results/results.tex` - Replaced "CXR-LT" with "CXR-LT-2023" in test split definitions, cohort references, baseline/contextual comparisons, and table captions.
+- `report/discussion/discussion.tex` - Updated the label noise description to use "CXR-LT-2023".
+- `report/conclusion/conclusion.tex` - Replaced "CXR-LT" with "CXR-LT-2023" in the final test split summary and reference comparisons.
+
+**Reasoning.** Replaced "CXR-LT" with "CXR-LT-2023" specifically in sections from EDA onwards (EDA, Methodology, Results, Discussion, Conclusion), while leaving early sections (like Introduction and Related Work) unchanged unless already pointing to CXR-LT-2023/2024. This clarifies that the main experiments and results in the latter half of the thesis are aligned with the 2023 split of the benchmark.
+
+**Gotchas.** Recompiled the LaTeX document successfully using `make -C report` to verify that no labels or references were broken by the renaming.
+
+## 2026-07-02 — Revise resource-constraint framing in report
+
+**Goal.** Refuse the implication that the model could not be fully trained by reframing resource/compute constraints as practical implementation choices, while maintaining computational limits only for implementation scope and ablation studies.
+
+**Changes.**
+- `report/abstract/abstract.tex:4` — Replaced "under a limited compute budget" with the main narrative: "This thesis studies whether clinical context and prior-study information improve long-tailed chest X-ray classification."
+- `report/introduction/introduction.tex:9,31,35,43,47` — Replaced "under a limited compute budget" and "resource-constrained" with the main narrative and framed complexity-reduction techniques as practical choices.
+- `report/methodology/methodology.tex:5` — Replaced "under a limited compute budget" with the main thesis study narrative.
+- `report/related_work/related_work.tex:84,124` — Reframed related work references to "resource-constrained" to focus on the main narrative and practical configuration choices.
+- `report/results/results.tex:89` — Rephrased the image backbone parameter reduction as a practical implementation choice rather than a resource-constrained design choice.
+- `report/results/results.tex:174` — Added an ablation limitation paragraph right before Table 14 (unified ablation study) explaining training run constraints and prioritizing main research questions.
+- `report/discussion/discussion.tex:32` — Added a new "Limited Training Runs" paragraph to the Limitations section to address the compute limit on factorial ablations and seed repeats.
+- `report/conclusion/conclusion.tex:4` — Removed the phrase "under limited computational resources" to align with the revised framing.
+
+**Reasoning.** Re-framed the thesis contributions to focus on the technical research questions regarding clinical context and prior-study integration, while keeping compute budget constraints restricted specifically to the scope of experimental ablations and training runs.
+
+**Gotchas.** The PDF was compiled successfully after all edits, ensuring no references or structures were broken.

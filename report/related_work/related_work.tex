@@ -81,7 +81,7 @@ The challenge results also show a clear gap between common and rare findings. Ta
     \end{tabular}
 \end{table}
 
-These results motivate studying whether clinical context and prior-study information can help long-tail classification. Instead of focusing on leaderboard-style ensembling, this thesis evaluates a resource-constrained multimodal model that uses indication text, vital signs, and prior-study context.
+These results motivate studying whether clinical context and prior-study information can help long-tail classification. Instead of focusing on leaderboard-style ensembling, this thesis studies whether clinical context and prior-study information improve long-tailed chest X-ray classification using a multimodal model that incorporates indication text, vital signs, and prior-study context.
 
 \subsection{CaMCheX Results and Relevance to This Thesis}
 \label{subsec:related_camchex_results}
@@ -121,4 +121,4 @@ As shown in Table~\ref{tab:camchex_longtail_results}, the performance of CaMCheX
     \end{tabular}
 \end{table}
 
-These results motivate several design choices in this thesis, including multimodal fusion and asymmetric loss. However, this thesis does not attempt an exact reproduction of CaMCheX. The published CaMCheX setting uses different training scale, preprocessing, resolution, and pretraining conditions. This thesis instead implements a resource-constrained adaptation and adds prior-study temporal context.
+These results motivate several design choices in this thesis, including multimodal fusion and asymmetric loss. However, this thesis does not attempt an exact reproduction of CaMCheX. The published CaMCheX setting uses different training scale, preprocessing, resolution, and pretraining conditions. This thesis instead implements an adaptation using practical configuration choices and adds prior-study temporal context.

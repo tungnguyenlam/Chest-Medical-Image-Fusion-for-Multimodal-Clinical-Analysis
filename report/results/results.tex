@@ -1,7 +1,7 @@
 \section{Experimental Results}
 \label{sec:results}
 
-We evaluate all implemented models on the filtered CXR-LT-aligned test split. This section reports the experimental setup, main quantitative results, ablation studies, long-tail analysis, and qualitative Grad-CAM checks.
+We evaluate all implemented models on the filtered CXR-LT-2023-aligned test split. This section reports the experimental setup, main quantitative results, ablation studies, long-tail analysis, and qualitative Grad-CAM checks.
 
 \subsection{Experimental Setup}
 \label{subsec:results_setup}
@@ -86,7 +86,7 @@ Table~\ref{tab:model_complexity} compares the parameter counts of the original C
 
 This parameter-count table compares architectural size under a frozen-text reference setting. The final reported model fine-tunes the CXR-BERT text encoder; therefore, its trainable parameter count is higher than the frozen-text count shown in Table~\ref{tab:model_complexity}.
 
-\textbf{Image backbone.} The largest single reduction comes from replacing ConvNeXt-Small (49.45M per view, 768 channels) with ConvNeXt-V2-Nano (14.98M per view, 640 channels), saving 68.95M parameters across the dual-frontal/lateral encoders. This is the primary contributor to the overall parameter reduction and reflects the resource-constrained design choice.
+\textbf{Image backbone.} The largest single reduction comes from replacing ConvNeXt-Small (49.45M per view, 768 channels) with ConvNeXt-V2-Nano (14.98M per view, 640 channels), saving 68.95M parameters across the dual-frontal/lateral encoders. This is the primary contributor to the overall parameter reduction and reflects a practical implementation choice to manage computational cost.
 
 \textbf{Text encoder.} The original CaMCheX uses BioBERT (108.31M), while the proposed model uses BiomedVLP-CXR-BERT-specialized (109.63M). Both are transformer-based clinical language models frozen during training; the 1.32M difference is negligible and does not affect the trainable parameter count. Critically, CaMCheX uses this single shared encoder for both the clinical indication text and the vital signs (encoded as a text string), whereas the proposed model routes vitals through a separate dedicated projector.
 
@@ -147,7 +147,7 @@ The results show three main patterns.
 \subsection{Comparison with Reference Methods}
 \label{subsec:results_reference_comparison}
 
-We compare our results with CheXFusion \cite{kim2023chexfusion} and CaMCheX \cite{sloan2025camchex} only as external context. This is not a controlled comparison. The published methods use different dataset scale, preprocessing, resolution, training strategy, and pretraining. Our results are also measured on the filtered CXR-LT-aligned thesis cohort rather than a full benchmark reproduction.
+We compare our results with CheXFusion \cite{kim2023chexfusion} and CaMCheX \cite{sloan2025camchex} only as external context. This is not a controlled comparison. The published methods use different dataset scale, preprocessing, resolution, training strategy, and pretraining. Our results are also measured on the filtered CXR-LT-2023-aligned thesis cohort rather than a full benchmark reproduction.
 
 \begin{table}[H]
     \centering
@@ -158,24 +158,26 @@ We compare our results with CheXFusion \cite{kim2023chexfusion} and CaMCheX \cit
         \hline
         Method & Setting (Resolution) & mAP & mAUROC \\
         \hline
-        \begin{tabular}[t]{@{}l@{}}CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer fusion, \\ ML-Decoder, weighted ASL, 1024 $\times$ 1024 input resolution)\end{tabular} & Published CXR-LT 2023 & 0.372 & 0.850 \\
-        CaMCheX \cite{sloan2025camchex} & Published CXR-LT 2023 ($1024 \times 1024$) & 0.576 & 0.916 \\
+        \begin{tabular}[t]{@{}l@{}}CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer fusion, \\ ML-Decoder, weighted ASL, 1024 $\times$ 1024 input resolution)\end{tabular} & Published CXR-LT-2023 & 0.372 & 0.850 \\
+        CaMCheX \cite{sloan2025camchex} & Published CXR-LT-2023 ($1024 \times 1024$) & 0.576 & 0.916 \\
         Proposed model & Our setting ($512 \times 512$) & 0.5662 & 0.9026 \\
         \hline
     \end{tabular}%
     }
 \end{table}
 
-Table~\ref{tab:contextual_comparison} places the proposed model beside published CXR-LT reference results. The proposed model reaches 0.5662 mAP and 0.9026 mAUROC in our filtered setting. These values are close to the published CaMCheX CXR-LT 2023 result of 0.576 mAP and 0.916 mAUROC. However, the numbers should not be read as a leaderboard comparison because the experimental settings are different. The main controlled evidence in this thesis comes from the models trained and evaluated under the same filtered cohort in Table~\ref{tab:ours_main_results} and Table~\ref{tab:ablation_unified}.
+Table~\ref{tab:contextual_comparison} places the proposed model beside published CXR-LT-2023 reference results. The proposed model reaches 0.5662 mAP and 0.9026 mAUROC in our filtered setting. These values are close to the published CaMCheX CXR-LT-2023 result of 0.576 mAP and 0.916 mAUROC. However, the numbers should not be read as a leaderboard comparison because the experimental settings are different. The main controlled evidence in this thesis comes from the models trained and evaluated under the same filtered cohort in Table~\ref{tab:ours_main_results} and Table~\ref{tab:ablation_unified}.
 
 \subsection{Ablation Study}
 \label{subsec:results_ablation}
 
-Table~\ref{tab:ablation_unified} summarizes the ablation and development runs performed in this work. The table has three groups. \emph{Modality ablation} removes one input modality at a time. \emph{Incremental model variants} report the available runs as prior-aware components and the final training setting were added. \emph{Channel encoding ablation} compares the engineered three-channel image input with a simple \texttt{gray3} baseline. Published CaMCheX numbers are not included because they are external references, not controlled ablations. Due to limited compute, not every later training choice is isolated under an otherwise identical run; therefore, the incremental-variant rows should be interpreted as development evidence rather than a complete causal decomposition.
+Table~\ref{tab:ablation_unified} summarizes the ablation and development runs performed in this work. The table has three groups. \emph{Modality ablation} removes one input modality at a time. \emph{Incremental model variants} report the available runs as prior-aware components and the final training setting were added. \emph{Channel encoding ablation} compares the engineered three-channel image input with a simple \texttt{gray3} baseline. Published CaMCheX numbers are not included because they are external references, not controlled ablations.
+
+The final model was trained as the selected full configuration. However, a complete factorial ablation would require many additional full training runs, because design choices such as prior context, time-gap embedding, prior dropout, text-encoder fine-tuning, label-correlation modelling, channel encoding, and random seeds would need to be isolated independently. Due to the available computational budget, we prioritize ablations that directly answer the main research question. Therefore, the modality-ablation rows should be interpreted as controlled comparisons, while the incremental-variant rows are reported as development evidence rather than a complete causal decomposition.
 
 \begin{table}[H]
 \centering
-\caption[Unified ablation study]{Unified ablation study on the filtered CXR-LT-aligned test split. All rows are runs from this work. Intermediate component rows lack per-group mAP because those configurations were evaluated with aggregate metrics only.}
+\caption[Unified ablation study]{Unified ablation study on the filtered CXR-LT-2023-aligned test split. All rows are runs from this work. Intermediate component rows lack per-group mAP because those configurations were evaluated with aggregate metrics only.}
 \label{tab:ablation_unified}
 \adjustbox{max width=\textwidth}{%
 \begin{tabular}{llccccc}

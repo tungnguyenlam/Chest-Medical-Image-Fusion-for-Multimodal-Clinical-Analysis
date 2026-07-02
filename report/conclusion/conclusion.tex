@@ -1,8 +1,8 @@
 \section{Conclusion}
 \label{sec:conclusion}
 
-We implemented and evaluated a prior-aware multimodal chest X-ray classification model that combines radiographs, clinical indication text, vital signs, and prior-study context. The model was evaluated on a filtered CXR-LT-aligned test split under limited computational resources.
+We implemented and evaluated a prior-aware multimodal chest X-ray classification model that combines radiographs, clinical indication text, vital signs, and prior-study context. The model was evaluated on a filtered CXR-LT-2023-aligned test split.
 
-The proposed model achieved 0.5662 mAP and 0.9026 mAUROC, outperforming the image-only and no-prior multimodal baselines. The largest gains were observed for medium and tail labels, supporting the value of clinical context and prior-study information for long-tailed chest X-ray classification. Compared with external CXR-LT references, the proposed model exceeds the top CXR-LT 2023 challenge solution CheXFusion and approaches the published CaMCheX result, although differences in training scale, preprocessing, resolution, and pretraining should be considered.
+The proposed model achieved 0.5662 mAP and 0.9026 mAUROC, outperforming the image-only and no-prior multimodal baselines. The largest gains were observed for medium and tail labels, supporting the value of clinical context and prior-study information for long-tailed chest X-ray classification. Compared with external CXR-LT-2023 references, the proposed model exceeds the top CXR-LT-2023 challenge solution CheXFusion and approaches the published CaMCheX result, although differences in training scale, preprocessing, resolution, and pretraining should be considered.
 
 Overall, the results suggest that prior-aware multimodal fusion is a practical and effective direction for clinically contextualized chest X-ray classification. Future work should evaluate the approach at larger scale, with higher-resolution inputs, stronger temporal modelling, and external clinical validation.

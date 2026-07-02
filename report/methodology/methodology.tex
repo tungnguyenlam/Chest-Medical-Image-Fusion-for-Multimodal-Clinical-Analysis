@@ -2,7 +2,7 @@
 \section{Methodology}
 \label{sec:methodology}
 
-We adapt the CaMCheX multimodal idea to long-tailed chest X-ray classification under a limited compute budget. The final model uses current chest X-ray images, pre-interpretation clinical text, structured vital signs, and prior-study context. This section describes only the final architecture used in the main experiments. Earlier design choices are discussed only as ablations in Section~\ref{sec:results}.
+We adapt the CaMCheX multimodal architecture to study whether clinical context and prior-study information improve long-tailed chest X-ray classification. The final model uses current chest X-ray images, pre-interpretation clinical text, structured vital signs, and prior-study context. This section describes only the final architecture used in the main experiments. Earlier design choices are discussed only as ablations in Section~\ref{sec:results}.
 
 \subsection{Problem Formulation}
 \label{subsec:method_problem}
@@ -105,7 +105,7 @@ This mask vector \(M_i = [m_{i1}, \dots, m_{iD}]^\top\) is concatenated to the n
 
 \textbf{Prior-Study Selection}: To compile longitudinal patient history, studies are sorted chronologically per patient. We use a chronological shift to select the immediately previous study as the prior. This chronological constraint prevents the model from using future information.
 
-\textbf{Label Construction}: The binary targets correspond to the $26$ long-tailed pathologies defined by the CXR-LT dataset. Label vectors are represented as $26$-dimensional multi-hot arrays.
+\textbf{Label Construction}: The binary targets correspond to the $26$ long-tailed pathologies defined by the CXR-LT-2023 dataset. Label vectors are represented as $26$-dimensional multi-hot arrays.
 
 \subsection{Chest X-Ray Image Encoder}
 \label{subsec:method_image_encoder}
@@ -267,7 +267,7 @@ During classification, the graph head passes information between related label-q
 \subsection{Evaluation Metrics}
 \label{subsec:method_evaluation_metrics}
 
-We evaluate the model using mean Average Precision (mAP) and macro-averaged AUROC (mAUROC). The primary metric is mAP, following the CXR-LT evaluation setting \cite{yan2023cxrlt}. This metric is suitable for long-tailed multi-label classification because it measures ranking quality over the precision-recall curve for each class.
+We evaluate the model using mean Average Precision (mAP) and macro-averaged AUROC (mAUROC). The primary metric is mAP, following the CXR-LT-2023 evaluation setting \cite{yan2023cxrlt}. This metric is suitable for long-tailed multi-label classification because it measures ranking quality over the precision-recall curve for each class.
 
 For each pathology class $c$, Average Precision (AP) is computed as:
 \begin{equation}

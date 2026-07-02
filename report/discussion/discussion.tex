@@ -23,13 +23,15 @@ The study has several limitations.
 
 \textbf{Frozen Clinical Text Encoder}: The language model (\texttt{BiomedVLP-CXR-BERT}) was kept frozen, or its embeddings were precomputed, to save compute. Consequently, the clinical text representation was not fine-tuned end-to-end for the classification objective, potentially limiting its alignment with the multimodal fusion layers.
 
-\textbf{Label Noise}: The CXR-LT labels are derived automatically from free-text radiology reports using natural language processing toolkits \cite{holste2024cxrlt}. These automated labels contain inherent noise and occasional misclassifications, which can introduce bias into model training and evaluation.
+\textbf{Label Noise}: The CXR-LT-2023 labels are derived automatically from free-text radiology reports using natural language processing toolkits \cite{holste2024cxrlt}. These automated labels contain inherent noise and occasional misclassifications, which can introduce bias into model training and evaluation.
 
 \textbf{Single-Dataset Validation}: Models were trained and evaluated on splits derived from the MIMIC-CXR dataset. While patient-level splits prevent data leakage, the lack of external validation on datasets from other hospital systems limits the ability to evaluate generalizability to different patient populations and imaging protocols.
 
 \textbf{Shortcut Learning Risk}: While prior-study information improves classification performance, it carries a risk of shortcut learning. The model might learn to rely excessively on historical labels or reports rather than analyzing the current radiograph, which could lead to errors if an acute, new pathology develops that was not present in the past. This was mitigated using prior dropout, which reduces but does not eliminate shortcut risk.
 
 \textbf{Qualitative Interpretability}: Grad-CAM \cite{selvaraju2017gradcam} shows which image regions influence the prediction, but it does not prove clinical reasoning or causality.
+
+\textbf{Limited Training Runs}: The study is also limited by the number of full training runs. Although the selected final model was trained successfully, the available compute did not allow exhaustive factorial ablations or repeated-seed experiments for every architectural choice. As a result, some incremental comparisons indicate development trends rather than isolated causal effects.
 
 \subsection{Future Work}
 \label{subsec:discussion_future}

@@ -2,14 +2,14 @@
 \section{Exploratory Data Analysis}
 \label{sec:eda}
 
-This section describes how the thesis dataset is constructed and why its structure matters for the modelling choices used later. We first explain how the multimodal samples are built, then analyze label imbalance, clinical text, vital-sign missingness, and prior-study availability.
+This section details the construction of the multimodal chest X-ray cohort and outlines key dataset characteristics that inform subsequent modelling choices. We present the sample assembly process, followed by an analysis of label imbalance, clinical text properties, vital-sign missingness, and prior-study temporal dynamics.
 
 \subsection{Dataset Cohort and Subsets}
 \label{subsec:eda_cohort}
 
-The thesis cohort is constructed by linking chest X-ray studies, radiology reports, and emergency department records. Chest X-ray images are taken from MIMIC-CXR-JPG, which is the processed JPG release of MIMIC-CXR. Radiology reports are taken from MIMIC-CXR, and vital signs are linked from MIMIC-IV ED \cite{johnson2019mimiccxr,johnson2024mimiciv,johnson2023mimicived}. Each sample represents a current chest X-ray study with CXR-LT target labels \cite{holste2024cxrlt,holste2023cxrlt_physionet} and, when available, clinical indication text, structured vital signs, and prior-study information.
+The dataset cohort is established by aligning chest X-ray studies, radiology reports, and emergency department (ED) records. Specifically, chest X-ray images are sourced from the MIMIC-CXR-JPG database, paired with radiology reports from MIMIC-CXR, and matched with vital signs from MIMIC-IV ED \cite{johnson2019mimiccxr,johnson2024mimiciv,johnson2023mimicived}. Each resulting sample represents a unique, current chest X-ray study mapped to 26 CXR-LT-2023 target labels \cite{holste2024cxrlt,holste2023cxrlt_physionet}, integrated with pre-interpretation clinical indications, structured vitals, and longitudinal prior studies where available.
 
-Figure~\ref{fig:data_construction_pipeline} summarizes the construction of one multimodal sample. The diagnostic report sections, namely Findings and Impression, are used only for label construction. In contrast, Indication and History are treated as pre-interpretation text inputs and are used by the model. The 26 CXR-LT labels combine 14 original MIMIC-CXR-JPG labels with 12 additional long-tail labels mined from report text using RadText. These image, text, label, and vital-sign components are then linked to form the final multimodal sample.
+Figure~\ref{fig:data_construction_pipeline} illustrates the construction pipeline for a single multimodal sample. To prevent label leakage, diagnostic report sections (\textit{Findings} and \textit{Impression}) are reserved solely for ground-truth label extraction, whereas pre-interpretation text (\textit{Indication} and \textit{History}) is utilized as model input. The 26 CXR-LT-2023 target classes combine the 14 standard MIMIC-CXR findings with 12 additional long-tail labels extracted from report texts using RadText. These image, text, label, and vital-sign modalities are aligned by study and patient identifiers to form the final training samples.
 
 \begin{figure}[!htbp]
     \centering
@@ -18,7 +18,7 @@ Figure~\ref{fig:data_construction_pipeline} summarizes the construction of one m
     \label{fig:data_construction_pipeline}
 \end{figure}
 
-The filtered thesis cohort is built in three steps. First, we select chest X-ray studies that match the CXR-LT classification task. Second, we match these studies with available clinical information, including indication/history text and structured vital signs. Third, we identify prior chest X-ray studies from the same patient when they exist before the current study. Missing modalities are not removed automatically. They are handled using the preprocessing strategy described in Section~\ref{sec:methodology}.
+The cohort filtering and construction proceeds in three steps: (1) selecting chest X-ray studies corresponding to the CXR-LT-2023 classification task; (2) aligning these studies with clinical metadata (indication text and structured vital signs); and (3) retrieving prior chest X-ray studies for the patient when available. Partially missing modalities are preserved rather than filtered out, and are addressed using the robust imputation and masking strategies detailed in Section~\ref{sec:methodology}.
 
 
 
@@ -40,9 +40,9 @@ The filtered thesis cohort is built in three steps. First, we select chest X-ray
 
 In Table~\ref{tab:cohort_summary}, ``Images'' refers to image-level rows, while ``Images with Text'' refers to image-level rows with linked indication/history text.
 
-Table~\ref{tab:cohort_summary} shows the size of the filtered thesis cohort after matching images, clinical text, and vital signs. Clinical text is present for all image-level rows because of the filtering step. Structured vital signs are available for 24,209 of 28,245 image-level rows, so they are missing for approximately 14.3\% of rows. The model must therefore handle missing vital signs during training. Patient-level splits prevent the same patient from appearing in more than one split.
+Table~\ref{tab:cohort_summary} details the cohort partitions. ``Images'' represents the total image-level instances, which aligns with ``Images with Text'' as pre-interpretation clinical text was a strict filtering criterion. In contrast, structured vital signs are available for 24,209 out of 28,245 images, indicating a missingness rate of approximately 14.3\%. The model must therefore robustly accommodate missing clinical vitals during training. The splits are partitioned at the patient level to prevent data leakage across train, validation, and test subsets.
 
-The dataset contains multiple chest X-ray view positions, so image views must be grouped before visual encoding. AP means anteroposterior, PA means posteroanterior, and LL means left lateral. In this thesis, AP and PA are treated as frontal views, while LATERAL and LL are treated as lateral views. Figure~\ref{fig:view_position_distribution} shows the most common view positions in the full CXR-LT source dataset. Frontal views such as AP and PA are the most common. Lateral views are also frequent. This supports the use of a multi-view image pipeline rather than assuming that each study contains only one image.
+Because each chest X-ray study can contain multiple acquisitions, view positions must be categorized prior to visual encoding. Anteroposterior (AP) and posteroanterior (PA) acquisitions are grouped as frontal views, while lateral (LATERAL) and left lateral (LL) acquisitions are grouped as lateral views. Figure~\ref{fig:view_position_distribution} illustrates the view distribution across the dataset. The dominance of frontal views, coupled with a significant presence of lateral acquisitions, supports a multi-view input pipeline that processes multiple views per study rather than assuming single-image studies.
 
 \begin{figure}[H]
     \centering
@@ -70,22 +70,22 @@ The dataset contains multiple chest X-ray view positions, so image views must be
     \label{fig:eda_cxr_views}
 \end{figure}
 
-Figure~\ref{fig:eda_cxr_views} shows one frontal view and one lateral view from the dataset. Both images are shown in raw grayscale.
+Figure~\ref{fig:eda_cxr_views} provides representative examples of frontal and lateral chest X-ray acquisitions in raw grayscale, demonstrating typical clinical image quality and positioning.
 
 
 \subsection{Label Distribution and Co-occurrence}
 \label{subsec:eda_labels}
 
-The target task is challenging because it is both multi-label and long-tailed. In this setting, one study can contain several findings, and some findings appear much more often than others \cite{holste2024cxrlt,holste2023cxrlt_physionet}. The CXR-LT benchmark uses 26 target findings. These 26 findings include 14 original MIMIC-CXR-JPG labels and 12 additional rare labels mined from report text. Figure~\ref{fig:cxrlt_original_newlyadded} shows the raw label counts in the full CXR-LT source dataset. The figure highlights the large frequency gap between common and rare findings.
+The target task exhibits both multi-label and long-tailed characteristics, presenting a significant clinical and technical challenge. Individual studies often present co-occurring pathologies, while the prevalence of these pathologies varies by several orders of magnitude \cite{holste2024cxrlt,holste2023cxrlt_physionet}. The 26 target findings of the CXR-LT-2023 benchmark are comprised of 14 standard MIMIC-CXR classes and 12 additional long-tail categories mined from reports. Figure~\ref{fig:cxrlt_original_newlyadded} shows the overall label counts, highlighting the pronounced frequency disparity between common (head) and rare (tail) pathologies.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.95\textwidth]{img/cxr-lt-2023-newlyadded-original-demonstrate.pdf}
-    \caption[Frequency distribution of pathology classes in the CXR-LT benchmark]{Frequency distribution of CXR-LT target labels.}
+    \caption[Frequency distribution of pathology classes in the CXR-LT-2023 benchmark]{Frequency distribution of CXR-LT-2023 target labels.}
     \label{fig:cxrlt_original_newlyadded}
 \end{figure}
 
-In the figure, blue labels indicate original MIMIC-CXR-JPG labels, while red labels indicate additional long-tail labels. These counts describe the full CXR-LT source dataset, not the filtered thesis cohort.
+Here, blue bars denote standard MIMIC-CXR categories, whereas red bars denote the newly integrated long-tail labels. These statistics reflect the raw distribution before cohort filtering.
 
 
 
@@ -96,9 +96,9 @@ In the figure, blue labels indicate original MIMIC-CXR-JPG labels, while red lab
     \label{fig:logscale_label_distribution}
 \end{figure}
 
-Figure~\ref{fig:logscale_label_distribution} shows the same long-tailed pattern using head, medium, and tail groups. The positive-rate axis is log-scaled, and each bar reports the raw positive count and positive rate for one class. Common findings such as Support Devices, Lung Opacity, Cardiomegaly, Pleural Effusion, and Atelectasis appear far more often than rare findings such as Pneumomediastinum, Pleural Other, and Pneumoperitoneum. This imbalance motivates three choices used later in the thesis: asymmetric loss during training, mAP and mAUROC reporting by frequency group, and separate analysis for head, medium, and tail labels.
+Figure~\ref{fig:logscale_label_distribution} presents the log-scaled positive rates stratified into head, medium, and tail frequency tiers. Common conditions (e.g., \textit{Support Devices}, \textit{Lung Opacity}, \textit{Cardiomegaly}) exhibit prevalence rates orders of magnitude higher than rare findings (e.g., \textit{Pneumomediastinum}, \textit{Pleural Other}, \textit{Pneumoperitoneum}). This severe imbalance motivates three critical design choices in this work: the use of asymmetric loss (ASL) during training, the evaluation of mAP and mAUROC metrics across distinct frequency tiers, and stratified validation analysis.
 
-Beyond individual label frequency, label co-occurrence is also important because several findings can appear in the same study.
+Beyond marginal frequencies, modeling pairwise correlations is essential since multiple pathologies frequently co-occur within a single clinical presentation.
 
 \begin{figure}[H]
     \centering
@@ -107,12 +107,12 @@ Beyond individual label frequency, label co-occurrence is also important because
     \label{fig:label_cooccurrence}
 \end{figure}
 
-Figure~\ref{fig:label_cooccurrence} shows label co-occurrence in the dataset. Each cell shows the conditional probability that the column label is positive when the row label is positive. The diagonal is 1 by definition. Some labels often appear together. For example, Cardiomegaly often co-occurs with Edema, and Pleural Effusion often co-occurs with Atelectasis. These pairs are clinically plausible because they can appear in related disease processes. These correlations motivate the label-correlation head described in Section~4.10.
+Figure~\ref{fig:label_cooccurrence} visualizes the conditional probabilities of co-occurrence, where each cell represents the probability of the column label given the row label. Strong clinical correlations are visible; for instance, \textit{Cardiomegaly} co-occurs frequently with \textit{Edema}, and \textit{Pleural Effusion} with \textit{Atelectasis}. These patterns align with clinical expectations, as these pathologies are pathophysiologically linked. Such dependency structures motivate the integration of the label-correlation head detailed in Section~4.10.
 
 \subsection{Clinical Indication Text Analysis}
 \label{subsec:eda_text}
 
-Clinical indication text provides the reason for ordering the chest X-ray, such as symptoms or a rule-out question. It is available before the radiologist writes the final report. Therefore, indication and history text are realistic inputs for the model \cite{sloan2025camchex}. To prevent label leakage, we exclude Findings and Impression from the model input. Only Indication and History are kept as text inputs.
+The clinical indication text details the pre-imaging symptoms, history, or diagnostic questions prompting the examination. Because this text is available prior to image interpretation, it serves as a realistic input for clinical decision support systems \cite{sloan2025camchex}. To prevent label leakage, we strictly exclude the \textit{Findings} and \textit{Impression} sections from model inputs, restricting the text stream to \textit{Indication} and \textit{History}.
 
 \begin{figure}[H]
     \centering
@@ -133,7 +133,7 @@ Clinical indication text provides the reason for ordering the chest X-ray, such 
     \label{fig:report_leakage_examples}
 \end{figure}
 
-In Figure~\ref{fig:report_leakage_examples}, green boxes show History and Indication, which are allowed model inputs. Red boxes show Findings and Impression, which are written after interpretation and are not used as model inputs.
+As illustrated in Figure~\ref{fig:report_leakage_examples}, pre-interpretation text (green boxes) is permitted as model input, while post-interpretation sections (red boxes) are excluded to prevent target leakage.
 
 \begin{figure}[H]
     \centering
@@ -142,7 +142,7 @@ In Figure~\ref{fig:report_leakage_examples}, green boxes show History and Indica
     \label{fig:text_length_distribution}
 \end{figure}
 
-Figure~\ref{fig:text_length_distribution} shows that most indication texts are short. The median length is approximately 12 words, with a long tail beyond 50 words. This supports using a short text sequence length for the indication/history input.
+Figure~\ref{fig:text_length_distribution} indicates that clinical indications are typically concise. The median length is approximately 12 words, with a sparse right tail extending beyond 50 words. This distribution supports a relatively short sequence length limit during tokenization and text encoding.
 
 
 \begin{table}[H]
@@ -162,12 +162,12 @@ Figure~\ref{fig:text_length_distribution} shows that most indication texts are s
     \end{tabular}
 \end{table}
 
-Table~\ref{tab:common_text_terms} shows common phrases and template words in the clinical indication text. Template words such as ``old'' and ``year'' are common because many indications include patient age. Clinical phrases such as ``chest pain'', ``shortness of breath'', and ``r/o pneumonia'' also appear often. This supports using a radiology-domain text encoder, because the model must separate useful clinical phrases from repeated report templates \cite{boecking2022biovil}.
+Table~\ref{tab:common_text_terms} lists the most frequent clinical phrases and template tokens. Recurrent template words (e.g., ``old'', ``year'') reflect demographic reporting, while key clinical terms (e.g., ``chest pain'', ``shortness of breath'', ``r/o pneumonia'') capture diagnostic intent. These domain-specific patterns highlight the need for a specialized clinical/radiological language encoder (such as BioBERT or BioViL) to effectively separate clinical cues from standard templated phrasing \cite{boecking2022biovil}.
 
 \subsection{Vital Signs and Missingness Analysis}
 \label{subsec:eda_vitals}
 
-Vital signs provide useful clinical context, but they are not available for every study. To keep these studies, we use imputed values together with explicit missingness masks.
+Structured vital signs provide immediate physiological context but are subject to missingness in clinical practice. Rather than discarding incomplete samples, we employ a joint representation combining imputed values with explicit missingness indicator masks.
 
 
 \begin{table}[H]
@@ -188,7 +188,7 @@ Vital signs provide useful clinical context, but they are not available for ever
     \end{tabular}
 \end{table}
 
-Table~\ref{tab:vitals_summary} reports vital-sign statistics in the training split. Extreme values are kept in the table to show why outlier handling is needed. The vital-sign variables contain both missing values and extreme outliers. Some values are not physiologically plausible, such as an oxygen saturation of 921.00 or a diastolic blood pressure of 7,698.90 mmHg. These values likely come from data-entry errors or raw clinical outliers. Therefore, Section~4 applies outlier clipping and z-score normalization using training-set statistics.
+Table~\ref{tab:vitals_summary} presents the summary statistics and missingness rates for vital signs in the training split. The raw values contain both missing entries and severe outliers (e.g., oxygen saturation of 921.00\% or diastolic blood pressure of 7,698.90 mmHg) that are physiologically implausible and stem from data-entry anomalies. This highlights the necessity of the outlier clipping and robust z-score normalization procedures detailed in Section~4.
 
 \begin{figure}[H]
     \centering
@@ -197,12 +197,12 @@ Table~\ref{tab:vitals_summary} reports vital-sign statistics in the training spl
     \label{fig:vitals_missingness}
 \end{figure}
 
-Figure~\ref{fig:vitals_missingness} shows that most vital-sign variables have similar missingness rates, around 14--17\%. Clinical indication has 0\% missingness because it was required during cohort filtering. This suggests that vital signs are often recorded or missing as a group. This supports representing vital signs with a combined vital-sign token and an explicit missingness mask.
+Figure~\ref{fig:vitals_missingness} shows uniform missingness rates (14--17\%) across the vital sign variables within each split, suggesting that vitals are typically documented or omitted as a bundle. In contrast, clinical indication exhibits 0\% missingness due to cohort filtering. This co-missingness behavior supports encoding vitals via a unified vector paired with a binary missingness mask.
 
 \subsection{Temporal Prior Availability and Label Dynamics}
 \label{subsec:eda_prior_gaps}
 
-Prior-study context allows the model to compare the current chest X-ray with earlier examinations \cite{bannur2023biovilt}. However, this source of context introduces two practical issues. Some studies have no prior chest X-ray, and the time gap between the current and prior study can vary from days to years.
+Incorporating longitudinal prior studies allows models to detect dynamic disease progression \cite{bannur2023biovilt}. However, leveraging this context introduces two main challenges: a subset of patients have no historical imaging available, and the elapsed time between the current and prior acquisitions ranges from days to years.
 
 
 
@@ -223,7 +223,7 @@ Prior-study context allows the model to compare the current chest X-ray with ear
     \end{tabular}
 \end{table}
 
-Table~\ref{tab:prior_availability} shows prior-study availability at study level in the full CXR-LT source dataset before the thesis filtering step. These totals describe the full source dataset, not the filtered thesis cohort in Table~\ref{tab:cohort_summary}. Overall, 71.30\% of studies have a linked prior chest X-ray. The percentage is similar across splits, around 71\%. This suggests that prior availability is balanced across train, validation, and test splits. This supports using prior-study information, but the model must still work for the 28.70\% of studies without priors.
+Table~\ref{tab:prior_availability} outlines prior-study availability in the source CXR-LT-2023 dataset. Approximately 71.30\% of all studies have an associated prior chest X-ray, with consistent availability (~71\%) across all splits. While this consistent distribution supports integrating longitudinal context, the model must remain robust to the remaining 28.70\% of cases lacking historical images.
 
 
 
@@ -234,9 +234,9 @@ Table~\ref{tab:prior_availability} shows prior-study availability at study level
     \label{fig:prior_gap_distribution}
 \end{figure}
 
-Figure~\ref{fig:prior_gap_distribution} shows the time gap between current and prior chest X-ray studies, measured in days. The x-axis is log-scaled. The time gaps vary widely. Some priors are close to the current study, while others are months or years earlier. This motivates using learned time-gap buckets in the prior-aware fusion module.
+Figure~\ref{fig:prior_gap_distribution} displays the log-scaled distribution of the temporal gap (in days) between the current and prior studies. The wide variance, spanning immediate follow-ups to multi-year intervals, motivates the use of learned temporal bucket embeddings within the prior-aware fusion architecture.
 
-Prior availability alone does not show whether the prior study is actually useful. It is also necessary to examine whether labels stay the same or change between prior and current studies. If labels often stay the same, prior information may help the model. If labels often appear or disappear, the model must still rely on the current image and current clinical context.
+However, prior availability alone does not guarantee utility; we must analyze how pathology labels evolve over time. High temporal stability suggests that priors provide strong predictive priors, whereas frequent label transitions require the model to rely more heavily on current imaging and clinical context.
 
 \begin{figure}[H]
     \centering
@@ -245,6 +245,6 @@ Prior availability alone does not show whether the prior study is actually usefu
     \label{fig:temporal_label_dynamics}
 \end{figure}
 
-Figure~\ref{fig:temporal_label_dynamics} compares labels between prior and current chest X-ray studies. The left panel shows how often each label has the same binary value in the prior and current study. This includes both positive-positive and negative-negative agreement. The right panel shows labels that newly appear and labels that disappear. High agreement for rare labels should be interpreted carefully because it is often caused by negative-negative agreement.
+Figure~\ref{fig:temporal_label_dynamics} characterizes this longitudinal label behavior. The left panel shows the overall binary agreement (concordance of both positive and negative states) between studies, while the right panel tracks state transitions (newly onset or resolved pathologies). Notably, the high agreement observed for rare categories is largely driven by negative-negative agreement and must be interpreted cautiously.
 
-Many labels have high agreement between prior and current studies. However, this does not always mean that disease is stable. The transition plot is more useful for understanding actual label changes. Common findings such as Lung Opacity, Atelectasis, Cardiomegaly, Pneumonia, and Pleural Effusion show many newly positive and lost positive transitions. This suggests that prior context is useful, but it cannot be used as the only evidence. Some findings stay stable, while others change between studies. Together, these observations motivate the prior-aware temporal fusion design used later in the methodology. They also support using time-gap embeddings and prior dropout, so the model does not simply copy the prior study.
+While overall agreement is high, the transition dynamics reveal significant clinical variation. Common acute findings (e.g., \textit{Lung Opacity}, \textit{Atelectasis}, \textit{Pneumonia}, \textit{Pleural Effusion}) undergo frequent transitions. This underscores that while historical context is highly informative, the model must not over-rely on it at the expense of current observations. These findings directly motivate the prior-aware temporal fusion network design, including the use of time-gap embeddings and prior dropout to prevent the model from shortcutting and simply copying prior predictions.
