@@ -4252,3 +4252,156 @@ Visually demonstrating the boundaries of what text context can and cannot be use
 - `report/related_work/related_work.tex:45` - Replaced citation reference to `holste2023cxrlt_physionet` with `PhysioNet-cxr-lt-iccv-workshop-cvamd-1.0.0`.
 
 **Reasoning.** Aligns all bibliography metadata with official PhysioNet / DOI registrations, avoids duplicate dataset references, and keeps LaTeX citation references aligned to guarantee clean PDF compilation.
+
+## 2026-07-02 - Updated Case Study 1 (Support Devices) images and LaTeX layout
+
+**Goal.** Replace the baseline figures for Case Study 1 (Support Devices) with the updated Grad-CAM outputs and include all clinical indicators, vitals, prior labels, time delta, and class distribution attributions in a space-efficient layout.
+
+**Changes.**
+- `report/results/results.tex:217` - Replaced `fig:fig_support_devices_gradcam`, `fig:support_devices_text`, and `fig:support_devices_modality` with two newly designed figure layouts: `fig:fig_support_devices_inputs` (visuals/texts) and `fig:fig_support_devices_context` (vitals/modality/labels/distribution).
+- Copied 12 evaluation figures from `/Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/output/prior_aware_v6nano/runs/20260624-111754-baseline/gradcam/epoch_15/best/Support_Devices` into `report/img/` under the prefix `support_devices_`.
+
+**Reasoning.** Organized the 11 panels (omitted redundant linear modality scale in favor of log scale) into two figures of 2-column grids of subfigures. Placing wide, short textual visualizations and narrow charts side-by-side matches their aspect ratios and prevents page overflow while keeping the comparison readable.
+
+**Gotchas.** `modality.png` (linear) was skipped in favor of `modality_log.png` to keep the layout symmetric and save space since log-scale modality share is more informative.
+
+## 2026-07-02 - Reverted Case Study 1 CXR images and clinical report layout to full-width
+
+**Goal.** Change the CXR images and prior radiology report subfigures back to full-width (0.85\textwidth) to ensure they are legible, while keeping all other tabular/metadata attributions grouped into grids.
+
+**Changes.**
+- `report/results/results.tex:217` - Modified the subfigure layout so that current/prior images and the prior radiology report are rendered at `0.85\textwidth` stacked as normal.
+- Grouped current/prior indications and vitals into a 2x2 grid (`fig:fig_support_devices_vitals_indications`), and modality/time-delta/prior-label/class-distribution into another 2x2 grid (`fig:fig_support_devices_context`).
+
+## 2026-07-02 - Moved detailed Case Study 1 attribution figures to Appendix
+
+**Goal.** Improve the main text readability by keeping only the primary visual (CXR Grad-CAM) and clinical text report attributions in the main results section, while moving the 8 remaining detailed panels to the Appendix.
+
+**Changes.**
+- `report/results/results.tex:217` - Updated Case Study 1 to only display the chest X-rays (`fig:fig_support_devices_gradcam`) and the prior radiology report (`fig:support_devices_text`), adding a pointer to the appendix.
+- `report/appendix/appendix.tex:45` - Added a new section `Extended Case Study Attribution Panels (Support Devices)` housing the current/prior indications, current/prior vitals, modality share, time delta, prior labels, and class distribution figures.
+
+## 2026-07-02 - Kept current clinical indication in the main results section
+
+**Goal.** Keep the current clinical indication (`cur_clin`) in the main results section of Case Study 1 (Support Devices) alongside the CXR images and prior report, while keeping only prior clinical indication and other model internals in the Appendix.
+
+**Changes.**
+- `report/results/results.tex:217` - Updated Case Study 1 to group both the current clinical indication (`fig:support_devices_cur_clin`) and the prior radiology report (`fig:support_devices_text`) in Figure~\ref{fig:support_devices_clinical_text}.
+- `report/appendix/appendix.tex:47` - Updated Appendix B to remove current clinical indication and only display the prior clinical indication (`fig:support_devices_prv_clin`) and vitals.
+
+## 2026-07-02 - Kept both clinical indications in the main results section
+
+**Goal.** Group and display all clinical text inputs (current indication, prior indication, prior report) in the main results section of Case Study 1 (Support Devices) and move only the non-textual/numeric model attributions (vitals, time delta, prior labels, modality share, class distribution) to the Appendix.
+
+**Changes.**
+- `report/results/results.tex:217` - Modified Case Study 1 to display the current clinical indication (`fig:support_devices_cur_clin`) and prior clinical indication (`fig:support_devices_prv_clin`) side-by-side above the prior radiology report (`fig:support_devices_text`).
+- `report/appendix/appendix.tex:47` - Updated Appendix B to only show current and prior vitals side-by-side, removing any clinical indications as they are all in the main results section.
+
+## 2026-07-02 - Swapped normal scale modality share for log scale in Case Studies 2 & 3
+
+**Goal.** Simplify modality share figures for Case Study 2 (Nodule) and Case Study 3 (Hernia) to only show the log scale modality share, matching Case Study 1.
+
+**Changes.**
+- `report/results/results.tex:300` - Replaced Nodule's side-by-side normal/log scale modality share figures with a single log-scale figure (`fig:nodule_modality`).
+- `report/results/results.tex:337` - Replaced Hernia's side-by-side normal/log scale modality share figures with a single log-scale figure (`fig:hernia_modality`).
+
+## 2026-07-02 - Updated Nodule Case Study images to epoch 14 best run
+
+**Goal.** Replace Nodule's qualitative figures (CXR images, text report, modality share) with the updated outputs from epoch 14 best baseline.
+
+**Changes.**
+- Copied 12 evaluation figures from `/Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/output/prior_aware_v6nano/runs/20260624-111754-baseline/gradcam/epoch_14/best/Nodule` into `report/img/` under the prefix `nodule_`.
+
+## 2026-07-02 - Updated Hernia Case Study images to epoch 15 best run
+
+**Goal.** Update Hernia's qualitative figures (which has no prior study) with the fresh outputs from epoch 15 best baseline.
+
+**Changes.**
+- Copied Hernia evaluation figures from `/Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/output/prior_aware_v6nano/runs/20260624-111754-baseline/gradcam/epoch_15/best/Hernia` to `report/img/` under the prefix `hernia_`.
+
+## 2026-07-02 - Unified all Case Study clinical text layouts to single-column and filled missing clinical indications
+
+**Goal.** Restructure Case Study 1's clinical text figures into a single-column layout and include missing current and prior clinical indications for Nodule (Case Study 2) and current clinical indication for Hernia (Case Study 3) in unified stacked formats.
+
+**Changes.**
+- `report/results/results.tex:242` - Redesigned Case Study 1's clinical text figures to be stacked in a single column (`0.85\textwidth` wide each).
+- `report/results/results.tex:288` - Replaced Nodule's single prior report figure with a vertical stack of current indication, prior indication, and prior radiology report (`fig:nodule_clinical_text`).
+- `report/results/results.tex:312` - Replaced Hernia's single prior report figure with a vertical stack of current indication and prior report (`fig:hernia_clinical_text`).
+
+## 2026-07-02 - Added supervisor certification page and configured vietnam package
+
+**Goal.** Create a new LaTeX section for supervisor certification right after the titlepage and before the acknowledgements/abstract, using pre-filled supervisor and student names (Assoc. Prof. Trần Giang Sơn and Mr. Nguyễn Lâm Tùng).
+
+**Changes.**
+- `report/sections/supervisor_certification.tex` - New file created containing the supervisor certification text with names pre-filled. Wrapped in CJK* environment toggling to avoid compilation issues.
+- `report/main.tex:21` - Imported the `vietnam` package in the preamble to correctly support Vietnamese diacritics under standard LaTeX rendering without breaking existing Chinese CJKutf8 support.
+- `report/main.tex:105` - Injected `\input{sections/supervisor_certification}` right after the `titlepage` environment ends and before acknowledgements/abstract.
+
+**Reasoning.**
+- Using the `vietnam` package allows compilation of Vietnamese names containing characters like "ầ", "ơ", "ễ" which are not natively mapped/defined under standard T1/gbsn font configurations.
+- Temporarily exiting the `CJK*` environment inside `supervisor_certification.tex` prevents the CJK package from attempting to map Vietnamese diacritics to nonexistent Chinese glyphs.
+- Placed the certification immediately after the title page as requested ("sau cover page và trước Abstract").
+
+**Gotchas.**
+- Using pre-filled supervisor and student names required special diacritic support since the title page uses plain/ASCII transliterated names (`Nguyen Lam Tung` and `Tran Giang Son`).
+
+## 2026-07-02 - Three-channel encoding figure + honest limitations pass
+
+**Goal.** The engineered three-channel image input was mentioned in one dense
+methodology sentence but never explained, despite being the subject of a whole
+ablation. Add the `report/img/3channelapproach.drawio.png` diagram with a
+dedicated section, then strengthen the conclusion/limitations so the thesis
+states its own weaknesses before an examiner finds them.
+
+**Changes.**
+- `report/methodology/methodology.tex:80` - collapsed the old preprocessing
+  sentence into a pointer to the new subsection.
+- `report/methodology/methodology.tex` - added subsection
+  `subsec:method_three_channel` ("Engineered Three-Channel Image Encoding")
+  with the drawio figure (`fig:three_channel_encoding`), placed before the
+  image-encoder subsection. Describes raw / CLAHE (clip 2.0, 8x8) / global
+  histeq channels, filter-before-downscale ordering, INTER_AREA resize,
+  per-channel train-split normalization, and why edge channels were rejected.
+  All parameters verified against `src/dataloader/image_channel_preprocessing.py`.
+- `report/results/results.tex:201` - channel-encoding ablation now cross-refs
+  the new figure/subsection.
+- `report/results/results.tex` (Limitations) - added: reduced cohort +
+  non-standard eval split (external comparisons are contextual only), marginal
+  channel-encoding contribution (explicitly disclaimed as a contribution),
+  single-prior limitation, diagnostic cueing in indication text (the honest
+  read of the +0.226 mAP text gain), and negligible vital-sign contribution.
+- `report/conclusion/conclusion.tex` - reframed to separate the strong
+  controlled internal claims (0.3246 -> 0.5662 mAP within a fixed budget) from
+  the contextual external comparisons, and points to the limitations.
+
+**Reasoning.** The caption calls the rightmost panel a false-color
+visualization because the drawio image renders the stack in magenta/green,
+which could mislead a reader into thinking the model input is a color image.
+Limitations were written to match the ablation table numbers exactly (text
+drop 0.3404, vitals drop 0.5666 ~ noise, gray3 0.5633) so no claim overstates
+the evidence.
+
+**Gotchas.** `introduction.tex` reuses `\label{subsec}` five times, producing
+pre-existing "multiply defined" warnings unrelated to this work; left as-is.
+The `raw_clahe_clahe` stats in the code are marked PROVISIONAL, but the report
+describes the shipped `raw_clahe_histeq` mode (raw + CLAHE + global histeq),
+which matches the diagram and has measured stats.
+
+**Follow-ups.** If the third channel actually shipped as strong-CLAHE rather
+than global histeq in the final run, the channel-3 description would need to
+change; confirm which `--third-channel-mode` produced the reported numbers.
+
+## 2026-07-02 - overall pipeline figure into methodology overview
+
+**Goal.** Insert the new `report/img/overall-pipeline.drawio.png` architecture diagram at the start of the methodology "Overview of the Proposed Model" subsection and write matching prose/caption.
+
+**Changes.**
+- `report/methodology/methodology.tex` (subsec:method_overview) - replaced the old commented-out placeholder `\fbox` diagram with a real `\includegraphics` figure (reusing label `fig:model_architecture`) and rewrote the three overview paragraphs to match the diagram: shared ConvNeXt-V2 frontal/lateral encoders with 8x8 spatial pooling, CXR-BERT 2-token text paths, MLP vitals token, prior labels + days-since-prior token, transformer decoder fusion (2 layers, d=640, 8 heads, FFN 1024), ML-Decoder head, ASL.
+
+**Reasoning.** Token counts and fusion config in the caption were verified against `src/model/PriorAwareV6NanoModel.py` and `training/prior_aware_v6nano/config.yaml` in this session (259 current tokens = 256 img + 2 clin + 1 vitals; fusion = nn.TransformerDecoder 2 layers).
+
+**Gotchas.**
+- The drawio figure deliberately omits: prior clinical-indication text path (2 tokens), the no-prior sentinel token, and the 16-latent prior pooler stage. Caption/prose avoid contradicting these; the sentinel and time-gap details are covered later in subsec:method_prior_fusion. If a reviewer wants full fidelity, the figure needs the prior pooler added.
+- Potential inconsistency flagged to user: overview vs "Text Embedding Model" subsection re: frozen text encoder; v6 baseline config has `freeze_text_encoder: false` while the report claims frozen + precomputed embeddings.
+
+**Follow-ups.** Compile the report to confirm the figure renders and doesn't push floats badly; user to verify text-encoder freezing claim against the run actually reported.

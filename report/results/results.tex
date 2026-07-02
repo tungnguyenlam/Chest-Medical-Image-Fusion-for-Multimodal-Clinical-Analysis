@@ -198,7 +198,7 @@ Group B reports incremental model variants trained during development. These row
 \subsubsection{Input Channel Encoding Ablation}
 \label{subsubsec:ablation_channels}
 
-The image encoder expects a three-channel input, which leaves open the question of how a single-channel chest radiograph should be expanded to fill those channels. The proposed model uses an engineered multi-channel encoding, where each channel carries a distinct, separately-normalized representation. The plain \texttt{gray3} baseline simply replicates the raw grayscale image (normalized with mean $0.4721$ and standard deviation $0.3037$) across all three channels.
+The image encoder expects a three-channel input, which leaves open the question of how a single-channel chest radiograph should be expanded to fill those channels. The proposed model uses the engineered multi-channel encoding described in Subsection~\ref{subsec:method_three_channel} (Figure~\ref{fig:three_channel_encoding}), where each channel carries a distinct, separately-normalized representation. The plain \texttt{gray3} baseline simply replicates the raw grayscale image (normalized with mean $0.4721$ and standard deviation $0.3037$) across all three channels.
 
 \textbf{Engineered channel encoding vs.\ replicated grayscale.} The engineered encoding and plain \texttt{gray3} baseline perform almost the same: the engineered encoding is marginally higher on mAP ($0.5662$ vs.\ $0.5633$), mAUROC ($0.9026$ vs.\ $0.9000$), and tail mAP ($0.4076$ vs.\ $0.4059$). The clinical-text-dropped floor is likewise within noise ($0.3404$ vs.\ $0.3367$ mAP). The difference is small, so channel encoding is not a major driver of the final result. The engineered encoding is kept as the selected configuration in this thesis, but the ablation shows that a simple \texttt{gray3} input is a strong and simpler alternative. Most of the performance gain comes from multimodal context and prior-aware components, not from hand-crafted channel encoding.
 
@@ -217,7 +217,7 @@ We use three case studies as qualitative sanity checks: Support Devices (head), 
 \subsubsection{Case Study 1 (Head): Support Devices}
 \label{subsubsec:case_support_devices}
 
-For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:support_devices_text} shows the token-level text attributions, and Figure~\ref{fig:support_devices_modality} shows the modality attribution share.
+For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad-CAM visual attribution maps and Figure~\ref{fig:support_devices_clinical_text} shows the token-level attributions for the current clinical indication, prior clinical indication, and prior radiology report. The remaining detailed attribution panels—including vitals, time delta, prior labels, modality attribution share, and predicted class probability distribution—are provided in Appendix~\ref{sec:appendix_case_study_panels} (Figures~\ref{fig:appendix_fig_support_devices_vitals} and~\ref{fig:appendix_fig_support_devices_context}).
 
 \begin{figure}[H]
      \centering
@@ -240,35 +240,37 @@ For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad
 \end{figure}
 
 \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.85\textwidth]{img/support_devices_text.png}
-    \caption[Token-Level Clinical Text Attributions for Support Devices]{Token-Level Clinical Text Attributions for Support Devices.}
-    \label{fig:support_devices_text}
-\end{figure}
+     \centering
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_cur_clin.png}
+          \caption{Current Clinical Indication}
+          \label{fig:support_devices_cur_clin}
+     \end{subfigure}
+     \vspace{0.3cm}
 
-\begin{figure}[H]
-    \centering
-    \begin{subfigure}[b]{0.48\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{img/support_devices_modality.png}
-        \caption{Normal Scale}
-        \label{fig:support_devices_modality_normal}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}[b]{0.48\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{img/support_devices_modality_log.png}
-        \caption{Log Scale}
-        \label{fig:support_devices_modality_log}
-    \end{subfigure}
-    \caption[Modality Attribution Share for Support Devices]{Modality Attribution Share for Support Devices. (a) Normal scale. (b) Log scale.}
-    \label{fig:support_devices_modality}
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_prv_clin.png}
+          \caption{Prior Clinical Indication}
+          \label{fig:support_devices_prv_clin}
+     \end{subfigure}
+     \vspace{0.3cm}
+
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_text.png}
+          \caption{Prior Radiology Report}
+          \label{fig:support_devices_text}
+     \end{subfigure}
+        \caption[Clinical Text Attributions for Support Devices]{Clinical Text Attributions for Support Devices. (a) Current clinical indication. (b) Prior clinical indication. (c) Prior radiology report.}
+        \label{fig:support_devices_clinical_text}
 \end{figure}
 
 \subsubsection{Case Study 2 (Medium): Nodule}
 \label{subsubsec:case_nodule}
 
-For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:nodule_text} shows the token-level text attributions, and Figure~\ref{fig:nodule_modality} shows the modality attribution share.
+For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:nodule_clinical_text} shows the token-level clinical text attributions, and Figure~\ref{fig:nodule_modality} shows the modality attribution share.
 
 \begin{figure}[H]
      \centering
@@ -291,35 +293,44 @@ For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attrib
 \end{figure}
 
 \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.85\textwidth]{img/nodule_text.png}
-    \caption[Token-Level Clinical Text Attributions for Nodule]{Token-Level Clinical Text Attributions for Nodule.}
-    \label{fig:nodule_text}
+     \centering
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/nodule_cur_clin.png}
+          \caption{Current Clinical Indication}
+          \label{fig:nodule_cur_clin}
+     \end{subfigure}
+     \vspace{0.3cm}
+
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/nodule_prv_clin.png}
+          \caption{Prior Clinical Indication}
+          \label{fig:nodule_prv_clin}
+     \end{subfigure}
+     \vspace{0.3cm}
+
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/nodule_text.png}
+          \caption{Prior Radiology Report}
+          \label{fig:nodule_text}
+     \end{subfigure}
+        \caption[Clinical Text Attributions for Nodule]{Clinical Text Attributions for Nodule. (a) Current clinical indication. (b) Prior clinical indication. (c) Prior radiology report.}
+        \label{fig:nodule_clinical_text}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \begin{subfigure}[b]{0.48\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{img/nodule_modality.png}
-        \caption{Normal Scale}
-        \label{fig:nodule_modality_normal}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}[b]{0.48\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{img/nodule_modality_log.png}
-        \caption{Log Scale}
-        \label{fig:nodule_modality_log}
-    \end{subfigure}
-    \caption[Modality Attribution Share for Nodule]{Modality Attribution Share for Nodule. (a) Normal scale. (b) Log scale.}
+    \includegraphics[width=0.85\textwidth]{img/nodule_modality_log.png}
+    \caption[Modality Attribution Share for Nodule (Log Scale)]{Modality Attribution Share for Nodule (Log Scale).}
     \label{fig:nodule_modality}
 \end{figure}
 
 \subsubsection{Case Study 3 (Tail): Hernia}
 \label{subsubsec:case_hernia}
 
-For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the current-image Grad-CAM map, Figure~\ref{fig:hernia_text} shows the token-level text attribution, and Figure~\ref{fig:hernia_modality} shows the modality attribution share. This case has no linked prior study, so only the current image is shown.
+For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the current-image Grad-CAM map, Figure~\ref{fig:hernia_clinical_text} shows the token-level clinical text attributions, and Figure~\ref{fig:hernia_modality} shows the modality attribution share. This case has no linked prior study, so only the current image is shown.
 
 \begin{figure}[H]
      \centering
@@ -329,28 +340,29 @@ For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the current-image Grad-CAM
 \end{figure}
 
 \begin{figure}[H]
-    \centering
-    \includegraphics[width=0.85\textwidth]{img/hernia_text.png}
-    \caption[Token-Level Clinical Text Attributions for Hernia]{Token-Level Clinical Text Attributions for Hernia.}
-    \label{fig:hernia_text}
+     \centering
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/hernia_cur_clin.png}
+          \caption{Current Clinical Indication}
+          \label{fig:hernia_cur_clin}
+     \end{subfigure}
+     \vspace{0.3cm}
+
+     \begin{subfigure}[b]{0.85\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/hernia_text.png}
+          \caption{Prior Radiology Report}
+          \label{fig:hernia_text}
+     \end{subfigure}
+        \caption[Clinical Text Attributions for Hernia]{Clinical Text Attributions for Hernia. (a) Current clinical indication. (b) Prior radiology report.}
+        \label{fig:hernia_clinical_text}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \begin{subfigure}[b]{0.48\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{img/hernia_modality.png}
-        \caption{Normal Scale}
-        \label{fig:hernia_modality_normal}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}[b]{0.48\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{img/hernia_modality_log.png}
-        \caption{Log Scale}
-        \label{fig:hernia_modality_log}
-    \end{subfigure}
-    \caption[Modality Attribution Share for Hernia]{Modality Attribution Share for Hernia. (a) Normal scale. (b) Log scale.}
+    \includegraphics[width=0.85\textwidth]{img/hernia_modality_log.png}
+    \caption[Modality Attribution Share for Hernia (Log Scale)]{Modality Attribution Share for Hernia (Log Scale).}
     \label{fig:hernia_modality}
 \end{figure}
 
@@ -366,15 +378,25 @@ The temporal label analysis in Section~\ref{subsec:eda_prior_gaps} (Figure~\ref{
 \subsection{Limitations}
 \label{subsec:discussion_limitations}
 
-The study has several limitations.
+The study has several limitations. We state them explicitly here because they define the boundary of what the reported numbers can and cannot claim.
+
+\textbf{Reduced Training Cohort and Non-Standard Evaluation Split}: All models were trained and evaluated on a filtered cohort of 5{,}067 patients (28{,}245 images) sampled from MIMIC-CXR, which is roughly an order of magnitude smaller than the full CXR-LT-2023 training set used by the published reference methods. The test split is a patient-level split of this cohort, not the official CXR-LT-2023 test set. In addition, the cohort requires pre-interpretation clinical text to be present, which biases the sample toward emergency department encounters with linked documentation. Consequently, the side-by-side numbers against published CheXFusion and CaMCheX results are contextual only: they demonstrate that the proposed model is competitive in our setting, but they do not establish superiority on the official benchmark, and absolute values could shift under full-scale training and official evaluation.
 
 \textbf{Reduced Image Resolution}: We resized images to $512 \times 512$ pixels. While sufficient for larger findings like cardiomegaly or pleural effusion, this downsampling may lose fine-grained visual details such as subtle pneumothorax lines, micro-nodules, or early interstitial markings.
+
+\textbf{Marginal Contribution of the Engineered Channel Encoding}: The engineered three-channel encoding (Subsection~\ref{subsec:method_three_channel}) was retained in the final configuration, but the controlled ablation in Subsection~\ref{subsubsec:ablation_channels} shows that its advantage over a plain replicated-grayscale input is within noise ($0.5662$ vs.\ $0.5633$ mAP). We therefore do not claim the channel engineering as a contribution to performance; it adds preprocessing complexity whose main practical benefit is deterministic, cacheable inputs. The performance gains reported in this work come from multimodal context and prior-aware fusion, not from image preprocessing.
+
+\textbf{Single Prior Study}: The temporal context is limited to the single most recent prior study. Patients with long imaging histories may have informative earlier studies that the current design cannot access, and the model cannot represent trends across more than one time step (e.g., steady progression versus fluctuation).
 
 \textbf{Frozen Clinical Text Encoder}: The language model (\texttt{BiomedVLP-CXR-BERT}) was kept frozen, or its embeddings were precomputed, to save compute. Consequently, the clinical text representation was not fine-tuned end-to-end for the classification objective, potentially limiting its alignment with the multimodal fusion layers.
 
 \textbf{Label Noise}: The CXR-LT-2023 labels are derived automatically from free-text radiology reports using natural language processing toolkits \cite{holste2024cxrlt}. These automated labels contain inherent noise and occasional misclassifications, which can introduce bias into model training and evaluation.
 
 \textbf{Single-Dataset Validation}: Models were trained and evaluated on splits derived from the MIMIC-CXR dataset. While patient-level splits prevent data leakage, the lack of external validation on datasets from other hospital systems limits the ability to evaluate generalizability to different patient populations and imaging protocols.
+
+\textbf{Diagnostic Cueing in Indication Text}: The largest single modality gain comes from clinical indication text ($0.3404 \rightarrow 0.5662$ mAP when added). Although indication and history text is available before interpretation and is therefore legitimate input, it frequently names the suspected diagnosis (e.g., ``evaluate for pneumonia''), so part of this gain is a cueing effect rather than independent evidence extracted from the radiograph. The reported full-model performance should be understood as the performance of a system that reads the referring clinician's suspicion, not of a purely image-driven diagnostic model. The clinical-text-dropped configuration ($0.3404$ mAP) provides the honest floor for deployment settings where such text is unavailable or unreliable.
+
+\textbf{Negligible Vital-Sign Contribution}: Dropping structured vital signs changes mAP from $0.5662$ to $0.5666$, which is within run-to-run noise. In the current design, a single MLP-projected token may be too coarse for the fusion module to exploit, or the predictive signal in a one-time ED vitals snapshot may simply be small once indication text is present. We keep vitals in the final model for completeness, but we do not claim they improve performance.
 
 \textbf{Shortcut Learning Risk}: While prior-study information improves classification performance, it carries a risk of shortcut learning. The model might learn to rely excessively on historical labels or reports rather than analyzing the current radiograph, which could lead to errors if an acute, new pathology develops that was not present in the past. This was mitigated using prior dropout, which reduces but does not eliminate shortcut risk.
 

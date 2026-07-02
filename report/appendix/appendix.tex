@@ -42,3 +42,62 @@
     \caption[Comparison of per-group AUROC]{Comparison of per-group AUROC.}
     \label{fig:appendix_per_group_auroc}
 \end{figure}
+
+\newpage
+\section{Extended Case Study Attribution Panels (Support Devices)}
+\label{sec:appendix_case_study_panels}
+
+Figure~\ref{fig:appendix_fig_support_devices_vitals} shows the current and prior vitals attributions for Case Study 1 (Support Devices), and Figure~\ref{fig:appendix_fig_support_devices_context} shows the modality attribution share (log scale), time delta, prior labels, and predicted class probability distribution.
+
+\begin{figure}[H]
+     \centering
+     \begin{subfigure}[b]{0.49\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_vitals.png}
+          \caption{Current Vitals Attribution}
+          \label{fig:support_devices_vitals}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[b]{0.49\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_prior_vitals.png}
+          \caption{Prior Vitals Attribution}
+          \label{fig:support_devices_prior_vitals}
+     \end{subfigure}
+     \caption[Vitals Attribution for Support Devices]{Vitals Attribution for Support Devices. (a) Current vitals attribution. (b) Prior vitals attribution.}
+     \label{fig:appendix_fig_support_devices_vitals}
+\end{figure}
+
+\begin{figure}[H]
+     \centering
+     \begin{subfigure}[b]{0.49\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_modality_log.png}
+          \caption{Modality Attribution Share (Log Scale)}
+          \label{fig:support_devices_modality_log}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[b]{0.49\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_time_delta.png}
+          \caption{Time Delta Attribution}
+          \label{fig:support_devices_time_delta}
+     \end{subfigure}
+     
+     \vspace{0.2cm}
+     \begin{subfigure}[b]{0.49\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_prior_label.png}
+          \caption{Prior Label Attribution}
+          \label{fig:support_devices_prior_label}
+     \end{subfigure}
+     \hfill
+     \begin{subfigure}[b]{0.49\textwidth}
+          \centering
+          \includegraphics[width=\textwidth]{img/support_devices_class_dist.png}
+          \caption{Predicted Class Probability Distribution}
+          \label{fig:support_devices_class_dist}
+     \end{subfigure}
+     \caption[Contextual and Modality Attributions for Support Devices]{Contextual and Modality Attributions for Support Devices. (a) Modality attribution share (log scale). (b) Time delta attribution. (c) Prior label attribution. (d) Predicted class probability distribution.}
+     \label{fig:appendix_fig_support_devices_context}
+\end{figure}

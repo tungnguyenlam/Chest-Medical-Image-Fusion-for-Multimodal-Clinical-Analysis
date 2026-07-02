@@ -26,58 +26,25 @@ where each output dimension \(\hat{y}_{ic}\) corresponds to the predicted probab
 \subsection{Overview of the Proposed Model}
 \label{subsec:method_overview}
 
-Our model encodes each modality separately and fuses the resulting tokens with a transformer \cite{vaswani2017attention}. First, we process each input modality with a dedicated encoder. Chest X-ray images are encoded using a lightweight visual backbone. Clinical indication text is encoded using a radiology-domain language model. Vital signs are normalized and projected through a small multilayer perceptron (MLP) together with their missingness mask. When a prior study exists, we encode it separately and use it as temporal context.
+Figure~\ref{fig:model_architecture} shows the overall pipeline of the proposed prior-aware multimodal model. The model encodes each modality separately and fuses the resulting tokens with a transformer \cite{vaswani2017attention}. Chest X-ray views are encoded by a shared ConvNeXt-V2 visual backbone \cite{woo2023convnextv2}, with separate routing for frontal and lateral views, and the resulting feature grids are spatially pooled to $8 \times 8$ tokens per view. Clinical text is encoded using the radiology-domain CXR-BERT language model \cite{boecking2022biovil} and expanded into a small number of fusion tokens. Vital signs are normalized and projected through a small multilayer perceptron (MLP) together with their missingness mask. When a prior study exists, the same shared encoders process its images, text, and vital signs, and two additional prior-only signals are added: the prior label vector and a learned embedding of the time gap between the two studies.
 
-After encoding, all modality features are projected into a shared latent dimension. Current-study information forms the target stream, while prior-study information forms a memory stream. The fusion module first models interactions among current-study tokens and then allows the current study to attend to prior-study context through cross-attention. This design keeps the current examination as the main prediction target while allowing historical information to support interpretation.
+After encoding, all modality features are projected into a shared latent dimension. Current-study tokens form the target stream, while prior-study tokens form a memory stream. The fusion module is a stack of transformer decoder layers: each layer first models interactions among current-study tokens through self-attention and then lets the current study attend to the prior-study context through cross-attention. This asymmetric design keeps the current examination as the main prediction target while allowing historical information to support interpretation.
 
-The final fused representation is passed to a multi-label classification head, which outputs one logit for each target finding. The model is trained using an imbalance-aware loss function suitable for long-tailed multi-label classification.
+The final fused representation is passed to a multi-label classification head with learnable label queries, which outputs one logit for each of the $26$ target findings. The model is trained with an imbalance-aware asymmetric loss suitable for long-tailed multi-label classification. Each component is detailed in the subsections that follow.
 
-% \begin{figure}[H]
-%     \centering
-%     % \includegraphics[width=0.95\textwidth]{figures/model_architecture.png}
-%     \fbox{\parbox{0.9\textwidth}{
-%         \centering
-%         \vspace{1cm}
-%         \textbf{Proposed Prior-Aware Multimodal Architecture Diagram}
-%         \vspace{0.5cm}
-%         
-%         \begin{tabular}{ccc}
-%             \textbf{Target Stream (Current Study)} & & \textbf{Memory Stream (Prior Study)} \\
-%             \hline
-%             Current X-Ray Views (up to 4) & & Prior X-Ray Views (up to 4) \\
-%             $\downarrow$ & & $\downarrow$ \\
-%             Timm Image Encoder (ConvNeXt) & & Timm Image Encoder (ConvNeXt) \\
-%             \hline
-%             Current Clinical Text & & Prior Clinical Report / Text \\
-%             $\downarrow$ & & $\downarrow$ \\
-%             BiomedVLP-CXR-BERT & & BiomedVLP-CXR-BERT \\
-%             \hline
-%             Structured Vitals \& Missingness Mask & & Prior Vitals \& Missingness Mask \\
-%             $\downarrow$ & & $\downarrow$ \\
-%             MLP Projection Layer & & MLP Projection Layer \\
-%         \end{tabular}
-%         
-%         \vspace{0.5cm}
-%         $\downarrow$ \\
-%         \textbf{Current Study Fusion (Self-Attention over Target Stream Tokens)} \\
-%         $\downarrow$ \\
-%         \textbf{Temporal Cross-Attention (Target Stream attends to Memory Stream Tokens)} \\
-%         $\downarrow$ \\
-%         \textbf{Classification Head (ML-Decoder-inspired Head with 26 Queries)} \\
-%         $\downarrow$ \\
-%         \textbf{26 Class Probabilities (ASL Loss Optimization)} \\
-%         \vspace{1cm}
-%     }}
-%     \caption[Overview of the proposed prior-aware multimodal classification framework]{Overview of the proposed prior-aware multimodal chest X-ray classification framework. Current-study image, text, and vital-sign tokens form the target stream, while prior-study information forms the memory stream used through cross-attention.}
-%     \label{fig:model_architecture}
-% \end{figure}
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=\textwidth]{img/overall-pipeline.drawio.png}
+    \caption[Overview of the proposed prior-aware multimodal classification pipeline]{Overview of the proposed prior-aware multimodal chest X-ray classification pipeline. The current study (left) and the optional prior study (right) are processed by shared encoders: a ConvNeXt-V2 backbone for frontal and lateral views with spatial pooling to $8 \times 8$ tokens per view (up to $128$ image tokens per view type), a frozen CXR-BERT encoder producing $2$ fusion tokens per text field, and a shared MLP producing $1$ vital-sign token. Prior labels are combined with the days-since-prior time-gap embedding and projected into $1$ additional prior token. Current-study tokens form the target stream and prior-study tokens form the memory stream of a transformer decoder fusion module ($2$ layers, $d=640$, $8$ heads, feed-forward width $1024$), whose output is classified by a multi-label decoder head into $26$ logits trained with the asymmetric loss.}
+    \label{fig:model_architecture}
+\end{figure}
 
 \subsection{Data Preprocessing}
 \label{subsec:method_preprocessing}
 
 Before encoding the inputs, we standardize the data, handle missing values, and remove leakage-prone fields:
 
-\textbf{Image Preprocessing}: Chest X-ray images are resized to a resolution of $512 \times 512$ pixels. The final model uses a three-channel chest X-ray input. The three channels are the raw grayscale image, a Contrast Limited Adaptive Histogram Equalization (CLAHE) enhanced image \cite{zuiderveld1994clahe}, and a histogram-equalized image. This keeps the input compatible with standard image backbones while giving the model additional contrast information. A plain three-channel grayscale input is used only as an ablation in Section~\ref{sec:results}. Pixel values are z-score normalized using the mean and standard deviation computed over the training subset.
+\textbf{Image Preprocessing}: Chest X-ray images are converted into an engineered three-channel input at a resolution of $512 \times 512$ pixels, where the three channels carry the raw grayscale image and two contrast-enhanced representations. This encoding is described in detail in Subsection~\ref{subsec:method_three_channel}. A plain three-channel grayscale input is used only as an ablation in Section~\ref{sec:results}.
 
 \textbf{View Handling}: Studies with multiple radiographic views are limited to a maximum of $4$ views. Views are classified based on their metadata label (\texttt{ViewPosition}): AP, PA, or FRONTAL are mapped to a frontal code ($1$), LATERAL or LL are mapped to a lateral code ($2$), and any other view is coded as $0$. Studies with fewer than $4$ views are zero-padded, and a binary view attention mask is generated so that the transformer fusion layer ignores the padding tokens.
 
@@ -106,6 +73,28 @@ This mask vector \(M_i = [m_{i1}, \dots, m_{iD}]^\top\) is concatenated to the n
 \textbf{Prior-Study Selection}: To compile longitudinal patient history, studies are sorted chronologically per patient. We use a chronological shift to select the immediately previous study as the prior. This chronological constraint prevents the model from using future information.
 
 \textbf{Label Construction}: The binary targets correspond to the $26$ long-tailed pathologies defined by the CXR-LT-2023 dataset. Label vectors are represented as $26$-dimensional multi-hot arrays.
+
+\subsection{Engineered Three-Channel Image Encoding}
+\label{subsec:method_three_channel}
+
+Chest radiographs are single-channel grayscale images, while standard pretrained image backbones expect three input channels. Instead of simply replicating the grayscale image three times, the final model fills the three channels with complementary representations of the same radiograph, as illustrated in Figure~\ref{fig:three_channel_encoding}:
+
+\begin{itemize}
+    \item \textbf{Channel 1 (Raw)}: the unmodified grayscale image, preserving the original intensity distribution.
+    \item \textbf{Channel 2 (CLAHE)}: a Contrast Limited Adaptive Histogram Equalization enhancement \cite{zuiderveld1994clahe} with clip limit $2.0$ and an $8 \times 8$ tile grid. CLAHE performs local, region-wise contrast enhancement, which makes low-contrast structures such as lung markings more visible without over-amplifying noise.
+    \item \textbf{Channel 3 (Histogram Equalization)}: a global histogram equalization of the full image, which redistributes intensities over the whole dynamic range and complements the local enhancement of CLAHE.
+\end{itemize}
+
+Both enhancement operations are applied at the native input resolution \emph{before} downscaling, so that high-frequency structure is enhanced first and only then resampled. Each channel is downscaled independently to $512 \times 512$ pixels using area interpolation and the three channels are stacked into a single $512 \times 512 \times 3$ tensor. Each channel is then z-score normalized with its own per-channel mean and standard deviation computed on the training split only. All three channels remain dense, full-range signals with comparable standard deviations, which keeps per-channel normalization stable; edge-style third channels (e.g., Sobel or Laplacian filters) were rejected during development because their near-degenerate statistics amplify noise under normalization.
+
+The entire encoding is deterministic, which allows the processed tensors to be cached on disk and keeps per-channel normalization statistics stable across runs. The plain \texttt{gray3} baseline, which replicates the raw grayscale image across all three channels, is compared against this engineered encoding in the channel-encoding ablation in Section~\ref{sec:results}.
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/3channelapproach.drawio.png}
+    \caption[Engineered three-channel image encoding pipeline]{Engineered three-channel image encoding pipeline. The raw grayscale radiograph is enhanced with CLAHE (local contrast) and global histogram equalization at the native resolution. The raw and two enhanced images are each downscaled to $512 \times 512$ and stacked into a three-channel input. The rightmost panel is a false-color visualization of the stacked channels; the model input is not a color image.}
+    \label{fig:three_channel_encoding}
+\end{figure}
 
 \subsection{Chest X-Ray Image Encoder}
 \label{subsec:method_image_encoder}
