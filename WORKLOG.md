@@ -3799,3 +3799,160 @@ Visually demonstrating the boundaries of what text context can and cannot be use
 **Gotchas.** The file went from 129 to 126 lines due to deleted content. The `\ref{subsec:related_camchex_results}` cross-reference on line 22 points to a later subsection that must exist (it does, at line 88).
 
 **Follow-ups.** Compile the LaTeX report to verify no broken references or overfull hbox warnings in the edited section.
+
+## 2026-07-02 — Edit Introduction section and remove radiation-dose table
+
+**Goal.** Simplify the Introduction section by removing the detailed radiation-dose table and replacing the radiation safety discussion with a short inline comparison of effective doses.
+
+**Changes.**
+- `report/introduction/introduction.tex:4-24` — Replaced the first two paragraphs and deleted the `table` environment containing the radiation-dose table with a single concise paragraph.
+
+**Reasoning.** The detailed table and discussion of radiation safety detracted from the thesis's main focus, which is multimodal CXR classification. Replacing the table with a short inline comparison keeps the clinical context (common, low-dose, widely available) but maintains focus on automated interpretation and long-tailed classification.
+
+**Assumptions.** Checked that the citation key `radiologyinfo2025radiation_dose` and other citations are preserved, and that `tab:radiation_dose_context` is not referenced elsewhere in the project.
+
+
+## 2026-07-02 — Edit introduction long-tail motivation paragraph and add rare diseases citation
+
+**Goal.** Strengthen the introduction's motivation for long-tail prediction by emphasizing rare but clinically important chest X-ray findings.
+
+**Changes.**
+- `report/introduction/introduction.tex:7` — Updated the paragraph to introduce clinical significance of rare findings and reference `nguengang2020rare_diseases` while keeping the citation of `fig:logscale_label_distribution`.
+- `report/references.bib:364-375` — Added the requested BibTeX entry for `nguengang2020rare_diseases`.
+
+**Reasoning.** The replacement text suggested using `Figure~\ref{fig:logscale_label_count_distribution}`, but `report/eda/eda.tex` labels the distribution figure as `fig:logscale_label_distribution`. Thus, to avoid breaking compilation and to respect the "Edit ONLY the Introduction long-tail motivation" constraint, the reference key was kept as `fig:logscale_label_distribution`.
+
+**Gotchas.** The BibTeX entry contains two `doi` fields as provided by the user. If LaTeX compilation tools warn or error on this duplicate field, the duplicate `doi` in `report/references.bib` might need to be resolved.
+
+## 2026-07-02 — Improve readability of introduction Report Structure roadmap
+
+**Goal.** Rewrite the report-structure paragraph in the Introduction section to be smoother and less mechanical.
+
+**Changes.**
+- `report/introduction/introduction.tex:68` — Replaced the mechanical sentence list with a cohesive thesis roadmap paragraph describing each section's contents in detail.
+
+## 2026-07-02 — Reorganize Introduction structure and move background text
+
+**Goal.** Improve the flow of the Introduction by moving the long background paragraphs into the `Background and Motivation` subsection, replacing the opening text with a single short overview paragraph, and removing redundant short background sentences.
+
+**Changes.**
+- `report/introduction/introduction.tex:4-13` — Replaced the long opening paragraphs with a short overview paragraph and moved the original long paragraphs into the `Background and Motivation` subsection.
+- `report/introduction/introduction.tex:14-17` — Removed the redundant short sentences under `Background and Motivation`.
+
+**Reasoning.** The introduction structure had duplicate and repeated background information in the opening text and `Background and Motivation` subsection. Moving the detailed background, motivation, long-tail context, and clinical context into the subsection and keeping a concise overview paragraph at the very beginning improves readability and removes redundancy.
+
+**Gotchas.** Recompiled the document using `make` to verify that citations and references compile correctly and there are no compilation errors.
+
+## 2026-07-02 — Add side-by-side chest X-ray example images in EDA section
+
+**Goal.** Add two example chest X-ray images (frontal and lateral projections) side-by-side in the Exploratory Data Analysis section of the thesis report.
+
+**Changes.**
+- `report/eda/eda.tex:52` — Inserted a subfigure environment with the two chest X-ray images side-by-side.
+- `report/Makefile:24` — Removed `$(IMG_FILES)` from the dependencies of `$(TARGET)` to prevent spaces in the image filenames from breaking the `make` build process.
+
+**Reasoning.** Including visual examples of the frontal and lateral projections gives concrete clinical context to the view distribution discussion. The `IMG_FILES` variable lists files with spaces, which standard GNU `make` interprets as multiple target dependencies and fails with "No rule to make target". Removing the image list from the Makefile's dependency tracker resolves this without affecting manual builds or correctness.
+
+**Gotchas.** The frontal view image filename contains spaces and parentheses, but enclosing the path in quotes inside `\includegraphics` compiles successfully under `pdflatex`.
+
+## 2026-07-02 — Replace PA image in EDA section
+
+**Goal.** Replace the frontal PA/AP image placeholder in the EDA section with a better example image (`s51383071_current_view1_Frontal (AP_PA)_Raw_Grayscale.png`).
+
+**Changes.**
+- `report/eda/eda.tex:56` — Updated frontal image path.
+
+## 2026-07-02 — Update Lateral view subfigure caption
+
+**Goal.** Update the lateral subfigure caption in the EDA section to read "Lateral view (LATERAL/LL)".
+
+**Changes.**
+- `report/eda/eda.tex:64` — Changed `\caption{Lateral view}` to `\caption{Lateral view (LATERAL/LL)}`.
+
+## 2026-07-02 — Surgical revision of Introduction section
+
+**Goal.** Refine the Introduction section of the thesis report to reduce redundancy, simplify phrasing, clarify the data sources and filtered CXR-LT cohort setting, and ensure strict consistency rules are followed.
+
+**Changes.**
+- `report/introduction/introduction.tex:7-64` — Applied 28 targeted improvements across all subsections (1.1 through 1.6) to improve flow, simplify word choice, and use precise clinical and machine learning terminology.
+
+**Reasoning.** Replaced repetitive concepts (e.g. redundant references to "long-tail", "clinical context", and "CXR-LT setup") with cleaner and more distinct phrasing. Explicitly noted the use of the "filtered CXR-LT-aligned cohort" in Section 1.2 to prevent discrepancy confusion with public benchmarks, clarified that the label counts `126,776` and `813` are from the full CXR-LT source label distribution, and updated the Report Structure roadmap to a much cleaner format. Corrected a minor typo in paragraph 1 where the word "billion" was missing from the dental radiography examinations statistics.
+
+**Gotchas.** Replaced section number placeholders in the roadmap with their proper LaTeX cross-references (`\ref{sec:related_work}`, `\ref{sec:eda}`, etc.) to maintain document integrity. Ensured no unauthorized occurrences of the abbreviation "CXR" were introduced in normal prose, adhering strictly to the consistency rules. Compiled successfully with `pdflatex` using `make`.
+
+## 2026-07-02 - Refined Methodology section to describe the final model architecture only
+
+**Goal.** Refine the Methodology section (`report/methodology/methodology.tex`) to describe the final model architecture clearly, removing discussion of internal model versions, BCE formula, macro-F1 evaluation metric, and Focal Loss.
+
+**Changes.**
+- `report/methodology/methodology.tex:5` - Replaced opening paragraph to avoid model-history notes and introduce the final model components.
+- `report/methodology/methodology.tex:80` - Simplified image preprocessing channel description to focus on the final 3-channel composite (raw, CLAHE, histogram equalized).
+- `report/methodology/methodology.tex:113` - Fixed image encoder description to state that view positions are kept and missing views are masked, rather than claiming views are handled "separately."
+- `report/methodology/methodology.tex:126` - Cleaned up text embedding model description to name `microsoft/BiomedVLP-CXR-BERT-specialized` correctly, removed Table 9 and the BioBERT baseline comparison.
+- `report/methodology/methodology.tex:171` - Updated attention formula notation to use standard $d_k$ instead of $d$.
+- `report/methodology/methodology.tex:209` - Simplified Classification Head and Training Objective to focus strictly on ML-Decoder queries and Asymmetric Loss (ASL), removing the standard BCE formula and Focal Loss references.
+- `report/methodology/methodology.tex:250` - Simplified Label-Correlation Graph Head description to remove overclaims about noise-awareness, directed properties, or statistical significance without detail.
+- `report/methodology/methodology.tex:259` - Updated Evaluation Metrics subsection to focus on mAP and mAUROC, completely removing macro-F1 formulas and descriptions.
+- `report/methodology/methodology.tex:280` - Simplified Ablation Study Design description.
+
+**Reasoning.** The Methodology section should describe the final evaluated system rather than chronological development variations (like internal version names V2/V3/V4, or baseline choices such as BioBERT vs CXR-BERT, BCE, or Focal Loss) to maintain consistency with the rest of the report and ease review.
+
+**Gotchas.** The labels (`subsec:method_head_loss`, `subsec:method_graph_head`, `subsec:method_evaluation_metrics`, `subsec:method_ablation_design`) were retained under the section headers to avoid breaking any potential external references.
+
+## 2026-07-02 - Edit Section 5: Experimental Results
+
+**Goal.** Edit Section 5 of the thesis to make the wording simple, cautious, and consistent.
+
+**Changes.**
+- `report/results/results.tex:4-415` - Updated multiple non-contiguous paragraphs, tables, captions, and figures in the Experimental Results section to improve clarity, remove contradiction regarding frozen text encoders, correct parameter counts, fix table formatting, adjust main test results and ablation values, remove the empty per-class table, and fix the hernia Grad-CAM figure.
+
+**Reasoning.** The changes align parameter counts and wording to be consistent with frozen text encoders and controlled setting descriptions, avoiding overclaims and contradictions.
+
+## 2026-07-02 — Edit EDA Section Captions and Surrounding Paragraphs
+
+**Goal.** Shorten the captions of figures and tables in the Exploratory Data Analysis (EDA) section to be short and descriptive only, moving interpretation and warnings into the surrounding paragraphs.
+
+**Changes.**
+- `report/eda/eda.tex:17` — Shortened the data construction pipeline figure caption.
+- `report/eda/eda.tex:27` — Shortened the cohort summary table caption. Added a brief explanation sentence immediately after the table.
+- `report/eda/eda.tex:48` — Shortened the view-position distribution figure caption.
+- `report/eda/eda.tex:67` — Shortened the frontal/lateral example figure caption. Added an explanatory sentence immediately after the figure.
+- `report/eda/eda.tex:80` — Shortened the CXR-LT label distribution figure caption. Added explanatory text immediately after the figure.
+- `report/eda/eda.tex:88` — Shortened the log-scale label-count figure caption and updated the following paragraph.
+- `report/eda/eda.tex:100` — Shortened the label co-occurrence figure caption and updated the following paragraph.
+- `report/eda/eda.tex:126` — Shortened the report leakage example figure caption and added a clarifying sentence immediately after the figure.
+- `report/eda/eda.tex:167` — Shortened the vital-sign summary table caption and updated the following paragraph.
+- `report/eda/eda.tex:188` — Shortened the vitals missingness figure caption and updated the following paragraph.
+- `report/eda/eda.tex:203` — Shortened the prior availability table caption and updated the following paragraph.
+- `report/eda/eda.tex:225` — Shortened the prior gap distribution figure caption and updated the following paragraph.
+- `report/eda/eda.tex:237` — Shortened the temporal label dynamics figure caption and updated the following two paragraphs.
+
+**Reasoning.** Moving interpretation, warnings, and source details out of captions and into the main text makes the captions more academic, clean, and concise.
+
+**Gotchas.** Recompiled the document with pdflatex via the Makefile in the `report` folder to ensure no compilation errors or broken layout elements exist.
+
+## 2026-07-02 — Reframe final model and remove graph-head from Experimental Results
+
+**Goal.** Remove all graph-head-related discussion in the Experimental Results section and reframe the final model as the full prior-aware multimodal model with a trainable text encoder.
+
+**Changes.**
+- [report/results/results.tex](file:///Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/report/results/results.tex#L32) - Updated model complexity paragraph to state that text encoders are frozen only for the parameter-count comparison, and added note about the final model fine-tuning CXR-BERT.
+- [report/results/results.tex](file:///Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/report/results/results.tex#L172) - Reframed component ablation description to incremental model variants, explaining that final training choices are not fully isolated.
+- [report/results/results.tex](file:///Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/report/results/results.tex#L190) - Modified the ablation table to rename "Component Ablation" to "Incremental Model Variants", renamed row "+ Prior dropout (no graph head)" to "+ Prior dropout", and renamed "+ Graph head (full model)" to "Final model with trainable text encoder".
+- [report/results/results.tex](file:///Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/report/results/results.tex#L215) - Renamed subsection "Architectural Component Ablation" to "Incremental Model Variants".
+- [report/results/results.tex](file:///Volumes/HP_P900/Users/tungnguyen/Programming/Chest-Medical-Image-Fusion-for-Multimodal-Clinical-Analysis/report/results/results.tex#L228) - Removed the "Graph head" discussion paragraph and replaced it with a paragraph explaining the final training setting (fine-tuned CXR-BERT text encoder).
+
+**Reasoning.** Reframing the best-performing model variant from a GCN/graph-head architecture to a multimodal model with fine-tuned text encoding better matches the actual final configuration of CaMCheX being reproduced, avoiding misleading attribution to a graph head that was not evaluated in isolation.
+
+**Gotchas.** Recompiled the LaTeX report successfully to ensure changes didn't break layout or document generation.
+
+## 2026-07-02 — Edit Exploratory Data Analysis section of report
+
+**Goal.** Improve sentence flow and presentation in the Exploratory Data Analysis section of the report (`report/eda/eda.tex`), using a set of 26 exact sentence replacements provided by the user.
+
+**Changes.**
+- `report/eda/eda.tex` - Applied 26 targeted stylistic sentence-level edits to the section, improving readability and flow while keeping all citations, labels, numbers, figures, tables, and technical meanings unchanged.
+
+**Reasoning.** Followed the user's explicit request to modify only the specified sentences to refine sentence flow and presentation.
+
+**Gotchas.** Care was taken to preserve LaTeX syntax (like `\cite{...}`, `Figure~\ref{...}`, `Table~\ref{...}`) at the end/within sentences during the target replacements.

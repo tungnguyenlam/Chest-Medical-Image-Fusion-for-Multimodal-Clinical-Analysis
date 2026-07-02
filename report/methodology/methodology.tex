@@ -2,7 +2,7 @@
 \section{Methodology}
 \label{sec:methodology}
 
-We adapt CaMCheX for long-tailed chest X-ray classification using a lightweight image encoder, frozen or precomputed text embeddings, compact tokens, and prior-aware fusion. We describe only the final architecture used in the main experiments; Section~\ref{sec:results} treats earlier variants as ablations.
+We adapt the CaMCheX multimodal idea to long-tailed chest X-ray classification under a limited compute budget. The final model uses current chest X-ray images, pre-interpretation clinical text, structured vital signs, and prior-study context. This section describes only the final architecture used in the main experiments. Earlier design choices are discussed only as ablations in Section~\ref{sec:results}.
 
 \subsection{Problem Formulation}
 \label{subsec:method_problem}
@@ -77,7 +77,7 @@ The final fused representation is passed to a multi-label classification head, w
 
 Before encoding the inputs, we standardize the data, handle missing values, and remove leakage-prone fields:
 
-\textbf{Image Preprocessing}: Chest X-ray images are resized to a resolution of $512 \times 512$ pixels. To maintain compatibility with standard pre-trained architectures, single-channel grayscale chest X-rays are duplicated into a 3-channel layout. Alternatively, an optional preprocessing channel mode creates a 3-channel composite combining the raw image, a Contrast Limited Adaptive Histogram Equalization (CLAHE) enhanced image \cite{zuiderveld1994clahe}, and a histogram-equalized channel to emphasize contrast details. Pixel values are z-score normalized using the mean and standard deviation computed over the training subset.
+\textbf{Image Preprocessing}: Chest X-ray images are resized to a resolution of $512 \times 512$ pixels. The final model uses a three-channel chest X-ray input. The three channels are the raw grayscale image, a Contrast Limited Adaptive Histogram Equalization (CLAHE) enhanced image \cite{zuiderveld1994clahe}, and a histogram-equalized image. This keeps the input compatible with standard image backbones while giving the model additional contrast information. A plain three-channel grayscale input is used only as an ablation in Section~\ref{sec:results}. Pixel values are z-score normalized using the mean and standard deviation computed over the training subset.
 
 \textbf{View Handling}: Studies with multiple radiographic views are limited to a maximum of $4$ views. Views are classified based on their metadata label (\texttt{ViewPosition}): AP, PA, or FRONTAL are mapped to a frontal code ($1$), LATERAL or LL are mapped to a lateral code ($2$), and any other view is coded as $0$. Studies with fewer than $4$ views are zero-padded, and a binary view attention mask is generated so that the transformer fusion layer ignores the padding tokens.
 
@@ -110,7 +110,7 @@ This mask vector \(M_i = [m_{i1}, \dots, m_{iD}]^\top\) is concatenated to the n
 \subsection{Chest X-Ray Image Encoder}
 \label{subsec:method_image_encoder}
 
-The image encoder extracts visual features from the current chest X-ray study. Because chest X-ray studies may contain different view positions, the model handles frontal and lateral views separately. Each available view is passed through a lightweight ConvNeXt-V2 visual backbone \cite{woo2023convnextv2} to obtain spatial feature maps. These feature maps are then projected to the transformer latent dimension using a convolutional projection layer. Formally, for a set of image views \(I_i\), the image representation \(H_i^{img}\) is extracted as:
+The image encoder extracts visual features from the current chest X-ray study. Because chest X-ray studies may contain different view positions, the model keeps view-position information and masks missing view slots. Each available view is passed through a lightweight ConvNeXt-V2 visual backbone \cite{woo2023convnextv2} to obtain spatial feature maps. These feature maps are then projected to the transformer latent dimension using a convolutional projection layer. Formally, for a set of image views \(I_i\), the image representation \(H_i^{img}\) is extracted as:
 \begin{equation}
     H_i^{img} = E_{img}(I_i) \in \mathbb{R}^{N_{img} \times d}
 \end{equation}
@@ -123,25 +123,11 @@ To preserve spatial information, two-dimensional positional embeddings are added
 
 The text modality consists of pre-imaging clinical indication and history text. Post-interpretation report sections such as findings and impression are excluded because they may contain the target diagnosis and would therefore introduce label leakage.
 
-The final implementation uses a radiology-domain CXR-BERT encoder (\texttt{microsoft/BiomedVLP-CXR-BERT-specialized}) to obtain text representations from the clinical indication. This choice is motivated by the domain mismatch between general biomedical text and radiology-specific language: CXR-BERT is trained on chest radiology reports and multimodal image--text contrastive data, making it more closely matched to MIMIC-CXR report language than a general biomedical encoder such as BioBERT \cite{lee2020biobert}. To reduce computational cost, the text encoder is frozen and text embeddings are precomputed before multimodal training. A trainable projection layer then maps the text representation into the shared fusion dimension used by the multimodal transformer.
+The final implementation uses the radiology-domain CXR-BERT encoder microsoft/BiomedVLP-CXR-BERT-specialized to obtain text representations from the clinical indication and history text. This choice is suitable because CXR-BERT is trained on chest radiology language and image-text data, making it closer to MIMIC-CXR report language than a general biomedical encoder. To reduce computational cost, the text encoder is frozen and text embeddings are precomputed before multimodal training. A trainable projection layer maps the text representation into the shared fusion dimension.
 
 For each text stream, the model uses the final \texttt{[CLS]} representation as a compact sentence-level embedding with dimensionality 768, passed through a learned linear projection into the multimodal fusion width. The projection expands each text embedding into a small number of fusion tokens, controlled by \(n_{\text{text}}\). In the main experiments, \(n_{\text{text}}=2\), so each clinical text field contributes two learned text tokens of width \(d_{\text{model}}\). Segment embeddings are added so that the fusion module can distinguish current clinical indication, prior clinical indication, and prior report text.
 
 This design preserves clinically relevant textual context while keeping the training pipeline feasible under limited GPU memory. However, freezing the text encoder also prevents task-specific adaptation, which is treated as a limitation in Section~\ref{sec:discussion}.
-
-\begin{table}[H]
-\centering
-\caption{Text encoder choices considered during development. The final model uses the radiology-domain CXR-BERT encoder.}
-\label{tab:text_encoder_comparison}
-\begin{tabular}{p{0.22\linewidth} p{0.23\linewidth} p{0.23\linewidth} p{0.24\linewidth}}
-\toprule
-\textbf{Encoder} & \textbf{Domain} & \textbf{Use in this work} & \textbf{Rationale / limitation} \\
-\midrule
-BioBERT ({dmis-lab/biobert-v1.1}) & Biomedical literature & Development baseline & Strong biomedical baseline, but not specifically trained for chest radiology image--text alignment. \\
-CXR-BERT-specialized ({microsoft/BiomedVLP-CXR-BERT-specialized}) & Chest X-ray radiology text and image--text pretraining & Final implementation in main experiments & Better aligned with CXR report language; used as a compact \texttt{[CLS]}-level representation. \\
-\bottomrule
-\end{tabular}
-\end{table}
 
 \subsection{Vital Signs Encoder}
 \label{subsec:method_vitals_encoder}
@@ -182,9 +168,9 @@ where \(N\) is the number of tokens and \(d\) is the hidden dimension. By projec
 
 We incorporate prior-study information because clinicians compare current and previous examinations. The core mechanism of the fusion module is Multi-Head Attention (MHA), following the Transformer attention formulation \cite{vaswani2017attention}. For a query matrix \(Q\), key matrix \(K\), and value matrix \(V\), scaled dot-product attention is defined as:
 \begin{equation}
-    \mathrm{Attn}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d}}\right)V
+    \mathrm{Attn}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V
 \end{equation}
-where \(d\) is the key projection dimension.
+where $d_k$ is the key projection dimension.
 
 The fusion module uses an asymmetric target-memory design. Current-study tokens form the target stream, while prior-study tokens form the memory stream. The target stream first undergoes self-attention to model interactions among current image, text, and vital-sign tokens:
 \begin{equation}
@@ -196,16 +182,27 @@ It then attends to the prior-study memory stream through cross-attention:
 \end{equation}
 This cross-attention design keeps the current study as the prediction target and uses the prior study only as supporting memory.
 
-To represent temporal distances, the time gap \(\Delta t_i\) between studies is mapped into discretized temporal buckets \(b_i\), which are used to retrieve a learned time-gap embedding:
+To represent temporal distance, we compute the time gap $\Delta t_i$ in days between the current study and the nearest previous chest X-ray study from the same patient. The time gap is then mapped into one of seven discrete buckets:
 \begin{equation}
-    b_i = \mathrm{bucket}(\Delta t_i)
+b_i = \mathrm{bucket}(\Delta t_i)
 \end{equation}
 \begin{equation}
-    e_{\Delta t_i} = E_{\Delta t}(b_i)
+e_{\Delta t_i} = E_{\Delta t}(b_i)
 \end{equation}
-where \(E_{\Delta t}\) is a learned embedding lookup table.
+where $E_{\Delta t}$ is a learned embedding lookup table.
 
-When no prior study is available, the memory stream is replaced by a learned no-prior token. During training, stochastic prior dropout is applied with probability \(p_{drop}\). Let \(r_i \in \{0, 1\}\) be a random variable sampled as:
+The seven buckets are: $\leq 1$ day, 2--7 days, 8--30 days, 1--6 months, 6--12 months, 1--3 years, and $>3$ years. These buckets give finer resolution to recent priors, because acute follow-up studies often happen within days or weeks. Longer gaps are grouped more coarsely because very old priors are usually less directly comparable to the current study.
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{img/time_gap_bucket.png}
+    \caption{Distribution of prior-study time-gap buckets. Most prior studies occur within the first week, while very long gaps over three years are rare. This supports the use of finer buckets for recent priors and coarser buckets for older priors.}
+    \label{fig:time_gap_bucket}
+\end{figure}
+
+As shown in Figure~\ref{fig:time_gap_bucket}, most available priors are recent, especially within one week. The model therefore learns separate embeddings for short-term follow-up studies while still keeping compact representations for older priors.
+
+When no prior study is available, the memory stream is replaced by a learned no-prior token. In this case, no time-gap bucket is used because there is no valid prior-study time difference. During training, stochastic prior dropout is applied with probability \(p_{drop}\). Let \(r_i \in \{0, 1\}\) be a random variable sampled as:
 \begin{equation}
     r_i \sim \mathrm{Bernoulli}(1-p_{drop})
 \end{equation}
@@ -220,68 +217,75 @@ The exploratory analysis in Section~\ref{subsec:eda_prior_gaps} (Figure~\ref{fig
 \subsection{Classification Head and Training Objective}
 \label{subsec:method_head_loss}
 
-The fused token sequence is passed to a multi-label classification head. Instead of producing a single global pooled representation, the classifier uses learnable query embeddings to attend to the fused multimodal features, inspired by the query-based classification-head design of ML-Decoder \cite{ridnik2023mldecoder}. Let the learnable classification queries be:
+The fused token sequence is passed to a multi-label classification head. Instead of using one global pooled feature, the classifier uses learnable label queries inspired by ML-Decoder \cite{ridnik2023mldecoder}. Each label query attends to the fused multimodal tokens and produces one logit for one pathology class.
+
+Let the learnable label queries be:
 \begin{equation}
-    Q^{label} = [q_1, q_2, \dots, q_C] \in \mathbb{R}^{C \times d}
+Q_{\text{label}} = [q_1, q_2, \ldots, q_C] \in \mathbb{R}^{C \times d},
 \end{equation}
-Each label query attends to the fused multimodal token sequence \(Z_i^{fused}\) using multi-head attention:
+where $C=26$ is the number of target labels and $d$ is the fusion dimension. Each label query attends to the fused token sequence:
 \begin{equation}
-    G_i = \mathrm{MHA}(Q^{label}, Z_i^{fused}, Z_i^{fused}) \in \mathbb{R}^{C \times d}
+G_i = \mathrm{MHA}(Q_{\text{label}}, Z^{\text{fused}}_i, Z^{\text{fused}}_i) \in \mathbb{R}^{C \times d}.
 \end{equation}
-The resulting query representations are projected to produce the classification logits:
+A class-specific projection maps each label representation to one logit:
 \begin{equation}
-    z_i = W_c G_i + b_c \in \mathbb{R}^{C}
+z_i \in \mathbb{R}^{C}.
 \end{equation}
-where \(W_c\) and \(b_c\) are learnable projection weights and biases. The predicted probability for class \(c\) is then computed using the sigmoid function:
+The predicted probability for class $c$ is computed using a sigmoid function:
 \begin{equation}
-    \hat{y}_{ic} = \sigma(z_{ic}) = \frac{1}{1 + e^{-z_{ic}}}
+\hat{y}_{ic} = \sigma(z_{ic}) = \frac{1}{1 + e^{-z_{ic}}}.
 \end{equation}
 
-For training, the standard multi-label Binary Cross-Entropy (BCE) loss is defined as:
-\begin{equation}
-    \mathcal{L}_{BCE} = - \frac{1}{C} \sum_{c=1}^{C} \left[ y_{ic}\log(\hat{y}_{ic}) + (1-y_{ic})\log(1-\hat{y}_{ic}) \right]
-\end{equation}
-where \(y_{ic}\) is the true binary label.
+The model is trained with Asymmetric Loss (ASL) \cite{ridnik2021asymmetric}. ASL is suitable for long-tailed multi-label classification because it down-weights easy negative labels more strongly than positive labels. This helps prevent frequent negative labels from dominating training.
 
-However, because the dataset is highly imbalanced, the model uses Asymmetric Loss (ASL) as the training objective \cite{ridnik2021asymmetric}. ASL down-weights easy negative examples more aggressively than positive examples. For a single sample, the loss is formulated as:
+For one sample, the loss is:
 \begin{equation}
-    \mathcal{L}_{ASL} = - \sum_{c=1}^{C} \left[ y_c (1-p_c)^{\gamma_+} \log(p_c) + (1-y_c) p_{mc}^{\gamma_-} \log(1-p_{mc}) \right]
+\mathcal{L}_{ASL}
+=
+-\sum_{c=1}^{C}
+\left[
+y_c (1-p_c)^{\gamma_+}\log(p_c)
++
+(1-y_c)(p_c^m)^{\gamma_-}\log(1-p_c^m)
+\right],
 \end{equation}
-where \(p_c = \hat{y}_{ic}\) is the predicted probability of class \(c\). To further suppress gradients from easy negatives, the negative probability \(p_{mc}\) is clipped using a threshold \(m \ge 0\):
+where $p_c=\hat{y}_{ic}$ is the predicted probability for class $c$. The shifted negative probability is:
 \begin{equation}
-    p_{mc} = \max(p_c - m, 0)
+p_c^m = \max(p_c - m, 0),
 \end{equation}
-The shifting hyperparameters \(\gamma_+\) and \(\gamma_-\) control the focusing strength for positive and negative samples, respectively, with \(\gamma_- > \gamma_+\) to focus learning on positive cases while ignoring easy negative background samples.
+where $m$ is the negative margin. The parameters $\gamma_+$ and $\gamma_-$ control the focusing strength for positive and negative labels. In this work, $\gamma_- > \gamma_+$ so that easy negative labels receive less weight during training.
 
 \subsection{Label-Correlation Graph Head}
 \label{subsec:method_graph_head}
 
-Standard multi-label classification heads treat each label query as independent, which ignores the strong co-occurrence structure present in chest X-ray findings (e.g., cardiomegaly and pulmonary edema frequently co-occur). To exploit this structure, the proposed model incorporates a directed, noise-aware label-correlation graph head that augments the ML-Decoder query representations with learned inter-label relationships.
+The target labels are not independent. For example, cardiomegaly, edema, pleural effusion, and atelectasis can co-occur in the same study. To use this structure, the final model adds a label-correlation graph head after the label-query attention block.
 
-A label co-occurrence matrix is computed from the training-set label vectors and thresholded to retain only statistically significant edges. This adjacency matrix defines a directed graph over the 26 pathology nodes. During classification, the graph head propagates information between correlated label queries, effectively regularizing the query space so that predictions for co-occurring conditions are mutually reinforced. Noise-awareness is achieved by weighting edges according to label reliability, down-weighting connections derived from noisy or low-confidence labels. The graph head is applied after the ML-Decoder cross-attention and before the final logit projection.
+The graph is built only from training-set labels to avoid test-set leakage. First, a label co-occurrence matrix is computed from the training split. Then, weak edges are removed using a fixed threshold. The remaining edges define relationships between the 26 pathology labels.
+
+During classification, the graph head passes information between related label-query representations before the final logit projection. This allows correlated labels to share information while still producing a separate probability for each pathology. The graph head is evaluated in the ablation study in Section~\ref{sec:results}.
 
 \subsection{Evaluation Metrics}
 \label{subsec:method_evaluation_metrics}
 
-We evaluate performance with mAP, mAUROC, and macro-F1 because the 26 labels are strongly long-tailed. Macro-averaged Mean Average Precision (mAP) serves as the primary metric, while macro Area Under the Receiver Operating Characteristic (mAUROC) and macro-averaged F1 score are used as auxiliary metrics.
+We evaluate the model using mean Average Precision (mAP) and macro-averaged AUROC (mAUROC). The primary metric is mAP, following the CXR-LT evaluation setting \cite{yan2023cxrlt}. This metric is suitable for long-tailed multi-label classification because it measures ranking quality over the precision-recall curve for each class.
 
-For each pathology class \(c\), the Average Precision (AP) is computed over the precision-recall curve as:
+For each pathology class $c$, Average Precision (AP) is computed as:
 \begin{equation}
-    AP_c = \sum_n (R_n - R_{n-1}) P_n
+AP_c = \sum_n (R_n - R_{n-1})P_n,
 \end{equation}
-where \(P_n\) and \(R_n\) are the precision and recall at the \(n\)-th threshold. We report overall performance using macro-averaged Mean Average Precision (mAP):
+where $P_n$ and $R_n$ are the precision and recall at the $n$-th threshold. The overall mAP is:
 \begin{equation}
-    mAP = \frac{1}{C} \sum_{c=1}^{C} AP_c
+mAP = \frac{1}{C}\sum_{c=1}^{C} AP_c.
 \end{equation}
-To assess classification performance at a fixed operational threshold, the macro-averaged F1 score is computed:
+
+We also report macro-averaged AUROC:
 \begin{equation}
-    F1_{macro} = \frac{1}{C} \sum_{c=1}^{C} \frac{2P_cR_c}{P_c + R_c}
+mAUROC = \frac{1}{C}\sum_{c=1}^{C} AUROC_c.
 \end{equation}
-where \(P_c\) and \(R_c\) represent the precision and recall for class \(c\) at a default threshold of \(0.5\). Crucially, macro-averaging treats each pathology class \(c\) equally regardless of prevalence, making it far more sensitive to tail-class (rare) performance than micro-averaged metrics. Performance is also reported breakdown-averaged across head (frequent), medium, and tail (rare) findings.
+
+To analyze long-tailed performance, we report metrics separately for head, medium, and tail label groups. These groups follow the label-frequency analysis described in Section~\ref{sec:eda}.
 
 \subsection{Ablation Study Design}
 \label{subsec:method_ablation_design}
 
-Although the methodology describes the final model, we use ablations to measure how much each design choice contributes.
-
-The ablation studies examine the effect of image-only versus multimodal input, the use of prior-study information, time-gap embeddings, prior dropout, the label-correlation graph head, and engineered versus plain channel encodings. These comparisons help determine which components contribute most to performance and which design choices are most important under limited compute.
+Although this section describes the final model, the experiments also include ablations to measure the effect of each major design choice. The ablations compare image-only and multimodal inputs, prior-study context, time-gap embeddings, prior dropout, the label-correlation graph head, and engineered versus plain image channel encoding. The results are reported in Section~\ref{sec:results}.

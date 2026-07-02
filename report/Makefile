@@ -19,7 +19,7 @@ IMG_FILES = $(shell find img -type f 2>/dev/null)
 all: $(TARGET)
 
 # Rule to build the PDF target
-$(TARGET): $(TEX_FILES) $(BIB_FILES) $(IMG_FILES)
+$(TARGET): $(TEX_FILES) $(BIB_FILES)
 	@echo "=================================================="
 	@echo "Compiling LaTeX document (Pass 1)..."
 	@echo "=================================================="

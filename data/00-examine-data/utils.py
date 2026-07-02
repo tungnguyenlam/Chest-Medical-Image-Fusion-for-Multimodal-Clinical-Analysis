@@ -400,7 +400,7 @@ def plot_view_positions(split_frames: dict[str, pd.DataFrame], reference_df: pd.
         labels_by_hue(plot_df, "ViewPosition", "split", "count", "rate_pct", view_order, hue_order),
         orientation="vertical",
     )
-    plt.title(f"Top {top_n} view positions by global frequency")
+    plt.title("Most common view positions by global frequency")
     plt.xlabel("")
     plt.ylabel("Rate (%)")
     plt.xticks(rotation=20)

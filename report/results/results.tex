@@ -1,7 +1,7 @@
 \section{Experimental Results}
 \label{sec:results}
 
-We evaluate the multimodal models on the filtered CXR-LT-aligned test split. It covers the experimental configuration, main quantitative results, ablation studies, per-class and long-tail analysis, and qualitative Grad-CAM attributions.
+We evaluate all implemented models on the filtered CXR-LT-aligned test split. This section reports the experimental setup, main quantitative results, ablation studies, long-tail analysis, and qualitative Grad-CAM checks.
 
 \subsection{Experimental Setup}
 \label{subsec:results_setup}
@@ -18,18 +18,19 @@ Table~\ref{tab:experimental_setup} summarizes the experimental configuration and
         \midrule
         Image Resolution & $512 \times 512$ pixels \\
         Batch Size & 8 \\
+        Effective Batch Size & 32 (batch size 8, gradient accumulation 4) \\
         Gradient Accumulation Steps & 4 \\
         Optimizer & AdamW (weight decay = $10^{-4}$) \\
-        Base Learning Rate & $5\times10^{-5}$ (Cosine Annealing scheduler) \\
-        Epochs & Max 50 epochs\\
+        Base Learning Rate & $5\times10^{-5}$ (cosine annealing scheduler) \\
+        Epochs & Maximum 50 epochs \\
         Early Stopping & Patience = 10 epochs (monitoring validation mAP) \\
         Loss Function & Asymmetric Loss (ASL) \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-\paragraph{Model complexity.}
-Table~\ref{tab:model_complexity} compares per-component parameter counts between the original CaMCheX architecture and the proposed prior-aware model. The two systems use different image backbones and text encoders: CaMCheX uses ConvNeXt-Small (768-channel, 49.45M per view) with BioBERT (\texttt{dmis-lab/biobert-v1.1}, 108.31M), while the proposed model uses ConvNeXt-V2-Nano (640-channel, 14.98M per view) with BiomedVLP-CXR-BERT-specialized (109.63M). A key architectural difference is that CaMCheX encodes vital signs as a text string (e.g., ``Temperature: 36.5 $|$ Heart rate: 80 $|$ \ldots'') and passes them through the shared BioBERT encoder alongside the clinical indication, whereas the proposed model uses a dedicated vitals projector that maps 7 scalar values directly to a learned token. The text encoder is frozen or precomputed in both systems; the trainable count reflects the optimization cost, while the total count reflects the full inference-time model size.
+\paragraph{Model complexity under the frozen-text reference setting.}
+Table~\ref{tab:model_complexity} compares the parameter counts of the original CaMCheX architecture and the proposed prior-aware model. The two systems use different image backbones and text encoders. CaMCheX uses ConvNeXt-Small and BioBERT, while the proposed model uses ConvNeXt-V2-Nano and BiomedVLP-CXR-BERT-specialized. Both text encoders are treated as frozen only for this parameter-count comparison. Therefore, the trainable count in this table excludes the text encoder. The comparison is used to show the approximate model size and training cost, not to claim an exact reproduction of CaMCheX.
 
 \begin{table}[H]
     \centering
@@ -38,7 +39,7 @@ Table~\ref{tab:model_complexity} compares per-component parameter counts between
     \adjustbox{max width=\textwidth}{%
     \begin{tabular}{lrrr}
         \toprule
-        \textbf{Component} & \textbf{CaMCheX} & \textbf{Ours (V8Nano)} & \textbf{$\Delta$} \\
+        \textbf{Component} & \textbf{CaMCheX} & \textbf{Proposed model} & \textbf{$\Delta$} \\
         \midrule
         \multicolumn{4}{l}{\textit{Image backbone}} \\
         \quad ConvNeXt-Small (frontal + lateral, 768ch) & 98.91M & -- & $-$98.91M \\
@@ -75,13 +76,15 @@ Table~\ref{tab:model_complexity} compares per-component parameter counts between
         \midrule
         \midrule
         \textbf{Total} & \textbf{229.71M} & \textbf{164.58M} & \textbf{$-$65.13M} \\
-        \textbf{Trainable} & \textbf{229.69M} & \textbf{54.93M} & \textbf{$-$174.76M} \\
+        \textbf{Trainable} & \textbf{121.38M} & \textbf{54.93M} & \textbf{$-$66.45M} \\
         \bottomrule
     \end{tabular}%
     }
 \end{table}
 
 {\small \textsuperscript{$\dagger$} CaMCheX has no dedicated vitals module; vital signs are tokenized as a text string and encoded by the shared BioBERT encoder, incurring zero additional parameters beyond the text encoder itself.}
+
+This parameter-count table compares architectural size under a frozen-text reference setting. The final reported model fine-tunes the CXR-BERT text encoder; therefore, its trainable parameter count is higher than the frozen-text count shown in Table~\ref{tab:model_complexity}.
 
 \textbf{Image backbone.} The largest single reduction comes from replacing ConvNeXt-Small (49.45M per view, 768 channels) with ConvNeXt-V2-Nano (14.98M per view, 640 channels), saving 68.95M parameters across the dual-frontal/lateral encoders. This is the primary contributor to the overall parameter reduction and reflects the resource-constrained design choice.
 
@@ -95,39 +98,32 @@ Table~\ref{tab:model_complexity} compares per-component parameter counts between
 
 \textbf{Fusion mechanism.} CaMCheX uses a 2-layer TransformerEncoder (11.03M) that self-attends over all concatenated tokens. The proposed model replaces this with a 2-layer Fusion TransformerDecoder (11.82M) where current tokens query prior-pooled latents via asymmetric cross-attention.
 
-The overall effect is a reduction from 229.71M to 164.58M total parameters ($-$65.13M, $-$28\%) and from 229.69M to 54.93M trainable parameters ($-$174.76M, $-$76\%), driven primarily by the lighter image backbone. Despite the addition of prior-pooling, cross-attention fusion, and a dedicated vitals projector, the proposed model remains substantially smaller than the original CaMCheX architecture.
+Overall, the proposed model reduces the total parameter count from 229.71M to 164.58M ($-$65.13M, about $-$28\%). Under the frozen-text comparison, the trainable parameter count is reduced from 121.38M to 54.93M ($-$66.45M, about $-$55\%). This reduction mainly comes from the smaller image backbone. Even after adding prior pooling, cross-attention fusion, and a dedicated vitals projector, the proposed model remains smaller and cheaper to train than the CaMCheX-style reference architecture.
 
 
 \subsection{Main Performance of the Proposed Model}
 \label{subsec:results_quantitative}
 
-We evaluate all models with mAP and mAUROC. Given the severe long-tailed distribution of the 26 pathology classes, the performance breakdown is reported across three frequency-based categories:
-\textbf{Head classes} are highly frequent pathologies, e.g., Support Devices, Pleural Effusion, and Cardiomegaly.
-
-\textbf{Medium classes} are moderately frequent findings, e.g., Atelectasis, Pneumothorax, and Edema.
-
-\textbf{Tail classes} represent rare findings, e.g., Hernia, Pneumomediastinum, and Fibrosis.
-
-Table~\ref{tab:ours_main_results} compares the three model configurations trained and tested in this work.
+We evaluate all models using mAP and mAUROC. Because the label distribution is long-tailed, we also report mAP by frequency group: head, medium, and tail. These groups follow the label-frequency split described in the data analysis section. Table~\ref{tab:ours_main_results} compares the three model configurations trained and tested in this work.
 
 \begin{table}[H]
     \centering
     \caption{Main test-set performance of the implemented models in this work.}
     \label{tab:ours_main_results}
-    \begin{tabular}{lcccc}
-        \hline
-        Model & mAP & mAUROC & Head mAP & Tail mAP \\
-        \hline
-        Image-only baseline & 0.3246 & 0.8123 & 0.5841 & 0.0827 \\
-        Multimodal without prior & 0.4098 & 0.8732 & 0.7116 & 0.1586 \\
-        Proposed prior-aware multimodal model & 0.5662 & 0.9026 & 0.7739 & 0.4076 \\
-        \hline
+    \begin{tabular}{lccccc}
+        \toprule
+        Model & mAP & mAUROC & Head mAP & Medium mAP & Tail mAP \\
+        \midrule
+        Image-only baseline & 0.3246 & 0.8123 & 0.5841 & 0.2285 & 0.0827 \\
+        Multimodal without prior & 0.4098 & 0.8732 & 0.7116 & 0.3693 & 0.1586 \\
+        Proposed prior-aware multimodal model & 0.5662 & 0.9026 & 0.7739 & 0.5268 & 0.4076 \\
+        \bottomrule
     \end{tabular}
 \end{table}
 
 \begin{table}[H]
     \centering
-    \caption{Per-group mAUROC breakdown for the main models. Image-only baseline Head/Medium mAUROC not available (single-view run used fast\_dev\_run).}
+    \caption{Per-group mAUROC breakdown for the main models. Head and medium mAUROC were not logged for the image-only run.}
     \label{tab:ours_main_results_auroc}
     \begin{tabular}{lcccc}
         \hline
@@ -140,17 +136,18 @@ Table~\ref{tab:ours_main_results} compares the three model configurations traine
     \end{tabular}
 \end{table}
 
-The results reveal three main patterns:
-\textbf{Benefit of Multimodal Fusion}: Adding clinical text and vital signs to the image-only baseline raises mAP from 0.3246 to 0.4098 and mAUROC from 0.8123 to 0.8732, highlighting the diagnostic value of combining radiographs with ED clinical text and vital signs.
+The results show three main patterns.
 
-\textbf{Impact of Prior-Aware Modeling}: Adding historical image and text context further improves performance. The proposed prior-aware framework achieves an overall mAP of $0.5662$ ($+0.1564$ over the standard multimodal baseline) and an overall mAUROC of $0.9026$.
+\textbf{Multimodal context improves performance.} Adding clinical text and vital signs to the image-only baseline raises mAP from 0.3246 to 0.4098 and mAUROC from 0.8123 to 0.8732. This shows that the model benefits from clinical context in addition to the radiograph.
 
-\textbf{Addressing Tail Class Performance}: Tail classes show the largest relative improvements under the prior-aware model, with mAP rising from $0.1586 \rightarrow 0.4076$ ($+0.2490$) and tail mAUROC increasing to $0.9218$ (see Table~\ref{tab:ours_main_results_auroc}). This suggests that prior-study context helps rare-label prediction, especially when visual evidence is scarce.
+\textbf{Prior-aware fusion gives the largest gain.} Adding prior-study context increases mAP from 0.4098 to 0.5662 and mAUROC from 0.8732 to 0.9026. This is a gain of 0.1564 mAP over the no-prior multimodal baseline.
+
+\textbf{Tail classes improve the most.} Tail mAP increases from 0.0827 in the image-only baseline to 0.4076 in the proposed model. Compared with the no-prior multimodal baseline, tail mAP increases from 0.1586 to 0.4076. This suggests that clinical context and prior-study information are especially useful for rare labels, although this should be interpreted together with the ablation results.
 
 \subsection{Comparison with Reference Methods}
 \label{subsec:results_reference_comparison}
 
-We compare our results with CheXFusion \cite{kim2023chexfusion} and CaMCheX \cite{sloan2025camchex} only to provide context. The comparison is numerically meaningful because the same metrics are used, but it is not a controlled reproduction due to differences in training and preprocessing conditions.
+We compare our results with CheXFusion \cite{kim2023chexfusion} and CaMCheX \cite{sloan2025camchex} only as external context. This is not a controlled comparison. The published methods use different dataset scale, preprocessing, resolution, training strategy, and pretraining. Our results are also measured on the filtered CXR-LT-aligned thesis cohort rather than a full benchmark reproduction.
 
 \begin{table}[H]
     \centering
@@ -169,48 +166,43 @@ We compare our results with CheXFusion \cite{kim2023chexfusion} and CaMCheX \cit
     }
 \end{table}
 
-Table~\ref{tab:contextual_comparison} compares the proposed model with published CXR-LT reference methods using mAP and mAUROC. The proposed model achieves 0.5662 mAP and 0.9026 mAUROC, exceeding the top CXR-LT 2023 challenge solution CheXFusion in both metrics and approaching the published CaMCheX result. Compared with CaMCheX on CXR-LT 2023, the proposed model is lower by 0.0098 mAP and 0.0134 mAUROC. This suggests that the resource-constrained prior-aware implementation remains competitive with stronger published multimodal systems, while differences in training scale, preprocessing, resolution, and pretraining should be considered when interpreting the comparison.
+Table~\ref{tab:contextual_comparison} places the proposed model beside published CXR-LT reference results. The proposed model reaches 0.5662 mAP and 0.9026 mAUROC in our filtered setting. These values are close to the published CaMCheX CXR-LT 2023 result of 0.576 mAP and 0.916 mAUROC. However, the numbers should not be read as a leaderboard comparison because the experimental settings are different. The main controlled evidence in this thesis comes from the models trained and evaluated under the same filtered cohort in Table~\ref{tab:ours_main_results} and Table~\ref{tab:ablation_unified}.
 
 \subsection{Ablation Study}
 \label{subsec:results_ablation}
 
-Table~\ref{tab:ablation_unified} summarizes the ablation results and shows how each modality and architectural component affects performance. Table~\ref{tab:ablation_unified} groups the ablations into four comparisons. \emph{Modality ablation} keeps the architecture fixed and removes one input modality at a time. \emph{Method comparison} keeps the full multimodal input and compares our model with the CaMCheX baseline. \emph{Component ablation} adds architectural components step by step and measures each gain. \emph{Channel encoding} compares the engineered three-channel input with a simple \texttt{gray3} baseline. We use the full multimodal model as the anchor for all four ablation groups.
+Table~\ref{tab:ablation_unified} summarizes the ablation and development runs performed in this work. The table has three groups. \emph{Modality ablation} removes one input modality at a time. \emph{Incremental model variants} report the available runs as prior-aware components and the final training setting were added. \emph{Channel encoding ablation} compares the engineered three-channel image input with a simple \texttt{gray3} baseline. Published CaMCheX numbers are not included because they are external references, not controlled ablations. Due to limited compute, not every later training choice is isolated under an otherwise identical run; therefore, the incremental-variant rows should be interpreted as development evidence rather than a complete causal decomposition.
 
 \begin{table}[H]
 \centering
-\caption[Unified ablation study]{Unified ablation study on the filtered CXR-LT-aligned test split. The proposed full model is the shared anchor row (repeated once). Intermediate component ablation rows (Prior study, Time-gap) lack per-group mAP because those configurations were evaluated with aggregate metrics only.}
+\caption[Unified ablation study]{Unified ablation study on the filtered CXR-LT-aligned test split. All rows are runs from this work. Intermediate component rows lack per-group mAP because those configurations were evaluated with aggregate metrics only.}
 \label{tab:ablation_unified}
 \adjustbox{max width=\textwidth}{%
 \begin{tabular}{llccccc}
 \toprule
 \textbf{Study} & \textbf{Configuration} & \textbf{mAP} & \textbf{mAUROC} & \textbf{Head mAP} & \textbf{Medium mAP} & \textbf{Tail mAP} \\
 \midrule
-\multicolumn{7}{l}{\textit{A.\ Modality Ablation} (architecture fixed, modalities varied)} \\
+\multicolumn{7}{l}{\textit{A.\ Modality Ablation} (prior-aware architecture fixed, input modalities varied)} \\
 \midrule
-& \textbf{Full (image+clinical text+vitals)} & \textbf{0.5662} & \textbf{0.9026} & \textbf{0.7739} & \textbf{0.5268} & \textbf{0.4076} \\
-& Clinical text dropped (image+vitals) & 0.3404 & 0.8121 & 0.6083 & 0.2524 & 0.1827 \\
-& Vitals dropped (image+clinical text) & 0.5666 & 0.9023 & 0.7738 & 0.5267 & 0.4091 \\
-& Image-only & 0.3246 & 0.8123 & 0.5841 & 0.2285 & 0.0827 \\
+& Full (image + clinical text + vitals + prior) & 0.5662 & 0.9026 & 0.7739 & 0.5268 & 0.4076 \\
+& Clinical text dropped (image + vitals + prior) & 0.3404 & 0.8121 & 0.6083 & 0.2524 & 0.1827 \\
+& Vitals dropped (image + clinical text + prior) & 0.5666 & 0.9023 & 0.7738 & 0.5267 & 0.4091 \\
+& Image-only baseline & 0.3246 & 0.8123 & 0.5841 & 0.2285 & 0.0827 \\
 \midrule
-\multicolumn{7}{l}{\textit{B.\ Method Comparison} (full multimodal inputs, method varied)} \\
-\midrule
-& CaMCheX baseline ($1024{\times}1024$) & 0.576 & 0.916 & 0.786 & 0.550 & 0.408 \\
-& \textbf{Proposed ($512{\times}512$)} & \textbf{0.5662} & \textbf{0.9026} & \textbf{0.7739} & \textbf{0.5268} & \textbf{0.4076} \\
-\midrule
-\multicolumn{7}{l}{\textit{C.\ Component Ablation} (components added cumulatively)} \\
+\multicolumn{7}{l}{\textit{B.\ Incremental Model Variants} (components added across available runs)} \\
 \midrule
 & Image-only baseline & 0.3246 & 0.8123 & 0.5841 & 0.2285 & 0.0827 \\
-& + Multimodal (no prior) & 0.4098 & 0.8732 & 0.7116 & 0.3693 & 0.1587 \\
-& + Prior study (no time-gap emb.) & 0.4479 & 0.8845 & -- & -- & -- \\
+& + Multimodal inputs (no prior) & 0.4098 & 0.8732 & 0.7116 & 0.3693 & 0.1586 \\
+& + Prior study (no time-gap embedding) & 0.4479 & 0.8845 & -- & -- & -- \\
 & + Time-gap embedding (no prior dropout) & 0.4668 & 0.8901 & -- & -- & -- \\
-& + Prior dropout (no graph head) & 0.4950 & 0.8985 & 0.7428 & 0.4760 & 0.2708 \\
-& \textbf{+ Graph head (Full)} & \textbf{0.5662} & \textbf{0.9026} & \textbf{0.7739} & \textbf{0.5268} & \textbf{0.4076} \\
+& + Prior dropout & 0.4950 & 0.8985 & 0.7428 & 0.4760 & 0.2708 \\
+& Final model with trainable text encoder & 0.5662 & 0.9026 & 0.7739 & 0.5268 & 0.4076 \\
 \midrule
-\multicolumn{7}{l}{\textit{D.\ Channel Encoding Ablation} (architecture and training fixed)} \\
+\multicolumn{7}{l}{\textit{C.\ Channel Encoding Ablation} (architecture and training fixed)} \\
 \midrule
-& Engineered multi-channel (full inputs) & \textbf{0.5662} & \textbf{0.9026} & \textbf{0.7739} & \textbf{0.5268} & \textbf{0.4076} \\
+& Engineered multi-channel (full inputs) & 0.5662 & 0.9026 & 0.7739 & 0.5268 & 0.4076 \\
 & Plain \texttt{gray3} (full inputs) & 0.5633 & 0.9000 & 0.7705 & 0.5235 & 0.4059 \\
-& Engineered multi-channel (clinical text dropped) & \textbf{0.3404} & \textbf{0.8121} & \textbf{0.6083} & \textbf{0.2524} & \textbf{0.1827} \\
+& Engineered multi-channel (clinical text dropped) & 0.3404 & 0.8121 & 0.6083 & 0.2524 & 0.1827 \\
 & Plain \texttt{gray3} (clinical text dropped) & 0.3367 & 0.8094 & 0.6054 & 0.2477 & 0.1791 \\
 \bottomrule
 \end{tabular}%
@@ -220,77 +212,46 @@ Table~\ref{tab:ablation_unified} summarizes the ablation results and shows how e
 \subsubsection{Modality Ablation}
 \label{subsubsec:ablation_modality}
 
-Removing clinical text drops mAP from 0.5662 to 0.3404, with the largest degradation on medium-frequency classes. In contrast, dropping vital signs changes mAP only from 0.5662 to 0.5666, which is within expected run-to-run noise, suggesting the model relies primarily on the radiographic image and clinical text. Because the free-text clinical indication frequently paraphrases the suspected diagnosis, the clinical-text-drop gap should be interpreted partly as the diagnostic value of clinical context and partly as a potential label-leakage signal; the image-only floor is the deployment-realistic lower bound. The vitals-dropped configuration achieves $0.5666$ mAP, marginally above the full model's $0.5662$ mAP; this difference is within run-to-run variance and should not be interpreted as evidence that vital signs degrade performance.
+Removing clinical text causes the largest drop, from 0.5662 to 0.3404 mAP. This shows that clinical indication text carries strong predictive information. This information is clinically available before interpretation, but it may also contain strong diagnostic cues such as suspected disease names. Therefore, the gain should be interpreted as the value of clinical context, with a possible cueing effect from the indication text. Dropping vital signs has almost no effect: mAP changes from 0.5662 to 0.5666. This small difference is within expected run-to-run noise and should not be interpreted as evidence that vital signs improve or hurt performance.
 
-\subsubsection{Method Comparison}
-\label{subsubsec:ablation_method}
-
-The proposed prior-aware model is compared against the CaMCheX baseline under full multimodal inputs. Because the two systems were trained at different input resolutions ($512{\times}512$ vs.\ $1024{\times}1024$) and CaMCheX additionally employs larger-scale pretraining and noisy-student training, this comparison is not a controlled reproduction. The comparison is numerically meaningful because the same metrics are used, but differences in training scale, preprocessing, resolution, and pretraining should be considered when interpreting the result.
-
-\subsubsection{Architectural Component Ablation}
+\subsubsection{Incremental Model Variants}
 \label{subsubsec:ablation_components}
 
-The component ablation (group C in Table~\ref{tab:ablation_unified}) highlights several critical aspects:
+Group B reports incremental model variants trained during development. These rows show how performance changed as prior-aware components and the final training setting were added. They should not be read as a complete causal decomposition because not every final training choice was isolated in a separate controlled run.
 
-\textbf{Modality Contributions}: Integrating clinical text and vital signs with chest radiographs provides the largest single gain ($0.8123 \rightarrow 0.8732$ mAUROC), showing that diagnostic decisions benefit from non-visual patient context.
+\textbf{Multimodal inputs.} Adding clinical text and vital signs to the image-only baseline improves mAP from 0.3246 to 0.4098 and mAUROC from 0.8123 to 0.8732. This is the first major gain.
 
-\textbf{Value of Historical Prior}: Adding prior study tokens via cross-attention yields a further boost ($0.8732 \rightarrow 0.8985$ mAUROC). This confirms that temporal comparison serves as a valuable anchor, especially for distinguishing acute changes from stable chronic conditions.
+\textbf{Prior study tokens.} Adding prior-study information without time-gap embeddings improves mAP from 0.4098 to 0.4479 and mAUROC from 0.8732 to 0.8845. This shows that historical context is useful even before explicit time modelling is added.
 
-\textbf{Impact of Time-Gap Embeddings}: Removing the discretized time-gap embeddings degrades performance to $0.8845$, demonstrating that the model benefits from knowing the temporal distance of a historical study (e.g.\ a prior from 2 days ago is treated differently than a prior from 3 years ago).
+\textbf{Time-gap embeddings.} Adding time-gap embeddings improves mAP from 0.4479 to 0.4668 and mAUROC from 0.8845 to 0.8901. This suggests that the model benefits from knowing whether a prior study is recent or old.
 
-\textbf{Prior Dropout Regularization}: Training without prior dropout reduces test performance to $0.8901$. Stochastic prior dropout regularizes the model by preventing it from depending too heavily on historical data.
+\textbf{Prior dropout.} Adding prior dropout improves mAP from 0.4668 to 0.4950 and mAUROC from 0.8901 to 0.8985. This supports the use of prior dropout to reduce over-reliance on historical information.
 
-\textbf{Label Correlation Graph Head}: Adding the directed, noise-aware label-correlation graph head improves mAP from 0.4950 to 0.5662 and mAUROC from 0.8985 to 0.9026. This suggests that modelling label co-occurrence in the classifier head helps the model handle correlated findings under severe class imbalance.
+\textbf{Final training setting.} The final model improves mAP from 0.4950 to 0.5662 and mAUROC from 0.8985 to 0.9026. This final setting keeps the full prior-aware multimodal architecture and fine-tunes the radiology-domain text encoder instead of using frozen text features. Because this final row also reflects the selected training setting, it should be interpreted as the performance of the final selected model rather than as a causal measurement of one isolated component.
 
 \subsubsection{Input Channel Encoding Ablation}
 \label{subsubsec:ablation_channels}
 
 The image encoder expects a three-channel input, which leaves open the question of how a single-channel chest radiograph should be expanded to fill those channels. The proposed model uses an engineered multi-channel encoding, where each channel carries a distinct, separately-normalized representation. The plain \texttt{gray3} baseline simply replicates the raw grayscale image (normalized with mean $0.4721$ and standard deviation $0.3037$) across all three channels.
 
-The engineered encoding and gray3 baseline perform almost the same: the engineered encoding is marginally higher on macro mAP ($0.5662$ vs.\ $0.5633$), macro mAUROC ($0.9026$ vs.\ $0.9000$), and tail mAP ($0.4076$ vs.\ $0.4059$). The clinical-text-dropped floor is likewise within noise ($0.3404$ vs.\ $0.3367$ macro mAP). Because the engineered encoding adds preprocessing cost with little gain, gray3 is the safer default unless repeated runs show a consistent advantage. This indicates that, for this fusion framework, the diagnostic signal is carried by the multimodal context and architectural components rather than by hand-crafted channel-level image transformations.
+The engineered encoding and gray3 baseline perform almost the same: the engineered encoding is marginally higher on macro mAP ($0.5662$ vs.\ $0.5633$), macro mAUROC ($0.9026$ vs.\ $0.9000$), and tail mAP ($0.4076$ vs.\ $0.4059$). The clinical-text-dropped floor is likewise within noise ($0.3404$ vs.\ $0.3367$ macro mAP). The difference is small, so channel encoding is not a major driver of the final result. The engineered encoding is kept as the selected configuration in this thesis, but the ablation shows that a simple \texttt{gray3} input is a strong and simpler alternative. Most of the performance gain comes from multimodal context and prior-aware components, not from hand-crafted channel encoding.
 
-\subsection{Long-Tail and Per-Class Analysis}
+\subsection{Long-Tail Analysis}
 \label{subsec:results_longtail}
 
-Aggregate mAP and mAUROC summarize overall performance, but they can hide whether improvements are distributed across pathologies or concentrated in a few common labels. Therefore, Table~\ref{tab:per_class_metrics} reports per-class AP and AUROC for the proposed model, together with AP changes relative to the image-only and no-prior multimodal baselines evaluated on the same test split.
+Tail classes show the clearest improvement. Tail mAP increases from 0.0827 for the image-only baseline to 0.4076 for the proposed model. Compared with the no-prior multimodal baseline, tail mAP increases from 0.1586 to 0.4076. Tail mAUROC also increases from 0.7998 to 0.9218.
 
-\begin{table}[H]
-\centering
-\caption{Per-class AP and AUROC for the proposed model, with AP deltas relative to the image-only baseline and the no-prior multimodal baseline.}
-\label{tab:per_class_metrics}
-\adjustbox{max width=\textwidth}{%
-\begin{tabular}{lcccccc}
-\toprule
-\textbf{Class} & \textbf{Group} & \textbf{Test $n$} & \textbf{AP} & \textbf{AUROC} & \textbf{$\Delta$AP vs Image-only} & \textbf{$\Delta$AP vs No-prior} \\
-\midrule
-% TODO: populate with per-class values when available
-% Example rows (placeholder values -- replace with actual results):
-% Hernia            & Tail   & ... & ... & ... & ... & ... \\
-% Pneumomediastinum & Tail   & ... & ... & ... & ... & ... \\
-% ...               & ...    & ... & ... & ... & ... & ... \\
-% Support Devices   & Head   & ... & ... & ... & ... & ... \\
-\bottomrule
-\end{tabular}%
-}
-\end{table}
-
-The per-class results should be interpreted together with the number of positive test examples for each label. Large gains on rare classes indicate that clinical context and prior-study information can provide useful additional evidence, but unstable values may occur when very few positive examples are available. Therefore, the per-class analysis supports the aggregate long-tail improvement while also identifying labels that remain difficult under limited data and compute.
-
-At the aggregate level, the prior-aware multimodal model improves tail classes the most, with average mAUROC increasing to $0.9218$ (compared to $0.7998$ for the image-only model). Two clinical factors may explain this pattern:
-
-\textbf{Semantic Anchoring}: Rare findings such as Hernia, Pneumomediastinum, and Calcification of the Aorta have highly specific textual patterns in clinical indications (e.g., ``evaluate for hiatal hernia'' or ``rule out free air''). Fusing these textual cues compensates for the lack of visual examples in the training set.
-
-\textbf{Temporal Baseline}: For stable, chronic conditions that appear in the tail (such as Tortuous Aorta, Scoliosis, or Fibrosis), the model leverages the prior label and image to confirm that the finding has been historically present, reducing false positives and stabilizing predictions.
+Two factors may explain this pattern. First, some rare labels have strong cues in the clinical indication text. For example, an indication may mention evaluation for hiatal hernia or free air. These cues can help the model rank rare labels even when there are few visual examples. Second, prior studies can help with stable or chronic findings, because the model can compare the current study with historical information. These explanations are plausible, but they should be treated as interpretation rather than causal proof.
 
 \subsection{Grad-CAM Qualitative Analysis}
 \label{subsec:results_qualitative}
 
-We use three case studies to inspect behaviour across the long-tailed spectrum: Support Devices (head), Nodule (medium), and Hernia (tail).
+We use three case studies as qualitative sanity checks: Support Devices (head), Nodule (medium), and Hernia (tail). These Grad-CAM and text-attribution examples are not clinical explanations. They are used only to inspect whether the model uses plausible image regions and text cues.
 
 \subsubsection{Case Study 1 (Head): Support Devices}
 \label{subsubsec:case_support_devices}
 
-For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad-CAM visual attributions, Figure~\ref{fig:support_devices_text} shows the word-level text attributions, and Figure~\ref{fig:support_devices_modality} shows the modality attribution share. The Grad-CAM map concentrates on regions containing visible tubes and lines, which is consistent with the target label. The text attribution highlights device-related indication terms, suggesting that the model uses both visual and clinical context. However, strong reliance on indication text may also increase shortcut risk if device presence is frequently mentioned before imaging.
+For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:support_devices_text} shows the word-level text attributions, and Figure~\ref{fig:support_devices_modality} shows the modality attribution share. The Grad-CAM map concentrates on regions containing visible tubes and lines, which is consistent with the target label. The text attribution highlights device-related indication terms, suggesting that the model uses both visual and clinical context. However, strong reliance on indication text may also increase shortcut risk if device presence is frequently mentioned before imaging.
 
 \begin{figure}[H]
      \centering
@@ -308,7 +269,7 @@ For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad
           \caption{Prior Image Attribution}
           \label{fig:support_devices_prv}
      \end{subfigure}
-        \caption[Grad-CAM Visual Attributions for Support Devices]{Grad-CAM Visual Attributions for Support Devices. (a) Current target image attribution. (b) Prior image attribution.}
+        \caption[Grad-CAM Visual Attribution Maps for Support Devices]{Grad-CAM Visual Attribution Maps for Support Devices. (a) Current target image attribution. (b) Prior image attribution.}
         \label{fig:fig_support_devices_gradcam}
 \end{figure}
 
@@ -341,7 +302,7 @@ For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad
 \subsubsection{Case Study 2 (Medium): Nodule}
 \label{subsubsec:case_nodule}
 
-For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attributions, Figure~\ref{fig:nodule_text} shows the word-level text attributions, and Figure~\ref{fig:nodule_modality} shows the modality attribution share. The Grad-CAM map focuses on lung parenchyma regions where nodules are typically found, which is clinically plausible. The text attribution highlights terms related to nodule evaluation, suggesting the model integrates visual findings with clinical indication context. However, nodule detection remains sensitive to resolution, and subtle findings may be missed at the $512 \times 512$ input resolution used in this work.
+For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:nodule_text} shows the word-level text attributions, and Figure~\ref{fig:nodule_modality} shows the modality attribution share. The Grad-CAM map focuses on lung parenchyma regions where nodules are typically found, which is clinically plausible. The text attribution highlights terms related to nodule evaluation, suggesting the model integrates visual findings with clinical indication context. However, nodule detection remains sensitive to resolution, and subtle findings may be missed at the $512 \times 512$ input resolution used in this work.
 
 \begin{figure}[H]
      \centering
@@ -359,7 +320,7 @@ For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attrib
           \caption{Prior Image Attribution}
           \label{fig:nodule_prv}
      \end{subfigure}
-        \caption[Grad-CAM Visual Attributions for Nodule]{Grad-CAM Visual Attributions for Nodule. (a) Current target image attribution. (b) Prior image attribution.}
+        \caption[Grad-CAM Visual Attribution Maps for Nodule]{Grad-CAM Visual Attribution Maps for Nodule. (a) Current target image attribution. (b) Prior image attribution.}
         \label{fig:fig_nodule_gradcam}
 \end{figure}
 
@@ -392,26 +353,13 @@ For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attrib
 \subsubsection{Case Study 3 (Tail): Hernia}
 \label{subsubsec:case_hernia}
 
-For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the Grad-CAM visual attributions, Figure~\ref{fig:hernia_text} shows the word-level text attributions, and Figure~\ref{fig:hernia_modality} shows the modality attribution share. Because this case has no linked prior study, it tests the model's no-prior fallback rather than its comparative prior-aware reasoning. The Grad-CAM map attends to the lower thoracic and upper abdominal region, which is consistent with the expected location of a hiatal hernia. The text attribution highlights indication terms related to hernia evaluation, suggesting that clinical text provides useful additional evidence for this rare tail-class label.
+For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the current-image Grad-CAM map, Figure~\ref{fig:hernia_text} shows the word-level text attribution, and Figure~\ref{fig:hernia_modality} shows the modality attribution share. This case has no linked prior study, so it tests the model's no-prior fallback rather than direct comparison with a prior image. The Grad-CAM map attends to the lower thoracic and upper abdominal region, which is plausible for hiatal hernia. The text attribution highlights hernia-related indication terms, suggesting that clinical text provides useful evidence for this rare label.
 
 \begin{figure}[H]
      \centering
-     \begin{subfigure}[b]{0.85\textwidth}
-          \centering
-          \includegraphics[width=\textwidth]{img/hernia_gradcam.png}
-          \caption{Current Target Image Attribution}
-          \label{fig:hernia_cur}
-     \end{subfigure}
-     \vspace{0.3cm}
-
-     \begin{subfigure}[b]{0.85\textwidth}
-          \centering
-          \includegraphics[width=\textwidth]{img/hernia_prior.png}
-          \caption{Prior Image Attribution}
-          \label{fig:hernia_prv}
-     \end{subfigure}
-        \caption[Grad-CAM Visual Attributions for Hernia]{Grad-CAM Visual Attributions for Hernia. (a) Current target image attribution. (b) Prior image attribution.}
-        \label{fig:fig_hernia_gradcam}
+     \includegraphics[width=0.85\textwidth]{img/hernia_gradcam.png}
+     \caption[Grad-CAM Visual Attribution for Hernia]{Grad-CAM visual attribution for Hernia. This case has no linked prior study, so only the current image is shown.}
+     \label{fig:fig_hernia_gradcam}
 \end{figure}
 
 \begin{figure}[H]
