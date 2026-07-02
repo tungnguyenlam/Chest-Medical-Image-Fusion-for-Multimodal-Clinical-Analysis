@@ -276,6 +276,25 @@ mAUROC = \frac{1}{C}\sum_{c=1}^{C} AUROC_c.
 
 To analyze long-tailed performance, we report metrics separately for head, medium, and tail label groups. These groups follow the label-frequency analysis described in Section~\ref{sec:eda}.
 
+\subsection{Qualitative Attribution}
+\label{subsec:method_qualitative_attribution}
+
+For image attribution, we use Grad-CAM to produce class-specific heatmaps for selected predictions \cite{selvaraju2017gradcam}. Given a target class logit ($z_c$) and a convolutional feature map ($A^k$), Grad-CAM first computes the importance weight for channel $k$ as
+\begin{equation}
+    \alpha_k^c = \frac{1}{Z}\sum_i\sum_j \frac{\partial z_c}{\partial A_{ij}^k},
+\end{equation}
+where $Z$ is the number of spatial locations. The final heatmap is then computed as
+\begin{equation}
+    L_{\mathrm{Grad-CAM}}^c = \mathrm{ReLU}\left(\sum_k \alpha_k^c A^k\right).
+\end{equation}
+This heatmap highlights image regions that positively contribute to the selected class prediction. For the multi-label setting, we compute the attribution separately for each target finding using its pre-sigmoid logit.
+
+For text attribution, we use gradient-based token saliency, following prior work on visualizing neural NLP models \cite{li2016visualizing_nlp}. Specifically, we compute gradient $\times$ embedding scores at the CXR-BERT token level. Since CXR-BERT uses a subword tokenizer, these tokens do not always correspond exactly to full words. For readability, the visualization renders tokenizer outputs as word-like text chips by removing subword continuation markers. Therefore, the highlighted text should be interpreted as token-level attribution rather than exact word-level attribution. For token $t$ with embedding $e_t$, the attribution score is computed as
+\begin{equation}
+    s_t = \left\| e_t \odot \frac{\partial z_c}{\partial e_t} \right\|_1.
+\end{equation}
+Tokens with larger scores have a stronger local influence on the selected class prediction. These scores are used only for qualitative inspection and are not treated as clinically validated explanations.
+
 \subsection{Ablation Study Design}
 \label{subsec:method_ablation_design}
 

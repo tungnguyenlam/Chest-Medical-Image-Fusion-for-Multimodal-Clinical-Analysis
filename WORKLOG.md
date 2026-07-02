@@ -4115,3 +4115,140 @@ Visually demonstrating the boundaries of what text context can and cannot be use
 **Reasoning.** The original text jumped too quickly to general rare-disease statistics; focusing on chest X-ray classification (multi-label and long-tailed nature) and illustrating with specific clinical cases (pneumoperitoneum vs pneumomediastinum) provides a more cohesive narrative.
 
 **Follow-ups.** Verified compilation safety by running `make` to compile the final `main.pdf` successfully.
+
+## 2026-07-02 — Highlight Best Metrics and Proposed Models in Results Tables
+
+**Goal.** Highlight the best metrics and our proposed models in the results tables of the report using bold styling for best metrics and gray background rows for our proposed configurations.
+
+**Changes.**
+- `report/results/results.tex:117` — Bolded the best metrics column-wise and applied `\rowcolor{gray!10}` to the row for the proposed prior-aware multimodal model in Table 3.
+- `report/results/results.tex:134` — Applied `\rowcolor{gray!10}` and bolded the best metrics column-wise for the proposed prior-aware multimodal model in Table 4. Also updated the table lines to use `booktabs` macros (`\toprule`, `\midrule`, `\bottomrule`).
+- `report/results/results.tex:163` — Applied `\rowcolor{gray!10}` to our proposed model's row and bolded the best metrics column-wise (which belong to CaMCheX) in Table 5. Updated table boundaries to use `booktabs` macros.
+- `report/results/results.tex:189` — Applied `\rowcolor{gray!10}` to the "Full", "Final model", and "Engineered multi-channel" rows, and bolded the best metrics within each sub-study section in Table 6.
+
+**Reasoning.** Highlighting the proposed model's row with a light gray background (`gray!10`) combined with bold text for the column-wise best metrics is the standard academic convention. This avoids the visual clutter and print-incompatibility of bright color highlights (e.g., green).
+
+**Gotchas.** Placed `\rowcolor` before the leading ampersand `&` in the columns of Table 6 to avoid LaTeX compilation errors (`! Misplaced \noalign`).
+
+**Follow-ups.** Verified compile safety by successfully running `make` to compile the final `main.pdf`.
+
+## 2026-07-02 — Wrap Main Results and mAUROC Tables in adjustbox
+
+**Goal.** Wrap the main test-set performance table (`tab:ours_main_results`) and the per-group mAUROC breakdown table (`tab:ours_main_results_auroc`) in `\adjustbox{max width=\textwidth}` to prevent them from exceeding/overflowing the text margins.
+
+**Changes.**
+- `report/results/results.tex:113-122` — Wrapped Table 3 (`tab:ours_main_results`)'s tabular environment in `\adjustbox{max width=\textwidth}`.
+- `report/results/results.tex:128-137` — Wrapped Table 4 (`tab:ours_main_results_auroc`)'s tabular environment in `\adjustbox{max width=\textwidth}`.
+
+**Reasoning.** These tables were overflowing the text margins by 34.8pt and 58.4pt respectively (generating `Overfull \hbox` warnings). Wrapping them in `adjustbox` matches the layout strategy used for the other tables in the thesis report and keeps them neatly within the page margins.
+
+**Follow-ups.** Verified compilation safety and confirmed that all `Overfull \hbox` warnings for these tables were eliminated by running `make clean && make` successfully.
+
+## 2026-07-02 — Merge Results Subsections for Proposed Model Performance and Reference Methods
+
+**Goal.** Merge the "Main Performance of the Proposed Model" and "Comparison with Reference Methods" subsections into a single section to improve flow and readability.
+
+**Changes.**
+- `report/results/results.tex:104` — Merged the subsections into `\subsection{Main Performance and Comparison with Reference Methods}` and updated the surrounding narrative to smoothly transition between internal baseline results and external reference comparison.
+
+**Reasoning.** Combining these two parts allows the thesis results section to flow more cohesively, framing our main quantitative results first, and then immediately referencing external methods (CheXFusion and CaMCheX) for context, while preserving the disclaimer that it is a non-apples-to-apples setting.
+
+**Follow-ups.** Verified compilation safety by successfully running `make` in `report/`.
+
+## 2026-07-02 — Merge Results Tables and Rename Baselines to CaMCheX (Image-only)
+
+**Goal.** Merge the main model results table and contextual comparison table into a single unified table, removing intermediate baselines and identifying the image-only baseline as CaMCheX (Image-only) at 512x512 resolution.
+
+**Changes.**
+- `report/results/results.tex:104` — Merged the tables into `\table{tab:main_performance_and_comparison}` containing reference methods (CheXFusion, CaMCheX 1024x1024) and our setting runs (CaMCheX Image-only 512x512, Proposed model). Removed the multimodal without prior baseline and the extra mAUROC table.
+- `report/results/results.tex:150` — Renamed the baseline from "Image-only baseline" to "CaMCheX (Image-only)" in Table 6.
+- `report/abstract/abstract.tex:4` — Updated text to refer to "CaMCheX (Image-only) baseline".
+- `report/conclusion/conclusion.tex:6` — Updated text to refer to "CaMCheX (Image-only)" instead of "image-only".
+
+**Reasoning.** This represents the comparative setting more accurately since the local image-only configuration is functionally equivalent to the image-only stream of CaMCheX at 512x512, and simplifies the main results subsection to only present the core benchmarks.
+
+**Follow-ups.** Verified compilation safety by successfully running `make clean && make` in `report/`.
+
+## 2026-07-02 — Clarify CaMCheX 512x512 is Local Reproduction
+
+**Goal.** Note that the CaMCheX (Image-only) model setting at $512 \times 512$ resolution is a local reproduction/rerun by us, not a published CaMCheX result.
+
+**Changes.**
+- `report/results/results.tex:107` — Updated baseline descriptions to note it is a "local reproduction" rather than "local implementation".
+- `report/results/results.tex:121` — Renamed the baseline model row to "CaMCheX (Image-only) (reproduced)" in Table 5.1.
+- `report/results/results.tex:157,161` — Renamed to "CaMCheX (Image-only) (reproduced)" in Table 6.
+
+**Reasoning.** Accurately distinguishes published reference figures from our local reproduction runs, clarifying that we reproduced the CaMCheX image-only setting locally at $512 \times 512$ resolution.
+
+**Follow-ups.** Verified compilation safety by successfully running `make clean && make` in `report/`.
+
+## 2026-07-02 - Remove trainable line from Table 10 and update referring text
+
+**Goal.** Remove the trainable parameter count line in the complexity comparison table (Table 10) of the bachelor thesis report and ensure the surrounding explanation remains consistent.
+
+**Changes.**
+- `report/results/results.tex:32-34` - Removed the explanation of the trainable count.
+- `report/results/results.tex:79` - Deleted the `\textbf{Trainable}` row from the model complexity table.
+- `report/results/results.tex:87`, `91`, `101`, `132` - Updated references to "trainable parameter count" or "trainable footprint" to ensure they discuss the scale/footprint of remaining components excluding the frozen text encoder, maintaining alignment with the revised table.
+
+**Reasoning.** The trainable count row was confusing because the final model fine-tunes the text encoder (making those parameters trainable), whereas the comparison table assumed a frozen-text reference setting. Removing the row simplifies the table, and adjusting the text ensures no broken claims about the table layout or counts remain.
+
+## 2026-07-02 - Add Qualitative Attribution formulas and update interpretability limitations
+
+**Goal.** Add a Qualitative Attribution subsection to the methodology including the core formulas for Grad-CAM and text/gradient attribution, verify results do not repeat formulas, and refine the qualitative interpretability limitation to explicitly frame attribution maps as sanity checks.
+
+**Changes.**
+- `report/methodology/methodology.tex:279-299` — Inserted the new `Qualitative Attribution` subsection with the core Grad-CAM channel importance ($\alpha_k^c$) and final heatmap ($L_{\mathrm{Grad-CAM}}^c$) equations, plus the token importance gradient attribution formula ($s_t = \left\| e_t \odot \frac{\partial z_c}{\partial e_t} \right\|_1$).
+- `report/results/results.tex:381` — Refined the qualitative interpretability paragraph in the Limitations subsection to explicitly state that the Grad-CAM and text attribution maps are qualitative sanity checks rather than clinically validated explanations.
+
+**Reasoning.** Including mathematically precise formulations for the qualitative visual and textual attribution techniques clarifies the model interpretation mechanism in the methodology without cluttering the results and discussion section. Explicitly bounding the attribution outputs as sanity checks aligns the text with clinical validation realities.
+
+**Follow-ups.** Verified compile safety by successfully running `make` in `report/`.
+
+## 2026-07-02 - Cite Li et al. (2016) for NLP Gradient Saliency in text attribution
+
+**Goal.** Cite Li et al. (2016) for the text attribution token gradient saliency method and append the BibTeX entry to `references.bib`.
+
+**Changes.**
+- `report/references.bib:475-485` — Added the BibTeX entry for `li2016visualizing_nlp`.
+- `report/methodology/methodology.tex:292` — Updated the text attribution description to cite `li2016visualizing_nlp` for gradient-based token saliency.
+
+**Reasoning.** Correctly attributes the token-level gradient saliency methodology to the original NLP visualizing work by Li et al. (2016), avoiding the incorrect citation of Integrated Gradients which is not implemented in the repository's code.
+
+**Follow-ups.** Verified compile safety by successfully running `make` in `report/`.
+
+## 2026-07-02 - Explain token-level subword attribution and update results text references
+
+**Goal.** Clarify in the report that text attribution is performed at the subword/token level using the CXR-BERT tokenizer rather than word-level, and change all figure captions/references to reflect "token-level text attribution".
+
+**Changes.**
+- `report/methodology/methodology.tex:292-297` — Updated the Qualitative Attribution text paragraph to detail that gradient $\times$ embedding scores are calculated at the subword CXR-BERT token level, explaining that the visualization strips subword continuation markers (`##`) for readability to render them as word-like chips.
+- `report/results/results.tex:220, 245, 271, 296, 322, 334` — Replaced all instances of "word-level" or "word attribution" with "token-level" or "token-level text attribution".
+
+**Reasoning.** Subword tokenization is a crucial detail of transformer text encoder architectures like CXR-BERT. Explaining how the subwords are handled in visual attribution maps maintains technical accuracy while accounting for the readability of the visualization.
+
+**Follow-ups.** Verified compile safety by successfully running `make` in `report/`.
+
+## 2026-07-02 - Add figures to Appendix
+
+**Goal.** Include the figures from `report/img/appendix/training_details` into the appendix without explanation.
+
+**Changes.**
+- `report/main.tex:175-182` - Appended the `\appendix` command and input for `appendix/appendix.tex` after the bibliography.
+- `report/appendix/appendix.tex:1-38` - Created a new appendix file defining the training details section and importing all 6 PNG files from `report/img/appendix/training_details`.
+
+**Reasoning.** Placed the figures inside standard LaTeX `\begin{figure}[H]` environments to control positioning and keep them in the correct sequence. The appendix was placed after the bibliography as per typical thesis layouts.
+
+**Follow-ups.** None.
+
+## 2026-07-02 - Fix incorrect and duplicate citations in bibliography and report chapters
+
+**Goal.** Fix bibliographic details and citation keys for MIMIC-CXR-JPG, CXR-LT, rare diseases paper, PhysioNet, and UNSCEAR report.
+
+**Changes.**
+- `report/references.bib` - Deleted duplicate entry `holste2023cxrlt_physionet`, updated `johnson2019mimiccxrjpg` to `PhysioNet-mimic-cxr-jpg-2.0.0` with official authors and DOI, corrected double DOI for `nguengang2020rare_diseases`, added DOI to `goldberger2000physionet`, and updated year to `2022` for `unscear2021medical_exposure`.
+- `report/introduction/introduction.tex:17` - Updated citation reference from `johnson2019mimiccxrjpg` to `PhysioNet-mimic-cxr-jpg-2.0.0`.
+- `report/eda/eda.tex:10,79` - Replaced citation references to `holste2023cxrlt_physionet` with `PhysioNet-cxr-lt-iccv-workshop-cvamd-1.0.0`.
+- `report/related_work/related_work.tex:45` - Replaced citation reference to `holste2023cxrlt_physionet` with `PhysioNet-cxr-lt-iccv-workshop-cvamd-1.0.0`.
+
+**Reasoning.** Aligns all bibliography metadata with official PhysioNet / DOI registrations, avoids duplicate dataset references, and keeps LaTeX citation references aligned to guarantee clean PDF compilation.
