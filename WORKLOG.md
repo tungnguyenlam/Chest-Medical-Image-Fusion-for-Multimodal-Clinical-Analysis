@@ -4000,3 +4000,118 @@ Visually demonstrating the boundaries of what text context can and cannot be use
 **Reasoning.** Re-framed the thesis contributions to focus on the technical research questions regarding clinical context and prior-study integration, while keeping compute budget constraints restricted specifically to the scope of experimental ablations and training runs.
 
 **Gotchas.** The PDF was compiled successfully after all edits, ensuring no references or structures were broken.
+
+## 2026-07-02 - Merge Discussion into Results and move Future Work to Conclusion
+
+**Goal.** Merge the paper's Discussion section into the Experimental Results section, and relocate the Future Work subsection to the end of the Conclusion.
+
+**Changes.**
+- `report/results/results.tex:1` - Renamed section to "Results and Discussion".
+- `report/results/results.tex:392` - Appended "Interpretation of Results and Clinical Relevance" and "Limitations" subsections.
+- `report/conclusion/conclusion.tex:8` - Appended "Future Work" subsection and removed the brief redundant future work sentence.
+- `report/introduction/introduction.tex:47` - Updated the thesis structure description paragraph.
+- `report/methodology/methodology.tex:130` - Updated a reference link pointing to the old discussion section to now point to the limitations subsection in results.
+- `report/main.tex:173` - Removed input reference to `discussion/discussion.tex`.
+- `report/discussion/discussion.tex` - Removed the file.
+
+**Reasoning.** Integrating Discussion into Results is a standard academic paper structure, reducing redundant text transitions. Future Work serves as an extension of the Conclusion, making it appropriate to group them together.
+
+**Gotchas.** Recompiled the LaTeX project using `make` to verify that there are no remaining compilation errors or undefined references (specifically checking for references to `sec:discussion`). All compiled cleanly.
+
+## 2026-07-02 — Remove Qualitative Explanations from Grad-CAM Case Studies
+
+**Goal.** Remove the clinical interpretation/explanations from the three Grad-CAM case studies in the results report, keeping only the figure references.
+
+**Changes.**
+- `report/results/results.tex:251` — Removed the introductory sentence stating that the Grad-CAM and text-attribution examples are not clinical explanations and are only qualitative sanity checks.
+- `report/results/results.tex:256` — Simplified Case Study 1 (Support Devices) to only state what figures are shown, removing discussion on visible tubes, lines, and shortcut risks.
+- `report/results/results.tex:307` — Simplified Case Study 2 (Nodule) to only state what figures are shown, removing discussion on lung parenchyma focus and resolution limitations.
+- `report/results/results.tex:358` — Simplified Case Study 3 (Hernia) to only state what figures are shown and note that there is no linked prior study, removing discussion on lower thoracic focus and clinical text regularizer cues.
+
+**Reasoning.** The user requested the removal of text attempting to explain the qualitative Grad-CAM heatmaps and text-attribution findings, leaving only the references to the respective figures.
+
+**Follow-ups.** Recompiled the LaTeX report successfully via `make` to verify `main.pdf` compiles without warnings or errors.
+
+## 2026-07-02 — Remove Hiatal Hernia Regularizer Paragraph from Clinical Interpretation
+
+**Goal.** Remove the clinical interpretation paragraph explaining the regularizing effect on tail classes using hiatal hernia as an example, since it was deemed unsupported.
+
+**Changes.**
+- `report/results/results.tex:400` — Deleted the paragraph explaining how clinical text and prior studies act as regularizers for tail classes (specifically discussing how hiatal hernia might be misclassified as a lung mass and how text/prior context helps correct it).
+
+**Reasoning.** The user noted that this interpretation was speculative or lacked ground, so the paragraph was removed to ensure all claims are well-supported.
+
+**Follow-ups.** Verified compile safety by running `make` to compile the final `main.pdf`.
+
+## 2026-07-02 — Add Year Column to Contextual Comparison Table
+
+**Goal.** Add a "Year" column to the contextual reference results comparison table (`tab:contextual_comparison`) in the report results section, indicating publication years for prior work and the current year (2026) for the proposed model.
+
+**Changes.**
+- `report/results/results.tex:157` — Modified the column format of `tab:contextual_comparison` to `llccc` to support the additional column.
+- `report/results/results.tex:159` — Added the "Year" column header.
+- `report/results/results.tex:161-163` — Added the publication years for CheXFusion (2023), CaMCheX (2025), and our proposed model (2026). Also marked the proposed model as "Proposed model (Ours)".
+
+**Reasoning.** The user requested showing the temporal context of the published works compared to our work to make the comparison clearer.
+
+**Follow-ups.** Verified compile safety by running `make` to compile the final `main.pdf`.
+
+## 2026-07-02 — Remove Label-Correlation Graph Head Section from Methodology
+
+**Goal.** Delete the section "Label-Correlation Graph Head" from the methodology chapter, and remove all references to label-correlation modeling/heads in other sections of the report.
+
+**Changes.**
+- `report/methodology/methodology.tex:258` — Deleted the entire `\subsection{Label-Correlation Graph Head}` subsection.
+- `report/methodology/methodology.tex:291` — Removed the reference to the "label-correlation graph head" in the Ablation Study Design description.
+- `report/introduction/introduction.tex:43` — Removed the reference to "label-correlation modelling" in the thesis contributions list.
+- `report/eda/eda.tex:110` — Removed the sentence referencing the integration of the label-correlation head from the label co-occurrence discussion.
+- `report/results/results.tex:176` — Removed the reference to "label-correlation modelling" from the list of design choices in the ablation study text.
+
+**Reasoning.** The user requested the removal of the Label-Correlation Graph Head section, requiring all related textual references across the thesis to be cleaned up as well.
+
+**Follow-ups.** Verified compile safety by running `make` to compile the final `main.pdf`.
+
+## 2026-07-02 — Add Asymmetric Loss Hyperparameter Values to Methodology
+
+**Goal.** Add the specific parameter values for Asymmetric Loss ($\gamma_+ = 1$, $\gamma_- = 4$) and the negative margin ($m = 0.05$) to the methodology section.
+
+**Changes.**
+- `report/methodology/methodology.tex:256` — Updated the text to explicitly state $\gamma_+ = 1$, $\gamma_- = 4$, and $m = 0.05$.
+
+**Reasoning.** These parameters reflect the configuration used in our training pipeline (`src/loss/AsymetricLoss.py`) and should be documented in the thesis text for completeness.
+
+
+## 2026-07-02 — Add Future Work Modalities and Citations (MIMIC-IV-ECG, Waveforms, PhysioNet)
+
+**Goal.** Add other physiological modalities (MIMIC-IV-ECG and MIMIC-IV Waveform Database) to the Future Work section and include the correct citations in the `.bib` file.
+
+**Changes.**
+- `report/conclusion/conclusion.tex:24-27` — Appended a new paragraph under `Future Work` to propose incorporating MIMIC-IV-ECG and MIMIC-IV Waveform Database, referencing PhysioNet.
+- `report/references.bib:375-407` — Added BibTeX citations for `gow2023mimiciv_ecg`, `moody2022mimiciv_waveform`, and `goldberger2000physionet`.
+
+**Reasoning.** Integrating 12-lead ECGs and high-resolution waveform data represents a natural extension of the multimodal fusion framework for comprehensive patient monitoring. The PhysioNet database is cited as the host/distributor for these resources.
+
+**Follow-ups.** Verified compilation safety by running `make` to compile the final `main.pdf` successfully.
+
+## 2026-07-02 — Add PhysioNet citation to Introduction and state dataset access
+
+**Goal.** State in the introduction that access to the datasets is granted by PhysioNet and include the citation.
+
+**Changes.**
+- `report/introduction/introduction.tex:17` — Added the statement "Access to these datasets is granted by PhysioNet \cite{goldberger2000physionet}." immediately after specifying the source datasets.
+
+**Reasoning.** This acknowledges PhysioNet as the provider of the MIMIC-CXR and MIMIC-IV datasets and includes the appropriate citation (`goldberger2000physionet`), which was already defined in the references database.
+
+**Follow-ups.** Verified compilation safety by running `make` to compile the final `main.pdf` successfully.
+
+## 2026-07-02 — Refine Introduction Paragraph and Citations for Long-Tailed CXR
+
+**Goal.** Refine the long-tailed CXR classification motivation in `introduction.tex` to be more specific to chest X-rays rather than general rare-disease literature, and add supporting citations.
+
+**Changes.**
+- `report/introduction/introduction.tex:7` — Replaced the generic paragraph on rare diseases with a specific paragraph focusing on multi-label/long-tailed CXR settings, introducing `holste2024cxrlt`, `PhysioNet-cxr-lt-iccv-workshop-cvamd-1.0.0`, `sureka2015pneumoperitoneum`, `iteen2023pneumomediastinum`, `oakdenrayner2020hidden`, and `holste2022longtailcxr`.
+- `report/references.bib:407-474` — Added the requested BibTeX entries for the newly cited publications.
+
+**Reasoning.** The original text jumped too quickly to general rare-disease statistics; focusing on chest X-ray classification (multi-label and long-tailed nature) and illustrating with specific clinical cases (pneumoperitoneum vs pneumomediastinum) provides a more cohesive narrative.
+
+**Follow-ups.** Verified compilation safety by running `make` to compile the final `main.pdf` successfully.

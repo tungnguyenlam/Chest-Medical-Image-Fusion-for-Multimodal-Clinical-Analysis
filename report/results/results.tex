@@ -1,7 +1,7 @@
-\section{Experimental Results}
+\section{Results and Discussion}
 \label{sec:results}
 
-We evaluate all implemented models on the filtered CXR-LT-2023-aligned test split. This section reports the experimental setup, main quantitative results, ablation studies, long-tail analysis, and qualitative Grad-CAM checks.
+We evaluate all implemented models on the filtered CXR-LT-2023-aligned test split. This section reports the experimental setup, main quantitative results, ablation studies, long-tail analysis, qualitative Grad-CAM checks, clinical interpretation, and study limitations.
 
 \subsection{Experimental Setup}
 \label{subsec:results_setup}
@@ -154,13 +154,13 @@ We compare our results with CheXFusion \cite{kim2023chexfusion} and CaMCheX \cit
     \caption[Contextual comparison with published reference results]{Contextual comparison with published reference results. These published results are not directly comparable because they use larger datasets, higher resolutions, different preprocessing, and additional pretraining.}
     \label{tab:contextual_comparison}
     \adjustbox{max width=\textwidth}{%
-    \begin{tabular}{lccc}
+    \begin{tabular}{llccc}
         \hline
-        Method & Setting (Resolution) & mAP & mAUROC \\
+        Method & Year & Setting (Resolution) & mAP & mAUROC \\
         \hline
-        \begin{tabular}[t]{@{}l@{}}CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer fusion, \\ ML-Decoder, weighted ASL, 1024 $\times$ 1024 input resolution)\end{tabular} & Published CXR-LT-2023 & 0.372 & 0.850 \\
-        CaMCheX \cite{sloan2025camchex} & Published CXR-LT-2023 ($1024 \times 1024$) & 0.576 & 0.916 \\
-        Proposed model & Our setting ($512 \times 512$) & 0.5662 & 0.9026 \\
+        \begin{tabular}[t]{@{}l@{}}CheXFusion \cite{kim2023chexfusion} (ConvNeXt-S, multi-view Transformer fusion, \\ ML-Decoder, weighted ASL, 1024 $\times$ 1024 input resolution)\end{tabular} & 2023 & Published CXR-LT-2023 & 0.372 & 0.850 \\
+        CaMCheX \cite{sloan2025camchex} & 2025 & Published CXR-LT-2023 ($1024 \times 1024$) & 0.576 & 0.916 \\
+        Proposed model (Ours) & 2026 & Our setting ($512 \times 512$) & 0.5662 & 0.9026 \\
         \hline
     \end{tabular}%
     }
@@ -173,7 +173,7 @@ Table~\ref{tab:contextual_comparison} places the proposed model beside published
 
 Table~\ref{tab:ablation_unified} summarizes the ablation and development runs performed in this work. The table has three groups. \emph{Modality ablation} removes one input modality at a time. \emph{Incremental model variants} report the available runs as prior-aware components and the final training setting were added. \emph{Channel encoding ablation} compares the engineered three-channel image input with a simple \texttt{gray3} baseline. Published CaMCheX numbers are not included because they are external references, not controlled ablations.
 
-The final model was trained as the selected full configuration. However, a complete factorial ablation would require many additional full training runs, because design choices such as prior context, time-gap embedding, prior dropout, text-encoder fine-tuning, label-correlation modelling, channel encoding, and random seeds would need to be isolated independently. Due to the available computational budget, we prioritize ablations that directly answer the main research question. Therefore, the modality-ablation rows should be interpreted as controlled comparisons, while the incremental-variant rows are reported as development evidence rather than a complete causal decomposition.
+The final model was trained as the selected full configuration. However, a complete factorial ablation would require many additional full training runs, because design choices such as prior context, time-gap embedding, prior dropout, text-encoder fine-tuning, channel encoding, and random seeds would need to be isolated independently. Due to the available computational budget, we prioritize ablations that directly answer the main research question. Therefore, the modality-ablation rows should be interpreted as controlled comparisons, while the incremental-variant rows are reported as development evidence rather than a complete causal decomposition.
 
 \begin{table}[H]
 \centering
@@ -236,7 +236,7 @@ Group B reports incremental model variants trained during development. These row
 
 The image encoder expects a three-channel input, which leaves open the question of how a single-channel chest radiograph should be expanded to fill those channels. The proposed model uses an engineered multi-channel encoding, where each channel carries a distinct, separately-normalized representation. The plain \texttt{gray3} baseline simply replicates the raw grayscale image (normalized with mean $0.4721$ and standard deviation $0.3037$) across all three channels.
 
-The engineered encoding and gray3 baseline perform almost the same: the engineered encoding is marginally higher on macro mAP ($0.5662$ vs.\ $0.5633$), macro mAUROC ($0.9026$ vs.\ $0.9000$), and tail mAP ($0.4076$ vs.\ $0.4059$). The clinical-text-dropped floor is likewise within noise ($0.3404$ vs.\ $0.3367$ macro mAP). The difference is small, so channel encoding is not a major driver of the final result. The engineered encoding is kept as the selected configuration in this thesis, but the ablation shows that a simple \texttt{gray3} input is a strong and simpler alternative. Most of the performance gain comes from multimodal context and prior-aware components, not from hand-crafted channel encoding.
+The engineered encoding and gray3 baseline perform almost the same: the engineered encoding is marginally higher on mAP ($0.5662$ vs.\ $0.5633$), mAUROC ($0.9026$ vs.\ $0.9000$), and tail mAP ($0.4076$ vs.\ $0.4059$). The clinical-text-dropped floor is likewise within noise ($0.3404$ vs.\ $0.3367$ mAP). The difference is small, so channel encoding is not a major driver of the final result. The engineered encoding is kept as the selected configuration in this thesis, but the ablation shows that a simple \texttt{gray3} input is a strong and simpler alternative. Most of the performance gain comes from multimodal context and prior-aware components, not from hand-crafted channel encoding.
 
 \subsection{Long-Tail Analysis}
 \label{subsec:results_longtail}
@@ -248,12 +248,12 @@ Two factors may explain this pattern. First, some rare labels have strong cues i
 \subsection{Grad-CAM Qualitative Analysis}
 \label{subsec:results_qualitative}
 
-We use three case studies as qualitative sanity checks: Support Devices (head), Nodule (medium), and Hernia (tail). These Grad-CAM and text-attribution examples are not clinical explanations. They are used only to inspect whether the model uses plausible image regions and text cues.
+We use three case studies as qualitative sanity checks: Support Devices (head), Nodule (medium), and Hernia (tail).
 
 \subsubsection{Case Study 1 (Head): Support Devices}
 \label{subsubsec:case_support_devices}
 
-For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:support_devices_text} shows the word-level text attributions, and Figure~\ref{fig:support_devices_modality} shows the modality attribution share. The Grad-CAM map concentrates on regions containing visible tubes and lines, which is consistent with the target label. The text attribution highlights device-related indication terms, suggesting that the model uses both visual and clinical context. However, strong reliance on indication text may also increase shortcut risk if device presence is frequently mentioned before imaging.
+For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:support_devices_text} shows the word-level text attributions, and Figure~\ref{fig:support_devices_modality} shows the modality attribution share.
 
 \begin{figure}[H]
      \centering
@@ -304,7 +304,7 @@ For Support Devices, Figure~\ref{fig:fig_support_devices_gradcam} shows the Grad
 \subsubsection{Case Study 2 (Medium): Nodule}
 \label{subsubsec:case_nodule}
 
-For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:nodule_text} shows the word-level text attributions, and Figure~\ref{fig:nodule_modality} shows the modality attribution share. The Grad-CAM map focuses on lung parenchyma regions where nodules are typically found, which is clinically plausible. The text attribution highlights terms related to nodule evaluation, suggesting the model integrates visual findings with clinical indication context. However, nodule detection remains sensitive to resolution, and subtle findings may be missed at the $512 \times 512$ input resolution used in this work.
+For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attribution maps, Figure~\ref{fig:nodule_text} shows the word-level text attributions, and Figure~\ref{fig:nodule_modality} shows the modality attribution share.
 
 \begin{figure}[H]
      \centering
@@ -355,7 +355,7 @@ For Nodule, Figure~\ref{fig:fig_nodule_gradcam} shows the Grad-CAM visual attrib
 \subsubsection{Case Study 3 (Tail): Hernia}
 \label{subsubsec:case_hernia}
 
-For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the current-image Grad-CAM map, Figure~\ref{fig:hernia_text} shows the word-level text attribution, and Figure~\ref{fig:hernia_modality} shows the modality attribution share. This case has no linked prior study, so it tests the model's no-prior fallback rather than direct comparison with a prior image. The Grad-CAM map attends to the lower thoracic and upper abdominal region, which is plausible for hiatal hernia. The text attribution highlights hernia-related indication terms, suggesting that clinical text provides useful evidence for this rare label.
+For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the current-image Grad-CAM map, Figure~\ref{fig:hernia_text} shows the word-level text attribution, and Figure~\ref{fig:hernia_modality} shows the modality attribution share. This case has no linked prior study, so only the current image is shown.
 
 \begin{figure}[H]
      \centering
@@ -389,3 +389,31 @@ For Hernia, Figure~\ref{fig:fig_hernia_gradcam} shows the current-image Grad-CAM
     \caption[Modality Attribution Share for Hernia]{Modality Attribution Share for Hernia. (a) Normal scale. (b) Log scale.}
     \label{fig:hernia_modality}
 \end{figure}
+
+\subsection{Interpretation of Results and Clinical Relevance}
+\label{subsec:discussion_interpretation}
+
+The quantitative results show that adding clinical text and vital signs improves chest X-ray classification over image-only prediction. The largest improvement comes from adding prior-study context, especially for medium and tail labels. This supports the clinical intuition that previous examinations provide useful comparative evidence for interpreting current radiographs.
+
+From a clinical standpoint, these findings reflect actual diagnostic workflows. Physicians rarely interpret radiographs in isolation; they evaluate findings in light of the patient's presenting symptoms, physiological state, and past imaging history \cite{sloan2025camchex,bannur2023biovilt}. Our asymmetric target-memory fusion lets the current study use prior context as support, which improves pathology prediction.
+
+The temporal label analysis in Section~\ref{subsec:eda_prior_gaps} (Figure~\ref{fig:temporal_label_dynamics}) further clarifies why prior context helps: many findings are temporally persistent, so historical information provides a useful baseline. However, common findings such as Lung Opacity, Atelectasis, and Pleural Effusion also show meaningful rates of new appearance and resolution between studies. The model must therefore still rely on current-image evidence for these transitions, which is consistent with the design choice of using prior context as auxiliary memory rather than as a deterministic prediction source.
+
+\subsection{Limitations}
+\label{subsec:discussion_limitations}
+
+The study has several limitations.
+
+\textbf{Reduced Image Resolution}: We resized images to $512 \times 512$ pixels. While sufficient for larger findings like cardiomegaly or pleural effusion, this downsampling may lose fine-grained visual details such as subtle pneumothorax lines, micro-nodules, or early interstitial markings.
+
+\textbf{Frozen Clinical Text Encoder}: The language model (\texttt{BiomedVLP-CXR-BERT}) was kept frozen, or its embeddings were precomputed, to save compute. Consequently, the clinical text representation was not fine-tuned end-to-end for the classification objective, potentially limiting its alignment with the multimodal fusion layers.
+
+\textbf{Label Noise}: The CXR-LT-2023 labels are derived automatically from free-text radiology reports using natural language processing toolkits \cite{holste2024cxrlt}. These automated labels contain inherent noise and occasional misclassifications, which can introduce bias into model training and evaluation.
+
+\textbf{Single-Dataset Validation}: Models were trained and evaluated on splits derived from the MIMIC-CXR dataset. While patient-level splits prevent data leakage, the lack of external validation on datasets from other hospital systems limits the ability to evaluate generalizability to different patient populations and imaging protocols.
+
+\textbf{Shortcut Learning Risk}: While prior-study information improves classification performance, it carries a risk of shortcut learning. The model might learn to rely excessively on historical labels or reports rather than analyzing the current radiograph, which could lead to errors if an acute, new pathology develops that was not present in the past. This was mitigated using prior dropout, which reduces but does not eliminate shortcut risk.
+
+\textbf{Qualitative Interpretability}: Grad-CAM \cite{selvaraju2017gradcam} shows which image regions influence the prediction, but it does not prove clinical reasoning or causality.
+
+\textbf{Limited Training Runs}: The study is also limited by the number of full training runs. Although the selected final model was trained successfully, the available compute did not allow exhaustive factorial ablations or repeated-seed experiments for every architectural choice. As a result, some incremental comparisons indicate development trends rather than isolated causal effects.

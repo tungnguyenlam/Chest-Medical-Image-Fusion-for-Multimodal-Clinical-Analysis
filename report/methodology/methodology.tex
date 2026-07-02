@@ -127,7 +127,7 @@ The final implementation uses the radiology-domain CXR-BERT encoder microsoft/Bi
 
 For each text stream, the model uses the final \texttt{[CLS]} representation as a compact sentence-level embedding with dimensionality 768, passed through a learned linear projection into the multimodal fusion width. The projection expands each text embedding into a small number of fusion tokens, controlled by \(n_{\text{text}}\). In the main experiments, \(n_{\text{text}}=2\), so each clinical text field contributes two learned text tokens of width \(d_{\text{model}}\). Segment embeddings are added so that the fusion module can distinguish current clinical indication, prior clinical indication, and prior report text.
 
-This design preserves clinically relevant textual context while keeping the training pipeline feasible under limited GPU memory. However, freezing the text encoder also prevents task-specific adaptation, which is treated as a limitation in Section~\ref{sec:discussion}.
+This design preserves clinically relevant textual context while keeping the training pipeline feasible under limited GPU memory. However, freezing the text encoder also prevents task-specific adaptation, which is treated as a limitation in Subsection~\ref{subsec:discussion_limitations}.
 
 \subsection{Vital Signs Encoder}
 \label{subsec:method_vitals_encoder}
@@ -253,21 +253,12 @@ where $p_c=\hat{y}_{ic}$ is the predicted probability for class $c$. The shifted
 \begin{equation}
 p_c^m = \max(p_c - m, 0),
 \end{equation}
-where $m$ is the negative margin. The parameters $\gamma_+$ and $\gamma_-$ control the focusing strength for positive and negative labels. In this work, $\gamma_- > \gamma_+$ so that easy negative labels receive less weight during training.
-
-\subsection{Label-Correlation Graph Head}
-\label{subsec:method_graph_head}
-
-The target labels are not independent. For example, cardiomegaly, edema, pleural effusion, and atelectasis can co-occur in the same study. To use this structure, the final model adds a label-correlation graph head after the label-query attention block.
-
-The graph is built only from training-set labels to avoid test-set leakage. First, a label co-occurrence matrix is computed from the training split. Then, weak edges are removed using a fixed threshold. The remaining edges define relationships between the 26 pathology labels.
-
-During classification, the graph head passes information between related label-query representations before the final logit projection. This allows correlated labels to share information while still producing a separate probability for each pathology. The graph head is evaluated in the ablation study in Section~\ref{sec:results}.
+where $m = 0.05$ is the negative margin. The parameters $\gamma_+$ and $\gamma_-$ control the focusing strength for positive and negative labels. In this work, we set $\gamma_+ = 1$ and $\gamma_- = 4$, satisfying $\gamma_- > \gamma_+$ so that easy negative labels receive less weight during training.
 
 \subsection{Evaluation Metrics}
 \label{subsec:method_evaluation_metrics}
 
-We evaluate the model using mean Average Precision (mAP) and macro-averaged AUROC (mAUROC). The primary metric is mAP, following the CXR-LT-2023 evaluation setting \cite{yan2023cxrlt}. This metric is suitable for long-tailed multi-label classification because it measures ranking quality over the precision-recall curve for each class.
+We evaluate the model using mean Average Precision (mAP) and macro-averaged AUROC (mAUROC). The primary metric is mAP, following the CXR-LT-2023 evaluation setting \cite{holste2024cxrlt}. This metric is suitable for long-tailed multi-label classification because it measures ranking quality over the precision-recall curve for each class.
 
 For each pathology class $c$, Average Precision (AP) is computed as:
 \begin{equation}
@@ -288,4 +279,4 @@ To analyze long-tailed performance, we report metrics separately for head, mediu
 \subsection{Ablation Study Design}
 \label{subsec:method_ablation_design}
 
-Although this section describes the final model, the experiments also include ablations to measure the effect of each major design choice. The ablations compare image-only and multimodal inputs, prior-study context, time-gap embeddings, prior dropout, the label-correlation graph head, and engineered versus plain image channel encoding. The results are reported in Section~\ref{sec:results}.
+Although this section describes the final model, the experiments also include ablations to measure the effect of each major design choice. The ablations compare image-only and multimodal inputs, prior-study context, time-gap embeddings, prior dropout, and engineered versus plain image channel encoding. The results are reported in Section~\ref{sec:results}.

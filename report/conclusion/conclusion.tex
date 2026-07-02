@@ -5,4 +5,22 @@ We implemented and evaluated a prior-aware multimodal chest X-ray classification
 
 The proposed model achieved 0.5662 mAP and 0.9026 mAUROC, outperforming the image-only and no-prior multimodal baselines. The largest gains were observed for medium and tail labels, supporting the value of clinical context and prior-study information for long-tailed chest X-ray classification. Compared with external CXR-LT-2023 references, the proposed model exceeds the top CXR-LT-2023 challenge solution CheXFusion and approaches the published CaMCheX result, although differences in training scale, preprocessing, resolution, and pretraining should be considered.
 
-Overall, the results suggest that prior-aware multimodal fusion is a practical and effective direction for clinically contextualized chest X-ray classification. Future work should evaluate the approach at larger scale, with higher-resolution inputs, stronger temporal modelling, and external clinical validation.
+Overall, the results suggest that prior-aware multimodal fusion is a practical and effective direction for clinically contextualized chest X-ray classification.
+
+\subsection{Future Work}
+\label{subsec:conclusion_future}
+
+Future research should focus on:
+
+\textbf{Full-Scale Training}: With more compute, training at larger scale with higher-resolution inputs would allow the model to capture fine-grained visual findings and benefit from stronger data augmentation.
+
+\textbf{End-to-End Multimodal Fine-Tuning}: Fine-tuning the clinical text and image encoders jointly would allow tighter semantic alignment between the modalities.
+
+\textbf{High-Resolution and Localized Attention}: Implementing localized attention or patch-based processing would allow the model to process high-resolution radiographs without memory overflow, preserving tiny pathological details.
+
+\textbf{Advanced Temporal Architectures}: Replacing simple cross-attention with recurrent or state-space models (like Mamba \cite{gu2024mamba}) could allow the network to fuse sequences of multiple prior studies rather than a single previous check.
+
+\textbf{Multi-Center Validation}: Evaluating the prior-aware model on external datasets (such as CheXpert or PadChest \cite{bustos2020padchest}) is crucial to verify generalizability across different clinical settings.
+
+\textbf{Incorporation of Additional Physiological Modalities}: Extending the multimodal framework to include other clinical modalities could capture complementary patient states. Specifically, we cite MIMIC-IV-ECG \cite{gow2023mimiciv_ecg} for diagnostic 12-lead electrocardiograms and the MIMIC-IV Waveform Database \cite{moody2022mimiciv_waveform} for high-resolution ICU bedside-monitor waveforms. Both resources are distributed through PhysioNet \cite{goldberger2000physionet}, so we also cite the standard PhysioNet reference.
+
